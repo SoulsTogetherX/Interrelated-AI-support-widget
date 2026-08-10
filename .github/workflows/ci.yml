@@ -1,0 +1,114 @@
+# CI — two jobs, same shape as OnlineWhiteboard's:
+#
+#   verify  fast feedback: per-package typecheck + unit/integration tests,
+#           with a real pgvector Postgres as a service container so the
+#           DB-gated suites actually run (they self-skip without a password).
+#   e2e     the real thing: build the PROD images, boot the prod compose
+#           stack, and drive it from outside with the zero-dependency smoke
+#           probe. What gets probed is byte-for-byte what gets deployed.
+#
+# No API keys anywhere: the whole pipeline runs keyless by design (mock/local
+# providers from M1 on). Fork PRs get full CI.
+
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      database:
+        # The same image family the compose database service builds FROM, so
+        # tests here run against the same Postgres they run against locally.
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U interrelated -d interrelated"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          # Every package owns its own lockfile (flat layout, no workspace) —
+          # list each one or caching silently only covers the first.
+          cache-dependency-path: |
+            package-lock.json
+            realtime/package-lock.json
+
+      # ── root: shared/ tests + typecheck ──────────────────────────────────
+      - name: root deps
+        run: npm ci
+      - name: shared typecheck
+        run: npm run typecheck:shared
+      - name: shared tests
+        run: npm test
+
+      # ── realtime ─────────────────────────────────────────────────────────
+      - name: realtime deps
+        working-directory: realtime
+        run: npm ci
+      - name: realtime typecheck
+        working-directory: realtime
+        run: npm run typecheck
+      - name: realtime tests (with database)
+        working-directory: realtime
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: create throwaway .env
+        # Secrets here are generated per-run and never real: the e2e stack is
+        # hermetic, exists for minutes, and is destroyed below.
+        run: |
+          cp .env.example .env
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+          sed -i "s/^POSTGRES_PORT=.*/POSTGRES_PORT=5432/" .env
+
+      - name: boot prod stack
+        run: docker compose -f docker-compose.prod.yaml up --build --wait --wait-timeout 180 -d
+
+      - name: smoke probe
+        run: node scripts/smoke-test.mjs http://localhost:3000
+
+      - name: dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.prod.yaml logs --no-color
+
+      - name: teardown
+        if: always()
+        run: docker compose -f docker-compose.prod.yaml down -v

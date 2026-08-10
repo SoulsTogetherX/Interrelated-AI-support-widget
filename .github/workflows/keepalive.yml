@@ -1,0 +1,33 @@
+# Keepalive — defeats Render's free-tier 15-minute spin-down so the demo
+# never greets a recruiter with a 60-second cold start.
+#
+# Two load-bearing details:
+#   1. It pings /api/health, which NEVER touches Postgres. Pinging any
+#      DB-touching route every 10 minutes would keep Neon's compute awake
+#      ~730 h/month and exhaust its ~100 CU-hour free budget mid-month. The
+#      database is instead woken by the widget's open-handshake (M2), during
+#      the seconds a visitor spends typing their first message.
+#   2. schedule can only be enabled once the repo is on GitHub and the
+#      RENDER_URL variable is set (Settings → Variables). Until then the
+#      workflow is manual-trigger only and skips cleanly.
+
+name: keepalive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: vars.RENDER_URL != ''
+    steps:
+      - name: ping /api/health
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "${{ vars.RENDER_URL }}/api/health")
+          echo "health returned $code"
+          test "$code" = "200"
