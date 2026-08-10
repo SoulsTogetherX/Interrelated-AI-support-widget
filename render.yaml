@@ -1,0 +1,56 @@
+# Render Blueprint — the whole deployment as code.
+#
+# In the Render dashboard: New → Blueprint → pick this repo. Render reads
+# this file, creates the service, and prompts for exactly the env vars marked
+# `sync: false` (the Neon connection details — secrets live in Render's
+# dashboard, never in this repo).
+#
+# ONE service, deliberately (see CLAUDE.md and the plan): Render's free tier
+# spins services down after 15 min idle and budgets ~750 instance-hours per
+# month — enough to keep exactly one service always warm via the keepalive
+# workflow. The Next.js dashboard (M3) goes to Vercel, not here.
+
+services:
+  - type: web
+    name: interrelated-realtime
+    runtime: docker
+    plan: free
+    # Deploys the dev branch while the project is in active build — every
+    # push to dev auto-deploys after CI. Flip to `main` once main starts
+    # advancing by merges and the demo should track releases instead.
+    branch: dev
+    # Build context is the REPO ROOT (the image needs shared/); the
+    # Dockerfile's final stage (prod) is what Render builds.
+    dockerfilePath: ./realtime/Dockerfile
+    dockerContext: .
+    # Free tier region; pick the Neon project's region to match (AWS
+    # us-west-2 / Oregon) so the service↔DB hop stays inside one region.
+    region: oregon
+    # Render probes this for liveness. DB-free on purpose — see
+    # realtime/src/routes/health.ts.
+    healthCheckPath: /api/health
+    envVars:
+      # Render routes external traffic to the port in PORT; the app honors
+      # BACKEND_PORT first, then PORT (server.ts). Setting both to the same
+      # value makes the routing unambiguous under either convention.
+      - key: PORT
+        value: "3000"
+      - key: BACKEND_PORT
+        value: "3000"
+      # ── Neon connection — filled in the Render dashboard, never committed.
+      # Use the DIRECT host (no "-pooler" suffix): migrations at boot want a
+      # plain connection, and a 5-connection pool doesn't need PgBouncer.
+      - key: POSTGRES_HOST
+        sync: false
+      - key: POSTGRES_PORT
+        value: "5432"
+      - key: POSTGRES_USER
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_DB
+        sync: false
+      # Neon requires TLS; certs are public-CA signed, so verification works
+      # with Node's bundled CA store.
+      - key: POSTGRES_SSL
+        value: "true"

@@ -86,7 +86,7 @@ process start
               reach its schema must not accept traffic)
       2. createApp()                     realtime/src/app.ts
            → trust proxy, 64 KB JSON cap, configureHealthRoutes()
-      3. createServer(app).listen(BACKEND_PORT)
+      3. createServer(app).listen(BACKEND_PORT ?? PORT ?? 3000)
            (explicit http server, not app.listen — M4 attaches the
             WebSocket upgrade handler to this same object)
       4. signal handlers installed

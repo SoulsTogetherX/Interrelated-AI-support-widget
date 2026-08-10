@@ -31,6 +31,13 @@ Additive increments on a green tree. Nothing proceeds on a red build; every
 new behavior lands with a test that would fail without it. A step that can't
 finish cleanly is reverted, not parked.
 
+Verification ladder per increment: typecheck → unit tests → integration
+tests against real Postgres → and, for any increment touching migrations,
+boot, Dockerfiles, or compose, **re-boot the prod compose stack and re-run
+the smoke probe** (`docker compose -f docker-compose.prod.yaml up --wait`
+then `node scripts/smoke-test.mjs`). Unit-level green is not "the project
+runs"; the prod boot is.
+
 ### §1.3 House style
 2-space indent, no semicolons, double quotes, `//#region` folding markers,
 PascalCase component directories (later, in web/), camelCase modules,
@@ -83,7 +90,17 @@ and double-click selection; the fixed total length lets the schema enforce
 `newId`'s prefix union is **closed** — adding an entity type means touching
 this file, keeping the registry in one reviewable place.
 
-### §2.5 `.env.example`
+### §2.5 `render.yaml`
+The Render deployment as code (a "Blueprint"): one free-tier Docker web
+service building `realtime/Dockerfile` with the repo root as context,
+health-checked on the DB-free `/api/health`, deploying the `dev` branch on
+every push (flip to `main` when the demo should track releases). Neon
+connection values are marked `sync: false` — Render prompts for them in its
+dashboard; secrets never enter the repo. Exactly ONE service by design: the
+free tier's ~750 instance-hours/month keep one service always warm, not two
+(the M3 dashboard goes to Vercel instead).
+
+### §2.6 `.env.example`
 The single documented registry of every environment variable the system
 reads. Rule: a module reading an env var not documented here is a bug in the
 module. Note the `POSTGRES_PORT` comment — on machines with a native
@@ -204,7 +221,11 @@ memory-pressure lever).
 ### §3.7 `src/server.ts`
 Boot order is a contract: **migrate, then listen** — a process that can't
 reach the schema it was built for must not accept traffic; a migration
-failure exits nonzero so the orchestrator restarts with backoff. The http
+failure exits nonzero so the orchestrator restarts with backoff. The port is
+`BACKEND_PORT ?? PORT ?? 3000`: BACKEND_PORT is this repo's explicit
+convention (compose, render.yaml); PORT is the generic convention PaaS
+routers inject, honored so the service binds correctly on platforms that
+only speak that. The http
 server is created explicitly (not `app.listen`) because M4 attaches the
 WebSocket upgrade handler to the same server object. Shutdown: SIGTERM →
 stop accepting → drain pool → exit; a second signal force-exits.

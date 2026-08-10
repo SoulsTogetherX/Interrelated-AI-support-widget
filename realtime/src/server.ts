@@ -19,7 +19,11 @@ import { migrateToLatest } from "@/db/migrate"
 // The http server is created explicitly (rather than app.listen) because M4
 // attaches the WebSocket upgrade handler to this same server object; doing
 // it now costs nothing and avoids reshaping boot later.
-const port = Number(process.env.BACKEND_PORT ?? 3000)
+// BACKEND_PORT first (this repo's own convention, set by compose and
+// render.yaml), then PORT (the convention Render and most PaaS routers
+// inject), then 3000. Honoring PORT means the service still binds correctly
+// on a platform that only speaks the generic convention.
+const port = Number(process.env.BACKEND_PORT ?? process.env.PORT ?? 3000)
 
 async function start(): Promise<void> {
   const applied = await migrateToLatest(db)
