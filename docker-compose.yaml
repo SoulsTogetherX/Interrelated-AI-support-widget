@@ -1,0 +1,65 @@
+# Development stack: hot-reloading realtime service + pgvector Postgres.
+#
+#   cp .env.example .env    (once)
+#   docker compose up --build
+#
+# Postgres is also published to the host so `npm test` in realtime/ can run
+# the DB-gated integration suite against it directly:
+#   POSTGRES_PASSWORD=… npm test
+
+services:
+  database:
+    build: ./database
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Named volume, not a bind mount: Postgres data files on a Windows
+      # bind mount are both slow and permission-fragile.
+      #
+      # Mounted at /var/lib/postgresql, NOT /var/lib/postgresql/data: the
+      # Postgres 18 image moved the convention up one level (data lives in a
+      # version-numbered subdirectory, enabling in-place pg_upgrade --link).
+      # Mounting at the old path makes the container refuse to initialize.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  realtime:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+      target: dev
+    # init: true gives the container a real PID 1 (tini) so signals reach
+    # tsx/node and Ctrl+C actually stops the stack promptly.
+    init: true
+    environment:
+      POSTGRES_HOST: database
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      BACKEND_PORT: "3000"
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    volumes:
+      # Live-edit mounts. node_modules is NOT masked with an anonymous
+      # volume because src/ and shared/ are mounted individually — the
+      # image's own node_modules stays untouched.
+      - ./realtime/src:/app/realtime/src
+      - ./shared:/app/shared
+    depends_on:
+      database:
+        # Gate on HEALTHY, not on started: the realtime boot path runs
+        # migrations immediately, and racing Postgres's init would turn
+        # every `up` into a coin flip.
+        condition: service_healthy
+
+volumes:
+  pgdata:

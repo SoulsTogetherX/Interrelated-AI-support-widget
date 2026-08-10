@@ -1,0 +1,15 @@
+# Force LF endings for every text file, on every platform.
+#
+# Why this is load-bearing and not boilerplate: on the OnlineWhiteboard
+# project, a CRLF ending that Windows git silently wrote into .env corrupted
+# POSTGRES_PASSWORD inside the Linux container (the password became
+# "hunter2\r", which is a different password). Docker bind-mounts do not
+# normalize line endings for you. Forcing LF at the repo level makes the
+# whole class of bug unrepresentable.
+* text=auto eol=lf
+
+# Binary files that must never be end-of-line normalized.
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.pdf binary

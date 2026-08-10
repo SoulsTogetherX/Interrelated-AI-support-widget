@@ -1,0 +1,16 @@
+{
+  "name": "interrelated-root",
+  "private": true,
+  "type": "module",
+  "description": "Root tooling package. Owns the test runner for shared/ (which deliberately has no package.json of its own) and nothing else. Application packages (realtime/, web/, widget/) each own their dependencies.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:shared": "tsc -p shared/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

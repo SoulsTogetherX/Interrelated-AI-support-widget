@@ -1,0 +1,24 @@
+{
+  // shared/ has NO package.json — it is not an npm package. Every other
+  // package reaches into it through a "@shared/*" path alias, and its
+  // TypeScript is compiled by whichever consumer imports it (tsx in dev,
+  // esbuild for the realtime bundle, next/vite for their packages). That
+  // means there is no build boundary to hide behind, so this tsconfig is the
+  // strictest in the repo: an error here would otherwise surface as a
+  // confusing downstream error in some consumer's build.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true
+  },
+  "include": ["./**/*.ts"]
+}
