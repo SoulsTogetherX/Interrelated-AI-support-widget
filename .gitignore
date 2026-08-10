@@ -10,9 +10,12 @@ coverage/
 # Secrets. .env holds real credentials (Postgres password, provider keys for
 # the demo org, the credential-encryption master key). Only .env.example —
 # which documents every variable with a placeholder — is committed.
+# .env.neon is the local input file for scripts/check-neon.mjs (credential
+# tester) and must likewise never be committed.
 .env
 .env.local
 .env.production
+.env.neon
 
 # Editor and OS noise.
 .vscode/
