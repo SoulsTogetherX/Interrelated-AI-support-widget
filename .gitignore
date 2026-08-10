@@ -17,6 +17,10 @@ coverage/
 .env.production
 .env.neon
 
+# fastembed's ONNX model cache (~30 MB), created on first local embedding
+# run (FASTEMBED_TEST=1 or the eval harness). Machine-local artifact.
+local_cache/
+
 # Editor and OS noise.
 .vscode/
 .idea/

@@ -10,7 +10,9 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   test: {
-    include: ["shared/**/*.test.ts"],
+    // shared/ AND providers/ — both are alias-joined source folders with no
+    // package.json of their own, so the root runner owns their tests.
+    include: ["shared/**/*.test.ts", "providers/**/*.test.ts"],
     environment: "node",
   },
 })

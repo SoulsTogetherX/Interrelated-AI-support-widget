@@ -6,10 +6,13 @@ document describes what *happens*, in order, when something occurs. Updated
 as part of every step's definition of done.
 
 **Current milestone: M1 — in progress.** Two request paths exist: boot and
-the health probes. Migration 002 extended the schema (content pipeline
-tables) but adds no new request path until the ingest worker lands — at
-which point this file gains the ingest trace. Coming next: ingest (M1),
-widget question → grounded answer (M2), dashboard auth (M3), handoff (M4).
+the health probes. The schema (migration 002) and the library layer — the
+chunker (`shared/chunking`), vector utilities (`shared/utils/vectors`), and
+embedding providers (`providers/embedding`) — exist and are tested but are
+not yet wired into any request path. They join here as one trace when the
+ingest worker lands (M1.3): source → crawl → parse → chunk → embed → store.
+Coming after: widget question → grounded answer (M2), dashboard auth (M3),
+handoff (M4).
 
 ---
 

@@ -78,6 +78,32 @@ there is no build boundary to catch its errors before a consumer does. It is
 also why shared/ must stay **dependency-free**: it can't declare
 dependencies, so it must not need any.
 
+#### §2.4.0 `shared/chunking/chunker.ts`
+The heading-aware chunker — the policy layer between parsers and embedding.
+Input is a parsed document: ordered blocks (`heading` / `paragraph` /
+`code`) honoring the parser contract `block.text === source.slice(charStart,
+charEnd)`; output is chunks shaped for the `chunks` table. Splitting parse
+from chunk means one chunking policy serves HTML, Markdown, and PDF alike,
+and the chunker is tested with hand-built blocks instead of fixture files.
+
+Key behaviors, each pinned by a test: headings close the running chunk (a
+chunk never straddles a section boundary — a hit mixing two sections cites
+both wrongly); the heading trail is a stack where a sibling heading evicts
+its predecessor *and* that predecessor's children; pieces pack to
+`targetTokens` (default 400 — the eval harness ablates 400 vs 800); an
+oversized paragraph splits at sentence bounds, code at line bounds, and a
+single indivisible run hard-cuts rather than exceed `maxTokens`. Character
+offsets survive every split, which is what makes deep-linking citations
+possible. Token counts are `ceil(chars/4)` — an approximation used only for
+budgeting, chosen so shared/ stays dependency-free (a real tokenizer is a
+model-specific dependency for a number where ±10% changes nothing).
+
+#### §2.4.2 `shared/utils/vectors.ts`
+`PADDED_DIM` (1024 — the constant the schema's `halfvec(1024)` mirrors),
+`padVector` (zero-padding, with the norm/dot-preservation argument in the
+comment and *executed* as a property test), and `toPgvector`/`fromPgvector`
+— the ONE place pgvector's text format is written or parsed.
+
 #### §2.4.1 `shared/utils/ids.ts`
 Entity id generation: `<prefix>_<32 chars Crockford base32>`, 160 bits of
 entropy. Prefixed ids (`org_…`, `usr_…`) make logs and foreign keys
@@ -89,6 +115,40 @@ and double-click selection; the fixed total length lets the schema enforce
 (15 lines) because shared/ is dependency-free by construction.
 `newId`'s prefix union is **closed** — adding an entity type means touching
 this file, keeping the registry in one reviewable place.
+
+### §2.4.5 `providers/`
+The model-provider abstraction — the BYO-provider feature's foundation.
+Same no-package-json pattern as shared/ (consumers compile it through the
+`@providers/*` alias; the root runner owns its tests), with one extra rule:
+**implementations that need real dependencies load them with a dynamic
+import**, and the dependency is declared by whichever package actually runs
+that code. That is what lets every consumer import the *files* freely while
+only the eval/CI path pays for onnxruntime.
+
+#### §2.4.5a `embedding/types.ts`
+`EmbeddingProvider`: `model` (the value stored in `chunk_embeddings.model`
+and the predicate of that model's partial HNSW index), `dim` (native
+dimension, pre-padding), and batch-first `embed(texts)` — batch-first
+because free tiers rate-limit per REQUEST, and a single-text convenience
+method is how N-requests-for-N-chunks code gets written.
+
+#### §2.4.5b `embedding/mock.ts`
+Deterministic fake embeddings (`mock-384`): FNV-1a hash seeds an xorshift32
+PRNG per text → unit vectors, identical forever on every machine, with no
+imports at all. Exists so plumbing tests (storage, padding, tenant
+filtering) run in milliseconds with zero downloads. Deliberately has NO
+semantic similarity — using it in a quality eval is a bug, and the eval
+harness will refuse it by name.
+
+#### §2.4.5c `embedding/local.ts`
+Real local embeddings (`bge-small-en-v1.5`, 384-d) via fastembed/ONNX — the
+keyless implementation the eval harness and CI use. Dynamic-imported (see
+§2.4.5); ~30 MB model cached under the gitignored `local_cache/` on first
+use. **Never runs on Render**: onnxruntime wants ~250–400 MB of RAM in a
+512 MB instance — production embedding is remote per-org providers.
+Verified by a gated test (`FASTEMBED_TEST=1 npm test`) that asserts the one
+semantic property everything depends on: related texts closer than
+unrelated ones.
 
 ### §2.5 `render.yaml`
 The Render deployment as code (a "Blueprint"): one free-tier Docker web
