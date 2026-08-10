@@ -1,0 +1,90 @@
+//#region Imports
+// node:crypto is available in every runtime this repo targets (Node 22+ in
+// the realtime service and tooling; the widget generates visitor ids with the
+// browser's crypto through the same interface shape, but does NOT import this
+// file — it has a zero-dependency copy, because importing shared/ would drag
+// tooling assumptions into a bundle with a 15 KB budget).
+import { randomBytes } from "node:crypto"
+//#endregion
+
+//#region Type Defs
+// Every row id in the database is TEXT, generated here — never SERIAL.
+// Prefixed ids (org_…, usr_…) make logs, foreign keys, and support tickets
+// self-describing: you can tell what table an id belongs to from the id
+// alone, which matters in a multi-tenant system where a mixed-up id is a
+// cross-tenant bug. Stripe popularized this shape for exactly that reason.
+//
+// The union is closed on purpose: adding a new entity requires touching this
+// file, which keeps the prefix registry in one reviewable place.
+type IdPrefix =
+  | "org"   // organizations
+  | "usr"   // users
+  | "mem"   // org_members
+  | "ses"   // sessions (dashboard login)
+  | "key"   // api_keys (publishable + secret widget keys)
+  | "ori"   // allowed_origins
+//#endregion
+
+//#region Constants
+// 20 random bytes → 160 bits of entropy, comfortably collision-free without
+// coordination. Encoded in lowercase base32 (Crockford alphabet, no padding)
+// rather than hex or base64: base32 survives case-insensitive contexts
+// (hostnames, some log pipelines) and avoids base64's "+/" which break URLs
+// and double-click selection. 160 bits / 5 bits-per-char = 32 chars exactly.
+const ID_BYTES = 20
+const ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz" // Crockford: no i,l,o,u
+//#endregion
+
+//#region Helpers
+// Encodes a buffer into Crockford base32. Hand-rolled (rather than a
+// dependency) because it is 15 lines, and shared/ must stay dependency-free
+// so every consumer can compile it without a package install.
+function toBase32(bytes: Buffer): string {
+  let bits = 0
+  let value = 0
+  let out = ""
+  for (const byte of bytes) {
+    value = (value << 8) | byte
+    bits += 8
+    while (bits >= 5) {
+      out += ALPHABET[(value >>> (bits - 5)) & 31]
+      bits -= 5
+    }
+  }
+  // 20 bytes = 160 bits divides evenly by 5, so there is never a partial
+  // group to flush. The assertion documents the invariant instead of
+  // silently depending on it.
+  if (bits !== 0) throw new Error("ID_BYTES must be a multiple of 5")
+  return out
+}
+//#endregion
+
+//#region Exports
+/**
+ * Generates a new entity id: `<prefix>_<32 chars of base32>`, e.g.
+ * `org_9m4e2mr0ui3e8a215n4g5t6q7rjkfwd3`. Total length is fixed
+ * (prefix + 1 + 32), which lets the schema use CHECK (char_length(...))
+ * constraints as a cheap defense against ids fabricated by hand.
+ */
+export function newId(prefix: IdPrefix): string {
+  return `${prefix}_${toBase32(randomBytes(ID_BYTES))}`
+}
+
+/**
+ * True when `value` is a well-formed id for `prefix`. Used at API boundaries
+ * to reject malformed ids before they reach a query — a malformed id is
+ * never a valid lookup, so failing fast avoids a pointless round-trip and
+ * keeps garbage out of logs.
+ */
+export function isId(prefix: IdPrefix, value: string): boolean {
+  if (!value.startsWith(`${prefix}_`)) return false
+  const body = value.slice(prefix.length + 1)
+  if (body.length !== 32) return false
+  for (const ch of body) {
+    if (!ALPHABET.includes(ch)) return false
+  }
+  return true
+}
+
+export type { IdPrefix }
+//#endregion

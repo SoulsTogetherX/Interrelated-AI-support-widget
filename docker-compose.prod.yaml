@@ -1,0 +1,46 @@
+# Production-shaped stack: the esbuild bundle behind the prod image, no bind
+# mounts, no dev tooling. This is what CI's e2e job boots and probes — the
+# point is that the artifact being tested is the artifact being shipped.
+#
+#   docker compose -f docker-compose.prod.yaml up --build --wait
+
+services:
+  database:
+    build: ./database
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # NOT published to the host: in prod shape, nothing outside the compose
+    # network talks to Postgres directly.
+    volumes:
+      # /var/lib/postgresql (not …/data) — PG18 image convention; see the
+      # comment in docker-compose.yaml.
+      - pgdata_prod:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  realtime:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+      target: prod
+    init: true
+    environment:
+      POSTGRES_HOST: database
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      BACKEND_PORT: "3000"
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    depends_on:
+      database:
+        condition: service_healthy
+
+volumes:
+  pgdata_prod:

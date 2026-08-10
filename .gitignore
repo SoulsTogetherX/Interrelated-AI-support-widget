@@ -1,0 +1,25 @@
+# Dependencies — every package installs its own node_modules; none are committed.
+node_modules/
+
+# Build artifacts. dist/ is produced by esbuild (realtime, widget) and next
+# build (web); coverage/ by vitest --coverage. All reproducible from source.
+dist/
+coverage/
+.next/
+
+# Secrets. .env holds real credentials (Postgres password, provider keys for
+# the demo org, the credential-encryption master key). Only .env.example —
+# which documents every variable with a placeholder — is committed.
+.env
+.env.local
+.env.production
+
+# Editor and OS noise.
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Private working notes — deliberately NOT committed, so candid per-phase
+# commentary never reaches the public repo. Same convention as OnlineWhiteboard.
+PHASE_NOTES.md

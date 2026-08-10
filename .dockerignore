@@ -1,0 +1,16 @@
+# The realtime image builds with the REPO ROOT as context (it needs shared/),
+# so this file guards what gets shipped to the Docker daemon from the root.
+#
+# .env is the important line: secrets must never enter a build context —
+# anything in the context can end up in an image layer, and image layers
+# leak (registries, cache exports, `docker history`).
+.env
+.env.*
+!.env.example
+
+node_modules
+dist
+coverage
+.git
+.github
+*.md

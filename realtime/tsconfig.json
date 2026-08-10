@@ -1,0 +1,28 @@
+{
+  // CommonJS + ES2022, unlike the ESM packages: the build is one esbuild
+  // bundle (`--format=cjs`) executed by plain `node dist/server.js` in the
+  // production image, with no loader tricks. tsc here only typechecks
+  // (esbuild does the emitting), so noEmit.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@shared/*": ["../shared/*"]
+    }
+  },
+  // vitest.config.ts is deliberately NOT typechecked here: it runs as ESM
+  // (import.meta) under vitest's own esbuild pipeline, which this CommonJS
+  // tsconfig would reject. Vitest validates it at startup instead.
+  "include": ["src/**/*.ts"]
+}
