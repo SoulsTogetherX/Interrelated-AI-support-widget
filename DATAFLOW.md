@@ -5,9 +5,11 @@ function at each hop. `CLAUDE.md` describes what each file *is*; this
 document describes what *happens*, in order, when something occurs. Updated
 as part of every step's definition of done.
 
-**Current milestone: M0.** Two paths exist: boot and the health probes. The
-paths this document will grow next: ingest (M1), widget question → grounded
-answer (M2), dashboard auth (M3), human handoff (M4).
+**Current milestone: M1 — in progress.** Two request paths exist: boot and
+the health probes. Migration 002 extended the schema (content pipeline
+tables) but adds no new request path until the ingest worker lands — at
+which point this file gains the ingest trace. Coming next: ingest (M1),
+widget question → grounded answer (M2), dashboard auth (M3), handoff (M4).
 
 ---
 
@@ -75,7 +77,8 @@ process start
   → start()                              realtime/src/server.ts
       1. migrateToLatest(db)             realtime/src/db/migrate.ts
            → ExplicitMigrationProvider yields the MIGRATIONS registry
-             (001_initial_schema — realtime/src/db/migrations/)
+             (001_initial_schema, 002_content_pipeline —
+              realtime/src/db/migrations/)
            → Kysely Migrator compares against its kysely_migration
              bookkeeping table, applies anything unapplied, in key order
            · error → throw → start().catch → console.error → exit(1)

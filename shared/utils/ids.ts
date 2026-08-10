@@ -23,6 +23,10 @@ type IdPrefix =
   | "ses"   // sessions (dashboard login)
   | "key"   // api_keys (publishable + secret widget keys)
   | "ori"   // allowed_origins
+  | "src"   // sources (a crawl target or upload)
+  | "doc"   // documents (one fetched page / uploaded file)
+  | "chk"   // chunks (one retrieval unit within a document)
+  | "job"   // ingest_jobs (queue rows for the ingest worker)
 //#endregion
 
 //#region Constants

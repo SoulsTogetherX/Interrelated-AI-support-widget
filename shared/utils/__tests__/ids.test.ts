@@ -7,7 +7,7 @@ import { isId, newId } from "../ids"
 //#region Constants
 // Every prefix in the registry, so format tests cover the whole closed union
 // and adding a prefix without updating tests is caught by review, not luck.
-const PREFIXES = ["org", "usr", "mem", "ses", "key", "ori"] as const
+const PREFIXES = ["org", "usr", "mem", "ses", "key", "ori", "src", "doc", "chk", "job"] as const
 //#endregion
 
 describe("newId", () => {

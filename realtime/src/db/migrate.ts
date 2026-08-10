@@ -3,6 +3,7 @@ import { Migrator } from "kysely"
 import type { Kysely, Migration, MigrationProvider, MigrationResultSet } from "kysely"
 
 import * as migration001 from "@/db/migrations/001_initial_schema"
+import * as migration002 from "@/db/migrations/002_content_pipeline"
 //#endregion
 
 //#region Type Defs
@@ -26,6 +27,7 @@ class ExplicitMigrationProvider implements MigrationProvider {
 // NNN_ prefix zero-padded. Add new migrations at the bottom, never reorder.
 const MIGRATIONS: Record<string, Migration> = {
   "001_initial_schema": migration001,
+  "002_content_pipeline": migration002,
 }
 //#endregion
 

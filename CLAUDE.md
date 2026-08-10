@@ -12,9 +12,10 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M0 (skeleton, CI, deploy).** Everything below exists and
-is tested. Packages that appear in the plan but not here (web/, widget/,
-providers/, eval/, loadtest/) do not exist yet — they arrive in M1–M4.
+**Current milestone: M1 (ingest, retrieval, eval) — in progress.** M0 is
+complete. Everything below exists and is tested. Packages that appear in the
+plan but not here (web/, widget/, providers/, eval/, loadtest/) do not exist
+yet — they arrive across M1–M4.
 
 ---
 
@@ -131,8 +132,45 @@ stay frozen while `schema.ts` evolves. Creates:
 | `allowed_origins` | widget origin allowlist | regex CHECK rejects paths/trailing slashes — a stored `https://a.com/` would silently never match a browser `Origin` header |
 
 Also `CREATE EXTENSION IF NOT EXISTS vector` — in migration 001 even though
-no vector column exists until M1, so a Postgres without pgvector fails at
+no vector column exists until 002, so a Postgres without pgvector fails at
 deploy time, not at first ingest weeks later.
+
+### §3.3.1 `src/db/migrations/002_content_pipeline.ts`
+The content pipeline: what the ingest worker (next increments) reads and
+writes, and what retrieval queries.
+
+| Table | Purpose | Notable decision |
+|---|---|---|
+| `sources` | crawl targets / uploads per org | status lifecycle CHECK; crawl_depth capped at 3 |
+| `documents` | one fetched page / uploaded file | `content_hash` (sha256 of normalized text) short-circuits recrawls — identical hash skips re-chunk + re-embed, protecting embedding quota; soft delete + **partial** unique `(source_id, url) WHERE deleted_at IS NULL` so re-added pages don't collide with tombstones |
+| `chunks` | the retrieval unit | `heading_path` travels with every chunk (citations show where a claim lives); `char_start/char_end` deep-link into the source; `tsv` is a **GENERATED** column so the lexical index can never drift from the text; unique `(document_id, ord)` makes a buggy re-chunk loud |
+| `chunk_embeddings` | one embedding per (chunk, model) | the three big decisions — see below |
+| `ingest_jobs` | Postgres-backed work queue | `FOR UPDATE SKIP LOCKED` consumer shape; partial index over queued rows only; CHECK `(state='running') = (locked_by IS NOT NULL)` makes an unowned running job unrepresentable |
+
+The three load-bearing decisions on `chunk_embeddings`:
+
+1. **`halfvec(1024)`**, not `vector(1024)`: 2 bytes/dim halves row and index
+   size — ~78k chunks instead of ~39k inside Neon's 0.5 GB free tier. fp16
+   recall cost is negligible and will be *measured* by the eval harness.
+2. **Partial HNSW index per model** (`WHERE model = '…'`), never IVFFlat:
+   different models' vectors live in different spaces, so one shared index
+   wastes traversal on foreign rows; and IVFFlat degrades silently under
+   continuous ingest while HNSW builds incrementally. Registered today:
+   `bge-small-en-v1.5` (local/eval) and `mock-384` (deterministic tests).
+   A new provider model ships its index in a new migration.
+3. **`org_id` denormalized onto the table**: HNSW searches then filters, so
+   the tenant filter must live on the indexed relation or small tenants can
+   get fewer than k results. Pairs with pgvector iterative scans at query
+   time (arrives with the retrieval code).
+
+Shorter models are **zero-padded** to 1024: padding preserves dot products
+and L2 norms exactly among padded vectors (the extra coordinates contribute
+zeros), so cosine/L2 rankings within a model are unchanged. `dim` records
+the true pre-padding dimension.
+
+Rejected alternative for the queue: Redis/BullMQ — a second stateful service
+to run and secure, when the queue's real throughput ceiling is embedding-API
+rate limits, not Postgres.
 
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
@@ -184,6 +222,15 @@ stop accepting → drain pool → exit; a second signal force-exits.
   reject invalid rows **at their boundaries** (second owner rejected while
   second agent accepted; mismatched api_key kind; origin with a trailing
   slash).
+- `db/__tests__/contentPipeline.test.ts` — migration 002 integration suite,
+  same gating. The first end-to-end vector proof lives here: hand-picked
+  3-d vectors, zero-padded to 1024, must come back in exact cosine order
+  through `halfvec`; an EXPLAIN assertion pins that the planner actually
+  uses the partial HNSW index; the generated `tsv` column must satisfy a
+  full-text query. Boundary rejections: wrong-dimension vector, duplicate
+  `(chunk_id, model)` (while a second model for the same chunk is legal),
+  duplicate `(document_id, ord)`, inverted char span, live-URL collision
+  (and non-collision with a tombstone), unowned running job.
 
 ### §3.9 `realtime/Dockerfile`
 Multi-stage on node:22-alpine, **build context = repo root** (shared/ must

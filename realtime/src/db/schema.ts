@@ -99,6 +99,89 @@ interface AllowedOriginsTable {
   created_at: ColumnType<Date, string | Date | undefined, never>
 }
 
+/** A crawl target or upload an org has connected. status tracks the ingest
+ *  lifecycle at source granularity; per-run detail lives in ingest_jobs. */
+interface SourcesTable {
+  id: string
+  org_id: string
+  kind: "url" | "sitemap" | "upload"
+  /** URL for url/sitemap kinds; original filename for uploads. */
+  location: string
+  crawl_depth: Generated<number>
+  status: Generated<"pending" | "crawling" | "ready" | "failed">
+  last_crawled_at: ColumnType<Date | null, never, string | Date>
+  created_at: ColumnType<Date, string | Date | undefined, never>
+}
+
+/** One fetched page or uploaded file. content_hash (sha256 of normalized
+ *  text) is the recrawl short-circuit: identical hash → skip re-chunk and
+ *  re-embed, which is what keeps recrawls nearly free on embedding quota.
+ *  Soft-deleted via deleted_at; URL uniqueness applies among live rows. */
+interface DocumentsTable {
+  id: string
+  org_id: string
+  source_id: string
+  url: string
+  title: string | null
+  content_hash: string
+  token_count: number | null
+  fetched_at: ColumnType<Date, string | Date | undefined, never>
+  deleted_at: ColumnType<Date | null, never, string | Date>
+}
+
+/** The retrieval unit. heading_path travels with the chunk so citations can
+ *  show where in the document a claim came from; char_start/char_end span
+ *  back into the source for deep-linking. tsv is Postgres-generated (the
+ *  lexical half of hybrid retrieval) — never written by application code. */
+interface ChunksTable {
+  id: string
+  org_id: string
+  document_id: string
+  /** Position within the document, 0-based; unique per document. */
+  ord: number
+  heading_path: string | null
+  text: string
+  token_count: number
+  char_start: number | null
+  char_end: number | null
+  /** GENERATED ALWAYS — selectable for debugging, unwritable by design. */
+  tsv: ColumnType<string, never, never>
+}
+
+/** One embedding of one chunk under one model. org_id is denormalized here
+ *  (see migration 002) so the tenant filter lives on the same relation as
+ *  the partial HNSW indexes. The pg driver represents vectors as strings
+ *  ("[0.1,0.2,…]"); typed as string on all three arms — parsing to number[]
+ *  happens in provider code, not in the driver types. */
+interface ChunkEmbeddingsTable {
+  chunk_id: string
+  org_id: string
+  /** Embedding model identifier, e.g. "bge-small-en-v1.5". Part of the PK:
+   *  one chunk may carry embeddings under several models simultaneously
+   *  (BYO-provider means different orgs genuinely use different models). */
+  model: string
+  /** The model's TRUE dimension before zero-padding to 1024. */
+  dim: number
+  embedding: string
+}
+
+/** Ingest queue row, consumed with FOR UPDATE SKIP LOCKED. The
+ *  (state='running') = (locked_by IS NOT NULL) CHECK makes an unowned
+ *  running job — the silent way work gets lost — unrepresentable. */
+interface IngestJobsTable {
+  id: string
+  org_id: string
+  source_id: string
+  state: Generated<"queued" | "running" | "done" | "failed">
+  attempts: Generated<number>
+  locked_by: string | null
+  locked_at: ColumnType<Date | null, string | Date | null, string | Date | null>
+  docs_total: number | null
+  docs_done: number | null
+  error: string | null
+  created_at: ColumnType<Date, string | Date | undefined, never>
+}
+
 /** The Kysely database contract. Every query in the codebase is typed
  *  against this interface — a column typo is a compile error. */
 interface Database {
@@ -108,6 +191,11 @@ interface Database {
   sessions: SessionsTable
   api_keys: ApiKeysTable
   allowed_origins: AllowedOriginsTable
+  sources: SourcesTable
+  documents: DocumentsTable
+  chunks: ChunksTable
+  chunk_embeddings: ChunkEmbeddingsTable
+  ingest_jobs: IngestJobsTable
 }
 //#endregion
 
@@ -120,5 +208,10 @@ export type {
   SessionsTable,
   ApiKeysTable,
   AllowedOriginsTable,
+  SourcesTable,
+  DocumentsTable,
+  ChunksTable,
+  ChunkEmbeddingsTable,
+  IngestJobsTable,
 }
 //#endregion
