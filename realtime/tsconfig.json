@@ -19,7 +19,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@shared/*": ["../shared/*"],
-      "@providers/*": ["../providers/*"]
+      "@providers/*": ["../providers/*"],
+      "@eval/*": ["../eval/*"]
     }
   },
   // vitest.config.ts is deliberately NOT typechecked here: it runs as ESM

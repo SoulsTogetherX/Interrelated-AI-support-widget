@@ -5,10 +5,11 @@ function at each hop. `CLAUDE.md` describes what each file *is*; this
 document describes what *happens*, in order, when something occurs. Updated
 as part of every step's definition of done.
 
-**Current milestone: M1 — in progress.** Four paths exist: boot (§2), the
+**Current milestone: M1 — COMPLETE.** Five paths exist: boot (§2), the
 health probes (§1), the full ingest pipeline (§3): source → crawl → parse
-→ chunk → embed → store, and — as of M1.4 — retrieval (§4): query → dense
-+ lexical arms → RRF fusion → ranked chunks. Coming after: widget
+→ chunk → embed → store, retrieval (§4): query → dense + lexical arms →
+RRF fusion → ranked chunks, and the evaluation harness (§4.4) that scores
+§4 against a golden set and gates CI on the result. Coming after: widget
 question → grounded answer (M2, which puts an LLM and a citation verifier
 on top of §4), dashboard auth (M3), handoff (M4).
 
@@ -288,15 +289,42 @@ lexicalSearch                            realtime/src/retrieval/search.ts
                                           through the same join as §4.2)
 ```
 
+### §4.4 The evaluation harness — golden set → scores → CI verdict
+
+```
+npm run eval                             realtime/scripts/runEval.ts
+  → refuse EMBEDDING_PROVIDER=mock       quality over semantics-free
+                                         vectors is noise, by design
+  → migrateToLatest                      a fresh CI container self-prepares
+  → ingest eval/corpus/ into the eval org
+      per file: read → BOM/CRLF-normalize → parseMarkdown → chunkBlocks
+        → embed (bge-small local, heading trail prepended) → store
+      content_hash short-circuit: repeat runs skip unchanged files
+      (targetTokens is hashed too, so ablation runs re-chunk)
+  → resolve golden anchors               eval/resolve.ts resolveAnchor()
+      (url → live document → chunks whose squashed text contains the
+       squashed mustContain; ANY zero-match anchor → report all → exit 1)
+  → embed all 80 questions
+  → for each strategy (dense | lexical | hybrid):
+      retrieve k=10 per question         realtime/src/retrieval/search.ts
+      → scoreRun                         eval/metrics.ts
+        (recall@1/5/10, MRR@10, nDCG@10, retrieval-only p50/p95)
+  → print table + every hybrid miss with its top hit
+  → write eval/results/latest.json      (gitignored; RESULTS.md is the
+                                         published, human-argued version)
+  → floor check                          eval/floor.json
+      hybrid recall@5 < floor → exit 1 → CI red
+```
+
 ## §5 The test and CI flows (how the above gets verified)
 
 ```
 local, no DB     npm test (root, realtime)
-                   → shared (incl. RRF fusion) + providers + health tests,
-                     plus the DB-free ingest suites (safeFetch, parsers,
-                     crawler — loopback fixture servers, no Postgres) and
-                     retrieval input validation; DB-gated suites
-                     self-skip (POSTGRES_PASSWORD unset)
+                   → shared (incl. RRF fusion) + providers + eval scorer/
+                     resolver tests, plus the DB-free ingest suites
+                     (safeFetch, parsers, crawler — loopback fixture
+                     servers, no Postgres) and retrieval input validation;
+                     DB-gated suites self-skip (POSTGRES_PASSWORD unset)
 
 local, with DB   docker compose up -d database
                    → export .env vars → npm test in realtime/
@@ -309,6 +337,12 @@ local, with DB   docker compose up -d database
                      isolation, soft-delete filtering, fusion ranks)
 
 CI verify job    pgvector service container → same full suite, keyless
+
+CI eval job      pgvector service container + cached fastembed model
+                   → npm run eval walks §4.4 for real: corpus ingest,
+                     anchor resolution, three-strategy scoring, and the
+                     recall floor — a retrieval-quality regression fails
+                     the merge, keylessly
 
 CI e2e job       docker compose -f docker-compose.prod.yaml up --wait
                    → boots §2 for real (bundle, non-root, healthcheck,

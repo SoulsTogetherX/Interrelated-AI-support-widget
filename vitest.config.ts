@@ -10,9 +10,9 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   test: {
-    // shared/ AND providers/ — both are alias-joined source folders with no
+    // shared/, providers/, AND eval/ — alias-joined source folders with no
     // package.json of their own, so the root runner owns their tests.
-    include: ["shared/**/*.test.ts", "providers/**/*.test.ts"],
+    include: ["shared/**/*.test.ts", "providers/**/*.test.ts", "eval/**/*.test.ts"],
     environment: "node",
   },
 })

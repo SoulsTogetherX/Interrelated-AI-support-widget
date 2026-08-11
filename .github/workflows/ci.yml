@@ -1,4 +1,4 @@
-# CI — two jobs, same shape as OnlineWhiteboard's:
+# CI — three jobs, same shape as OnlineWhiteboard's:
 #
 #   verify  fast feedback: per-package typecheck + unit/integration tests,
 #           with a real pgvector Postgres as a service container so the
@@ -6,6 +6,11 @@
 #   e2e     the real thing: build the PROD images, boot the prod compose
 #           stack, and drive it from outside with the zero-dependency smoke
 #           probe. What gets probed is byte-for-byte what gets deployed.
+#   eval    the retrieval-quality gate: golden set scored against an
+#           ephemeral pgvector container with the LOCAL embedding model
+#           (bge-small via fastembed — no API key), failing the build if
+#           hybrid recall@5 drops below the committed floor (eval/floor.json).
+#           Quality regressions become merge blockers, not vibes.
 #
 # No API keys anywhere: the whole pipeline runs keyless by design (mock/local
 # providers from M1 on). Fork PRs get full CI.
@@ -59,12 +64,16 @@ jobs:
             package-lock.json
             realtime/package-lock.json
 
-      # ── root: shared/ tests + typecheck ──────────────────────────────────
+      # ── root: shared/ + providers/ + eval/ tests + typechecks ────────────
       - name: root deps
         run: npm ci
       - name: shared typecheck
         run: npm run typecheck:shared
-      - name: shared tests
+      - name: providers typecheck
+        run: npm run typecheck:providers
+      - name: eval typecheck
+        run: npm run typecheck:eval
+      - name: root tests
         run: npm test
 
       # ── realtime ─────────────────────────────────────────────────────────
@@ -83,6 +92,60 @@ jobs:
           POSTGRES_PASSWORD: ci-only-password
           POSTGRES_DB: interrelated
         run: npm test
+
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify
+    services:
+      database:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U interrelated -d interrelated"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            realtime/package-lock.json
+
+      # fastembed's ONNX model (~30 MB) is immutable for a given model name —
+      # a static cache key means exactly one download ever, per runner image.
+      - name: cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: local_cache
+          key: fastembed-bge-small-en-v1.5
+
+      - name: root deps (fastembed lives here)
+        run: npm ci
+      - name: realtime deps
+        working-directory: realtime
+        run: npm ci
+
+      - name: run retrieval eval
+        working-directory: realtime
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        run: npm run eval
 
   e2e:
     runs-on: ubuntu-latest

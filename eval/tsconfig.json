@@ -1,0 +1,24 @@
+{
+  // eval/ follows the shared/ pattern: no package.json, no build step —
+  // metrics.ts is compiled by whichever consumer imports it (the root
+  // vitest runner for its tests, tsx when realtime/scripts/runEval.ts
+  // imports it through the @eval/* alias). Same strictness as shared/ and
+  // for the same reason: no build boundary catches errors before a
+  // consumer does. The corpus and golden set live here too, but data
+  // needs no compiler.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true
+  },
+  "include": ["./**/*.ts"]
+}

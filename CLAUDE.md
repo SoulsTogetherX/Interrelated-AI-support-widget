@@ -12,16 +12,18 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M1 (ingest, retrieval, eval) — in progress.** M0 is
-complete; M1.1 (content-pipeline schema), M1.2 (chunker, vectors, embedding
-providers), M1.3 (crawler, parsers, ingest worker — §3.10), and M1.4
-(hybrid retrieval — §2.4.3, §3.12) are done. Content flows in end to end
-(source → crawl → parse → chunk → embed → store) and back out again
-(query → dense + lexical arms → RRF fusion → ranked chunks). Next: the
-eval harness (golden set, recall@k/MRR/nDCG, CI floor). Everything below
-exists and is tested. Packages that appear in the plan but not here
-(web/, widget/, eval/, loadtest/) do not exist yet — they arrive across
-M1–M4.
+**Current milestone: M1 — COMPLETE.** M0 and all of M1 are done: M1.1
+(content-pipeline schema), M1.2 (chunker, vectors, embedding providers),
+M1.3 (crawler, parsers, ingest worker — §3.10), M1.4 (hybrid retrieval —
+§2.4.3, §3.12), and M1.5 (the evaluation harness — §7, §3.14). Content
+flows in end to end (source → crawl → parse → chunk → embed → store), back
+out (query → dense + lexical arms → RRF fusion → ranked chunks), and the
+quality of that retrieval is MEASURED: an 80-question hand-written golden
+set scored for recall@k/MRR/nDCG, enforced as a CI gate (hybrid recall@5
+floor), with baselines and failure analysis published in eval/RESULTS.md.
+Next: M2 (LLM providers, grounded streaming answers, span-verified
+citations, the widget). Packages that appear in the plan but not here
+(web/, widget/, loadtest/) do not exist yet — they arrive across M2–M4.
 
 ---
 
@@ -55,8 +57,9 @@ DB types kept in lockstep with raw-SQL migrations (§3.1).
 ## §2 Repo root
 
 ### §2.1 `package.json` + `vitest.config.ts` (root)
-The root is a tooling package only: it owns the test runner for `shared/`
-(which deliberately has no package.json, §2.4) and nothing else. Application
+The root is a tooling package only: it owns the test runner and typecheck
+scripts for the package-less source folders — `shared/` (§2.4),
+`providers/` (§2.4.5), and `eval/` (§7) — and nothing else. Application
 packages own their dependencies individually — this repo is a *flat* layout
 joined by TypeScript path aliases, **not** an npm workspace. Rejected
 alternative: Turborepo/pnpm workspaces — a new failure surface with zero
@@ -604,6 +607,36 @@ has no embeddings under that model — the routine dev mistake is ingesting
 under one provider and querying under another, which otherwise looks like
 retrieval returning nothing.
 
+### §3.14 `realtime/scripts/runEval.ts`
+The evaluation harness runner (`npm run eval`) — lives in realtime/ because
+it drives realtime's retrieval code; the *assets* it consumes (corpus,
+golden set, scorer, floor) live in eval/ (§7). Four stages, each loud on
+failure:
+
+1. **Ingest** eval/corpus/ into a dedicated eval org — parse → chunk →
+   embed → store, deliberately the same shape as the worker's page path
+   (heading trail prepended for embedding, trail-free stored text) because
+   the eval must measure the PRODUCTION representation. Unchanged files
+   skip via content_hash, so repeat runs pay only for retrieval; the
+   chunking target participates in the hash so `--target-tokens 800`
+   ablation runs re-chunk despite unchanged text.
+2. **Resolve** every golden anchor to chunk ids (§7.4). ANY unresolved
+   anchor fails the run after a complete report — a silently shrunken
+   relevant set would inflate every score.
+3. **Score** dense-only, lexical-only, and hybrid over all questions
+   (recall@1/5/10, MRR@10, nDCG@10, retrieval-only p50/p95), print the
+   comparison table, and list every hybrid miss with its top hit — the raw
+   material of RESULTS.md's failure analysis. `--sweep-ef` emits the
+   recall-vs-ef_search curve as CSV instead.
+4. **Enforce the floor** (eval/floor.json) on hybrid recall@5; below it,
+   exit 1 and CI goes red. `--no-floor` exists for experiments; absence of
+   floor.json warns (bootstrap) rather than passes silently.
+
+The embedder is ALWAYS the local model. EMBEDDING_PROVIDER=mock is refused
+by name with an explanation — the promise made in §2.4.5b: quality
+measured over semantics-free vectors is noise, and refusing beats
+producing an impressive-looking nonsense table.
+
 ---
 
 ## §4 `database/` and compose
@@ -638,11 +671,18 @@ probed is the artifact shipped.
 
 ### §5.1 `ci.yml`
 `verify` (10-min timeout): pgvector service container + per-package
-`npm ci` → typecheck → test; the DB-gated suites run for real here. `e2e`
-(needs verify): generates a throwaway `.env`, `compose -f prod up --build
---wait`, runs `scripts/smoke-test.mjs` against the live stack, dumps logs on
-failure, always tears down. **No API keys anywhere in CI, by design** — fork
-PRs get the full pipeline.
+`npm ci` → typechecks (shared, providers, eval, realtime) → tests; the
+DB-gated suites run for real here. `e2e` (needs verify): generates a
+throwaway `.env`, `compose -f prod up --build --wait`, runs
+`scripts/smoke-test.mjs` against the live stack, dumps logs on failure,
+always tears down. `eval` (needs verify, parallel with e2e): its own
+pgvector service container, fastembed's ONNX model restored from an
+actions/cache keyed on the model name (immutable → one download ever),
+then `npm run eval` — which ingests the committed corpus, scores the
+golden set with the LOCAL embedding model, and exits nonzero below the
+recall floor (§3.14). Retrieval-quality regressions are merge blockers,
+not vibes. **No API keys anywhere in CI, by design** — fork PRs get the
+full pipeline.
 
 ### §5.2 `keepalive.yml`
 Every 10 minutes, curl `RENDER_URL/api/health` — defeats Render's 15-minute
@@ -662,3 +702,69 @@ and that unknown routes 404. Failures are counted rather than thrown so one
 broken endpoint doesn't mask the state of the rest; every fetch carries a
 timeout because a probe that can hang turns a dead service into a stuck CI
 job.
+
+---
+
+## §7 `eval/` — the retrieval evaluation assets
+
+The measurement layer that makes retrieval quality a number with a CI
+gate instead of a claim. Same no-package-json pattern as shared/ (§2.4):
+the root runner owns its tests, `typecheck:eval` its types, and the runner
+(realtime/scripts/runEval.ts, §3.14) consumes it through the `@eval/*`
+alias. Committed artifacts only — `eval/results/` (per-run droppings) is
+gitignored; what IS committed is what someone chose to publish.
+
+### §7.1 `eval/corpus/`
+The frozen documentation snapshot: 31 Fastify v5.11.3 pages, MIT-licensed,
+with LICENSE and PROVENANCE.md recording the exact upstream tag, what was
+excluded and why, and the refresh procedure (an upgrade re-verifies every
+golden anchor and re-baselines the floor in the same change — there is
+deliberately no update script). Files are ingested under their real
+fastify.dev URLs so eval citations deep-link to live pages and the same
+corpus can seed the M2 public demo. Chosen precisely because it does NOT
+make retrieval look easy: 31 pages about one Node web framework share
+vocabulary everywhere.
+
+### §7.2 `eval/golden.jsonl`
+80 hand-written question → anchor pairs (the plan's floor is 60;
+LLM-generated-and-self-graded sets are worthless and interviewers know
+it). Each entry anchors to a document URL plus a VERBATIM `mustContain`
+substring rather than to chunk ids — chunk ids change whenever chunking
+policy changes, and a golden set that breaks on every chunker experiment
+would never survive one. Entries carry a `style` tag
+(paraphrase/verbatim) so results can say WHICH kind of phrasing fails —
+that split is the backbone of RESULTS.md's failure analysis. Questions
+were written while reading the corpus, mixing paraphrase phrasing (the
+dense arm's strength) with exact-term phrasing (the lexical arm's), the
+way real support traffic mixes both.
+
+### §7.3 `eval/metrics.ts`
+The scorer: recall@k, MRR@k, nDCG@k (binary gains) plus macro-averaged
+`scoreRun`. Pure and database-free, so every metric is pinned by
+hand-computed unit fixtures (`__tests__/metrics.test.ts`) — including the
+property distinguishing nDCG from the other two (golds packed early beat
+golds spread late). Guards throw on the states that would silently corrupt
+an average: empty run, empty relevant set (an unresolved anchor), duplicate
+ranked ids.
+
+### §7.4 `eval/resolve.ts`
+Anchor → chunk-id resolution: squash whitespace on both sides (markdown
+hard-wraps at upstream's whim; anchors must survive rewrapping), then
+case-SENSITIVE containment — an anchor is a quotation, and case-folding
+could bind it to a different sentence than the question was written
+against. Returns ALL matching chunks: a sentence the chunker legally
+placed twice makes both chunks correct retrieval targets. Returns empty
+rather than throwing so the runner can report every broken anchor at once.
+
+### §7.5 `eval/floor.json` + `eval/RESULTS.md`
+The committed operating point and the published measurement. floor.json
+holds the CI threshold (hybrid recall@5 ≥ 0.70 against a 75.0 baseline —
+headroom for cross-machine ONNX/HNSW noise, tight enough that a broken
+filter or fusion lands far below). RESULTS.md is the deliverable the plan
+calls the strongest seniority signal: the strategy comparison table
+(hybrid beats dense on every metric; the lexical arm is honestly weak on
+full-sentence questions and the write-up says exactly why), the flat
+recall-vs-ef_search curve WITH the explanation of why it is flat at this
+corpus size, the 400-vs-800 chunk ablation behind the 400 default, and a
+failure analysis that categorizes all 12 misses and commits to not padding
+the golden set to bless near-misses.
