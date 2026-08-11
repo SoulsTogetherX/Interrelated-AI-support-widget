@@ -27,6 +27,8 @@ type IdPrefix =
   | "doc"   // documents (one fetched page / uploaded file)
   | "chk"   // chunks (one retrieval unit within a document)
   | "job"   // ingest_jobs (queue rows for the ingest worker)
+  | "con"   // conversations (one widget chat thread)
+  | "msg"   // messages (one turn within a conversation)
 //#endregion
 
 //#region Constants

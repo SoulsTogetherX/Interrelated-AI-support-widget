@@ -5,13 +5,16 @@ function at each hop. `CLAUDE.md` describes what each file *is*; this
 document describes what *happens*, in order, when something occurs. Updated
 as part of every step's definition of done.
 
-**Current milestone: M1 — COMPLETE.** Five paths exist: boot (§2), the
+**Current milestone: M2 — IN PROGRESS.** Six paths exist: boot (§2), the
 health probes (§1), the full ingest pipeline (§3): source → crawl → parse
 → chunk → embed → store, retrieval (§4): query → dense + lexical arms →
-RRF fusion → ranked chunks, and the evaluation harness (§4.4) that scores
-§4 against a golden set and gates CI on the result. Coming after: widget
-question → grounded answer (M2, which puts an LLM and a citation verifier
-on top of §4), dashboard auth (M3), handoff (M4).
+RRF fusion → ranked chunks, the evaluation harness (§4.4) that scores §4
+against a golden set and gates CI on the result, and — new in M2.3 — the
+grounded answer pipeline (§5): question → retrieval → groundedness gate →
+LLM → claim verification → stripped, cited answer. §5 has no HTTP surface
+yet by design; the SSE widget route arrives with session auth (M2.5) and
+will serialize §5's events verbatim. Coming after: dashboard auth (M3),
+handoff (M4).
 
 ---
 
@@ -79,7 +82,7 @@ process start
   → start()                              realtime/src/server.ts
       1. migrateToLatest(db)             realtime/src/db/migrate.ts
            → ExplicitMigrationProvider yields the MIGRATIONS registry
-             (001_initial_schema, 002_content_pipeline —
+             (001_initial_schema, 002_content_pipeline, 003_chat —
               realtime/src/db/migrations/)
            → Kysely Migrator compares against its kysely_migration
              bookkeeping table, applies anything unapplied, in key order
@@ -218,7 +221,7 @@ becomes the caller; today it is driven by `npm run search`
 ### §4.1 Hybrid search (the production entry point)
 
 ```
-caller (searchDev CLI | tests | M2 chat route later)
+caller (searchDev CLI | tests | the answer pipeline §5)
   → embed the query                      providers/embedding/* .embed([q])
       (MUST be the same model that embedded the chunks — different models
        are different vector spaces; searchDev warns when the org has no
@@ -316,7 +319,81 @@ npm run eval                             realtime/scripts/runEval.ts
       hybrid recall@5 < floor → exit 1 → CI red
 ```
 
-## §5 The test and CI flows (how the above gets verified)
+## §5 Grounded answers — question → verified claims
+
+The M2 core: what happens between a visitor's question and the claims they
+are allowed to see. Today the callers are `npm run ask`
+(realtime/scripts/askDev.ts, mock LLM in responder mode) and the pipeline
+integration tests; the SSE widget route becomes the production caller in
+M2.5 — deliberately AFTER widget session auth exists, so an
+unauthenticated LLM-spending route never reaches the auto-deploying dev
+branch.
+
+### §5.1 The pipeline
+
+```
+caller (askDev CLI | tests | M2.5 SSE route later)
+  → answerQuestion({db, embedder, llm, orgId, visitorId, question, …})
+                                         realtime/src/answer/pipeline.ts
+      1. conversation: validate the supplied id against the ORG (a foreign
+         conversation id is a cross-tenant write → throw), or create one
+      2. persist the visitor message + bump last_message_at
+         (before retrieval: a model failure never erases the question, and
+          a thread whose answer FAILED should surface in the dashboard)
+      3. emit {meta, conversationId, messageId}
+      4. embed the question              providers/embedding/* .embed([q])
+      5. hybridSearch(k=10)              → §4.1
+      6. evaluateGroundedness            realtime/src/answer/gate.ts
+           cut on MIN dense cosine distance across the retrieved set —
+           NOT the fused RRF score (rank-based ⇒ relevance-blind: every
+           non-empty retrieval has a rank 1, so it cannot gate; the M1
+           docs said otherwise and were corrected here). Threshold 0.75
+           provisional until M2.7 derives it from the eval set.
+           · refuse → persist assistant row (refused=true, model=NULL —
+             ZERO tokens spent, that is the point of gating pre-call,
+             gate signal recorded in retrieval_score for tuning data)
+             → emit {refusal} {done} → return
+      7. buildAnswerMessages             realtime/src/answer/prompt.ts
+           system = STATIC instructions (+ org persona) — the cacheable
+           prefix; retrieved text rides in the USER turn inside <context>
+           delimiters, declared as DATA-not-instructions (the injection
+           boundary: crawled pages are untrusted input)
+      8. llm.stream({messages, temperature: 0, maxTokens, responseSchema,
+                     signal})            providers/llm/*
+           deltas collected; TTFT measured at first delta, in the
+           pipeline (not per-provider) so every provider measures alike
+      9. parseAnswerText                 shared/grounding/claims.ts
+           as-is → fenced → first-{-to-last-} (each still fully validated)
+           · invalid → buildRetryMessages: replay + EVERY validator error,
+             ONE retry only; second failure → AnswerSchemaError (visitor
+             message stays, NO assistant row — a transient model failure
+             is not conversation history)
+     10. verifyClaims                    shared/grounding/verify.ts
+           each claim's quote must occur (whitespace-normalized, case-
+           sensitive) in the chunk it NAMES, among the chunks the model
+           was SHOWN; raw span offsets captured
+     11. displayableClaims               the strip policy: verified only
+     12. ONE transaction                 realtime/src/answer/pipeline.ts
+           assistant message (content = shown claims joined, or the
+           nothing-verified fallback) + ALL citation verdicts (stripped
+           ones included — the strip-rate data) + recency bump
+     13. emit {claim}×N (with url + heading for the widget's citations)
+           or {refusal} — then {done, claimsTotal, claimsShown}
+```
+
+### §5.2 What each failure looks like
+
+```
+gate refuses            assistant row: refused=true,  model=NULL,  0 citations
+nothing verifies        assistant row: refused=false, model set,   citations all
+                        stripped (strip rate 100%) — content is the fallback
+schema failure ×2       NO assistant row; AnswerSchemaError to the caller;
+                        visitor message + conversation remain
+abort (visitor gone)    provider throws mid-stream; nothing persisted past
+                        the visitor message
+```
+
+## §6 The test and CI flows (how the above gets verified)
 
 ```
 local, no DB     npm test (root, realtime)

@@ -6,6 +6,7 @@
     "dev": "tsx watch src/server.ts",
     "enqueue": "tsx scripts/enqueueSource.ts",
     "search": "tsx scripts/searchDev.ts",
+    "ask": "tsx scripts/askDev.ts",
     "eval": "tsx scripts/runEval.ts",
     "build": "esbuild src/server.ts --bundle --platform=node --target=node22 --format=cjs --packages=external --alias:@shared=../shared --alias:@providers=../providers --sourcemap --outfile=dist/server.js",
     "start": "node dist/server.js",

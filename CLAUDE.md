@@ -12,18 +12,30 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M1 — COMPLETE.** M0 and all of M1 are done: M1.1
-(content-pipeline schema), M1.2 (chunker, vectors, embedding providers),
-M1.3 (crawler, parsers, ingest worker — §3.10), M1.4 (hybrid retrieval —
-§2.4.3, §3.12), and M1.5 (the evaluation harness — §7, §3.14). Content
-flows in end to end (source → crawl → parse → chunk → embed → store), back
-out (query → dense + lexical arms → RRF fusion → ranked chunks), and the
-quality of that retrieval is MEASURED: an 80-question hand-written golden
-set scored for recall@k/MRR/nDCG, enforced as a CI gate (hybrid recall@5
-floor), with baselines and failure analysis published in eval/RESULTS.md.
-Next: M2 (LLM providers, grounded streaming answers, span-verified
-citations, the widget). Packages that appear in the plan but not here
-(web/, widget/, loadtest/) do not exist yet — they arrive across M2–M4.
+**Current milestone: M2 — IN PROGRESS.** M0 and M1 are complete: the full
+content pipeline in (source → crawl → parse → chunk → embed → store), back
+out (query → dense + lexical arms → RRF fusion → ranked chunks), and
+retrieval quality MEASURED — an 80-question hand-written golden set scored
+for recall@k/MRR/nDCG, enforced as a CI gate, with baselines and failure
+analysis published in eval/RESULTS.md. M2 (grounded streaming answers and
+the widget) is underway: M2.1 is done — the LLMProvider streaming
+interface with a scripted deterministic mock (§2.4.5d–e), the structured
+claim-and-span answer contract with its dependency-free validator
+(§2.4.4a), and the deterministic span verifier that decides what a visitor
+is allowed to see (§2.4.4b). M2.2 is done — chat persistence (migration
+003, §3.3.2): conversations, messages, and per-claim citation verdicts,
+with transcripts decoupled from mutable pipeline rows by snapshotting.
+M2.3 is done — the grounded answer pipeline (§3.15, DATAFLOW §5):
+retrieve → gate (min dense distance, NOT the fused score — see §3.15.1) →
+delimited prompt → stream → parse with one retry → verify → strip →
+persist → claim-granular events, drivable keylessly via `npm run ask`
+(§3.16). The SSE route deliberately lands WITH widget session auth (M2.5)
+so an unauthenticated LLM-spending route never reaches the auto-deploying
+dev branch. Still to come in M2: real providers (Groq, Gemini,
+OpenAI-compatible, Ollama), widget session auth + the SSE route, the
+widget itself, and the eval-derived refusal threshold. Packages that appear in
+the plan but not here (web/, widget/, loadtest/) do not exist yet — they
+arrive across M2–M4.
 
 ---
 
@@ -142,6 +154,74 @@ return each chunk at most once by construction, so a duplicate is an
 upstream bug worth a loud failure). The fused score is EXPOSED, not just
 the order: it is the number M2's refusal threshold cuts on.
 
+#### §2.4.4 `shared/grounding/` — the claims contract and the verifier
+
+The project's thesis as code: the model answers with structured CLAIMS,
+each naming the retrieved chunk it came from and quoting the verbatim span
+it relies on; deterministic code verifies the quote actually occurs there
+and strips what doesn't check out BEFORE the visitor sees it. Lives in
+shared/ because both sides of the wire touch it: realtime verifies and
+strips, the widget renders the surviving claims and their citations.
+
+##### §2.4.4a `shared/grounding/claims.ts`
+The answer contract: `Claim` (`text` + `chunkId` + `quote`), flat and
+one-citation-per-claim on purpose — a claim needing two sources is two
+claims, because multi-citation claims make the strip decision ambiguous
+(strip on ANY failure? on ALL?) and one quote per claim keeps "unverified →
+stripped" a single deterministic rule. There is deliberately NO uncited
+claim shape: prose the model cannot ground is prose the visitor never sees.
+`MAX_CLAIMS` (32) bounds what a looping model can make the verifier pay
+for. Three exports beyond the types:
+- `ANSWER_JSON_SCHEMA` — the same contract as a JSON Schema, handed to
+  providers with native structured output (`LLMRequest.responseSchema`).
+  The validator stays the source of truth (native enforcement ranges from
+  real to advisory); a test pins schema and validator together at the two
+  facts that would drift first (required fields, claims cap).
+- `parseAnswerPayload` — hand-rolled structural validation (shared/ is
+  dependency-free; the contract is smaller than a schema library). Collects
+  EVERY error with path-prefixed messages ("claims[2].quote: …") because
+  the pipeline gets exactly one retry and the retry prompt pastes the full
+  list.
+- `parseAnswerText` — raw model text → payload. Tries the text as-is, then
+  the inside of a ``` fence, then first-{-to-last-} (models wrap JSON in
+  fences and preambles no matter how firmly told not to; the brace slice
+  also rescues a stream cut off before its closing fence). Escalation
+  cannot false-positive: every candidate must survive JSON.parse AND the
+  structural check — fallbacks rescue formatting noise, never shape errors.
+
+##### §2.4.4b `shared/grounding/verify.ts`
+The deterministic citation check. `findQuote` locates a quote in a chunk
+tolerating ONLY whitespace differences (same stance as eval/resolve.ts's
+anchor matching, same reason: stored text hard-wraps at the source's whim)
+— case stays significant because a quote is a quotation. Implemented as an
+escaped-literal regex with whitespace runs generalized to `\s+`, because a
+squash-both-sides indexOf would confirm presence but lose RAW offsets, and
+the offsets are the point: message_citations (M2.2) stores them so the
+dashboard highlights the exact span and `chunk.charStart + start`
+deep-links into the source document. `verifyClaims` checks each claim
+against the chunks the model was ACTUALLY shown (a citation to unretrieved
+content is unauditable even if the text exists somewhere in the corpus)
+and splits failure into `unknown_chunk` (fabricated id) vs
+`quote_not_found` (real chunk, misquoted) — the metrics story needs them
+separately. `displayableClaims` is the strip policy as ONE named function:
+only verified claims reach the visitor; centralizing it means the
+product's core promise has exactly one implementation to cite and test.
+The test suite pins the cross-chunk cheat (right quote, wrong attribution
+→ stripped), offset boundaries (start of chunk, end of chunk, whole-chunk
+quote), regex metacharacters as literals, and first-occurrence
+determinism.
+
+##### §2.4.4c `shared/grounding/events.ts`
+The answer-stream wire protocol (`AnswerEvent`): meta → claim×N | refusal
+→ done. Claim-granular BY DESIGN: a claim is the smallest unit that can be
+verified, so it is the smallest unit that may reach a visitor — raw model
+deltas can never be forwarded because stripping happens before display.
+Today the pipeline emits after collecting the full response; an
+incremental claim parser can later emit each claim the moment it verifies
+WITHOUT changing this protocol — that future-proofing is the reason the
+protocol is claim-granular rather than delta-granular. The M2.5 SSE route
+serializes these verbatim; the widget consumes them.
+
 ### §2.4.5 `providers/`
 The model-provider abstraction — the BYO-provider feature's foundation.
 Same no-package-json pattern as shared/ (consumers compile it through the
@@ -175,6 +255,43 @@ use. **Never runs on Render**: onnxruntime wants ~250–400 MB of RAM in a
 Verified by a gated test (`FASTEMBED_TEST=1 npm test`) that asserts the one
 semantic property everything depends on: related texts closer than
 unrelated ones.
+
+#### §2.4.5d `llm/types.ts`
+`LLMProvider`, the generation-side sibling of §2.4.5a: `model` (the key of
+the provider-comparison table) and `stream(request)` yielding deltas then
+EXACTLY ONE terminal `done` event. Streaming-first because TTFT is the
+widget's headline metric — a Promise interface would make streaming a
+per-provider afterthought, while collecting deltas is trivial.
+`LLMRequest` carries messages, maxTokens (the cheap defense against a
+runaway generation spending a tenant's quota), temperature (pipeline
+passes 0 — reproducible runs make schema-violation rates measurable),
+`responseSchema` (mapped to each provider's native structured-output
+support, which ranges from real enforcement to "please emit JSON" — so
+callers MUST still validate via §2.4.4a), and an AbortSignal (a visitor
+closing the widget must stop spending the tenant's tokens). `done` carries
+finishReason — a `length` cutoff mid-JSON is why the parser sees truncated
+output, counted separately from JSON indiscipline — and usage, null where
+providers don't report it on streams (cost metrics treat null as unknown,
+never zero). Implementations throw on transport failure; retry/backoff
+belongs to the caller, same division of labor as embed().
+
+#### §2.4.5e `llm/mock.ts`
+Scripted deterministic LLM for tests and CI, with one deliberate
+difference from the embedding mock: embeddings can be DERIVED from input
+(hash → vector), but a mock completion faking the answer pipeline must be
+exact JSON grounded in exact chunks, so tests SCRIPT each response.
+Responses are consumed in call order; a call past the script's end throws
+(an extra call is usually an unexpected retry — worth a loud failure).
+`calls` records every request verbatim so pipeline tests can assert what
+was SENT — is the context delimited, is the schema attached. Default
+deltaSize is 7, deliberately odd so word/JSON-token boundaries almost
+never align with delta boundaries and a consumer that parses per-delta
+instead of per-buffer breaks loudly. The abort signal is checked before
+EVERY yield, or cancellation tests would pass vacuously after delta one.
+Besides the scripted list there is a RESPONDER mode (a pure
+request→response function) for callers that cannot know retrieval results
+before the call — the askDev CLI (§3.16) uses it to derive grounded
+claims from the prompt it receives, keeping the full loop keyless.
 
 ### §2.5 `render.yaml`
 The Render deployment as code (a "Blueprint"): one free-tier Docker web
@@ -285,6 +402,33 @@ Rejected alternative for the queue: Redis/BullMQ — a second stateful service
 to run and secure, when the queue's real throughput ceiling is embedding-API
 rate limits, not Postgres.
 
+### §3.3.2 `src/db/migrations/003_chat.ts`
+Chat persistence: what the answer pipeline (M2.3) writes and the M3
+dashboard reads.
+
+| Table | Purpose | Notable decision |
+|---|---|---|
+| `conversations` | one widget chat thread | `status` carries `'escalated'` from day one (M4 adds the mechanism; the M2 widget must already render the state, and enum growth is a migration); `(org_id, last_message_at DESC)` index IS the dashboard's conversation list |
+| `messages` | one turn | `org_id` denormalized (M5's pre-flight usage cap counts answers per org per day — the hot path can't afford a join); three role CHECKs pin model/refused/score/latency to the assistant role, making mismatches unrepresentable (the api_keys pattern); `ttft_ms`/`total_ms` instrumented from day one |
+| `message_citations` | one verdict per claim | see below — the snapshot decision |
+
+The load-bearing decision: **`message_citations` snapshots what it cites
+instead of referencing it.** `chunk_id` has deliberately NO foreign key,
+and url/heading_path/quote are copies taken at answer time. Chunks are
+MUTABLE pipeline state — every re-chunk deletes and recreates them — while
+a support transcript is IMMUTABLE history; an FK would force either
+cascade-deleting citations (history rots on every recrawl) or blocking
+re-chunks (ingest hostage to chat history). A test pins the FK's absence:
+a citation naming a chunk that never existed must INSERT cleanly.
+
+EVERY claim is stored, verified and stripped alike — the strip rate is a
+published metric and the dashboard shows what the visitor did NOT see.
+`(verdict = 'verified') = (span_start IS NOT NULL)` plus a span-pairing
+CHECK tie offsets to verified rows exactly; `content` on messages is what
+the visitor actually SAW (verified claims after stripping, or the refusal
+fallback), never raw model output. Composite `(message_id, ord)` key, like
+chunk_embeddings — nothing references a citation row individually.
+
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
 `MIGRATIONS` record, not discovered from disk. Kysely's stock
@@ -355,6 +499,15 @@ force-exits.
   reject invalid rows **at their boundaries** (second owner rejected while
   second agent accepted; mismatched api_key kind; origin with a trailing
   slash).
+- `db/__tests__/chat.test.ts` — migration 003 integration suite, same
+  gating. Role-consistency CHECKs probed from both sides (visitor with a
+  model rejected, full assistant row accepted); the span/verdict equality
+  CHECK at all three boundaries (verified without span, unverified with
+  span, half a span); inverted/empty/minimum spans; duplicate `(message_id,
+  ord)`; the conversation→message→citation cascade; and the deliberate
+  ABSENCE of a chunk FK (a citation naming a never-existing chunk inserts
+  cleanly — that test failing means someone re-coupled transcripts to
+  pipeline state).
 - `db/__tests__/contentPipeline.test.ts` — migration 002 integration suite,
   same gating. The first end-to-end vector proof lives here: hand-picked
   3-d vectors, zero-padded to 1024, must come back in exact cosine order
@@ -404,6 +557,22 @@ force-exits.
   stop-word-only queries return empty; equal-score ties order by chunk id
   reproducibly; hybrid fusion reports per-arm ranks with exact RRF scores;
   k beyond corpus size returns the whole corpus.
+- `answer/__tests__/gate.test.ts` + `prompt.test.ts` — keyless. The gate
+  at its boundaries (exactly-at-threshold answers, just-past refuses; min
+  over mixed dense/lexical hits; lexical-only fails closed) and the prompt
+  invariants (system prompt free of retrieved content; persona in system,
+  never the user turn; question last; retry replays the exchange with
+  every error).
+- `answer/__tests__/pipeline.test.ts` — DB-gated. The full answer path
+  against real Postgres with scripted mock LLMs: the grounded happy path
+  (persistence, verified citation spans sliced back out of the chunk,
+  event order, TTFT recorded); stripping (both verdicts stored, only the
+  verified claim shown); the all-stripped fallback (refused=false, strip
+  rate 100% on record); gate refusal BEFORE any model call (empty mock
+  script proves zero calls); the one-retry path (errors fed back verbatim,
+  second response accepted); double failure (AnswerSchemaError, visitor
+  message survives, NO assistant row); conversation continuation and the
+  cross-tenant append rejection; blank-question rejection.
 - `ingest/__tests__/worker.test.ts` — DB-gated. The first suite where the
   ENTIRE pipeline runs against real Postgres and a real (loopback) site,
   through three crawls of a two-version fixture: initial ingest (documents,
@@ -636,6 +805,71 @@ The embedder is ALWAYS the local model. EMBEDDING_PROVIDER=mock is refused
 by name with an explanation — the promise made in §2.4.5b: quality
 measured over semantics-free vectors is noise, and refusing beats
 producing an impressive-looking nonsense table.
+
+### §3.15 `src/answer/` — the grounded answer pipeline (M2.3)
+
+Question → verified claims, traced in DATAFLOW.md §5. The SSE route is
+deliberately NOT here yet: it lands with widget session auth (M2.5), so an
+unauthenticated LLM-spending route never reaches the auto-deploying dev
+branch. Callers today: the pipeline integration tests and `npm run ask`.
+
+#### §3.15.1 `src/answer/gate.ts`
+The groundedness gate — answer-or-refuse decided BEFORE any model call, so
+a refusal costs zero tokens. Carries a correction to the M1 docs worth
+reading in full in the file header: the plan said the threshold cuts on
+the fused RRF score, but RRF is rank-based and therefore RELEVANCE-BLIND —
+every non-empty retrieval has a rank 1 scoring ~1/61, answerable or not,
+so cutting on it would refuse almost nothing. The gate instead cuts on the
+MINIMUM dense cosine distance across the retrieved set (min, not the top
+fused hit's: fusion may rank a lexical-only hit first, and the question is
+whether ANY close dense evidence exists in what the model will see). All
+lexical-only retrievals fail closed — "unknown similarity" must refuse.
+The 0.75 default is provisional and env-overridable; M2.7 replaces it with
+the eval-derived operating point and publishes the correct-refusal vs
+false-refusal curve. The signal is persisted per-answer in
+messages.retrieval_score so production accumulates tuning data.
+
+#### §3.15.2 `src/answer/prompt.ts`
+Prompt assembly with the injection boundary as its organizing principle:
+the system prompt is a CONSTANT (plus the org's persona — org-controlled
+config, not visitor input) containing instructions and the JSON contract;
+retrieved text rides in the USER turn inside <context> delimiters,
+declared as data-not-instructions, because crawled pages are untrusted
+input and "retrieved content never concatenates into the system prompt"
+is a plan-level security rule. The static prefix is also what makes
+provider-side prompt caching work later. buildRetryMessages replays the
+failed exchange plus EVERY validator error — one retry, never more: a
+model failing the contract twice is failing systematically, and looping
+would burn tenant quota to hide a bug the schema-violation metric exists
+to surface. The final-answer-only instruction exists because reasoning
+models leak deliberation and TTFT is a headline metric.
+
+#### §3.15.3 `src/answer/pipeline.ts`
+The orchestration: conversation resolve (a supplied conversation id is
+validated against the ORG before anything is written — cross-tenant
+append is a thrown error, and the test proves it) → visitor message
+persisted FIRST (a model failure never erases the question; the recency
+bump rides along so failed-answer threads still surface in the dashboard)
+→ embed → hybridSearch → gate → prompt → stream (TTFT measured in the
+pipeline at first delta so every provider measures identically) → parse
+with one retry → verify → strip → ONE transaction (assistant message +
+ALL citation verdicts including stripped ones + recency bump — atomic so
+an answer can never persist without its audit trail) → events. Failure
+shapes are enumerated in DATAFLOW §5.2; the notable ones: gate refusal
+persists refused=true with model=NULL and zero citations, total
+verification failure persists refused=false with the fallback text and a
+100% strip rate on record, and a double schema failure throws
+AnswerSchemaError leaving no assistant row at all.
+
+### §3.16 `realtime/scripts/askDev.ts`
+Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
+con_…] [--tamper]`): the full M2 loop drivable by hand, keylessly. Same
+glue-only rule as the sibling CLIs. Its LLM is the mock in responder mode
+(§2.4.5e): it parses the [chunk …] blocks out of the prompt it actually
+receives and quotes the top chunks verbatim — grounded by construction,
+so verification passes and persistence/citations/events are all
+observable. `--tamper` corrupts one quote so the strip path is observable
+too: the tampered claim is stored quote_not_found and never displayed.
 
 ---
 

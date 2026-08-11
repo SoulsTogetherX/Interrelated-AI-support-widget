@@ -184,6 +184,76 @@ interface IngestJobsTable {
   created_at: ColumnType<Date, string | Date | undefined, never>
 }
 
+/** One widget chat thread. visitor_id is the widget-generated anonymous id
+ *  (no FK — visitors are not users). status carries 'escalated' from day
+ *  one even though handoff is M4: the M2 widget must already render the
+ *  state, and adding an enum value later is a migration. */
+interface ConversationsTable {
+  id: string
+  org_id: string
+  visitor_id: string
+  status: Generated<"open" | "escalated" | "closed">
+  created_at: ColumnType<Date, string | Date | undefined, never>
+  /** Updated by the pipeline on every message — the dashboard's
+   *  conversation list orders by exactly this column. */
+  last_message_at: ColumnType<Date, string | Date | undefined, string | Date>
+}
+
+/** One message in a conversation. content is what the visitor actually SAW
+ *  — for assistant messages, the verified-claims text after stripping (or
+ *  the refusal fallback), never raw model output; the claim-level story
+ *  lives in message_citations. org_id is denormalized (like
+ *  chunk_embeddings) so the M5 pre-flight usage count needs no join.
+ *  CHECKs in migration 003 pin model/refused/score/latency to the
+ *  assistant role — mismatches are unrepresentable, not just untyped. */
+interface MessagesTable {
+  id: string
+  conversation_id: string
+  org_id: string
+  role: "visitor" | "assistant" | "agent"
+  content: string
+  /** LLM that generated an assistant message — the provider-comparison
+   *  table's key. NULL for visitor/agent rows (enforced by CHECK). */
+  model: string | null
+  /** True when the groundedness gate refused to answer (fused retrieval
+   *  score below threshold). Deflection and correct-refusal metrics. */
+  refused: Generated<boolean>
+  /** The groundedness-gate signal for this answer — min dense cosine
+   *  distance across the retrieved set (see answer/gate.ts for why NOT the
+   *  fused RRF score: RRF is rank-based and relevance-blind). Kept
+   *  per-answer so threshold tuning has production data, not just the eval
+   *  set. */
+  retrieval_score: number | null
+  /** Time-to-first-token and total latency, ms — the headline metrics,
+   *  instrumented from day one because retrofitting is how projects end
+   *  up with none. */
+  ttft_ms: number | null
+  total_ms: number | null
+  created_at: ColumnType<Date, string | Date | undefined, never>
+}
+
+/** One claim's citation verdict. EVERY claim is stored, verified and
+ *  stripped alike — the strip rate is a published metric. chunk_id has
+ *  deliberately NO FK: chunks are mutable pipeline state (re-chunks delete
+ *  them) while transcripts are immutable history, so url/heading_path/
+ *  quote are snapshots taken at answer time. Composite key like
+ *  chunk_embeddings — nothing references a citation row individually. */
+interface MessageCitationsTable {
+  message_id: string
+  /** Claim order within the message, 0-based. */
+  ord: number
+  chunk_id: string
+  claim_text: string
+  quote: string
+  verdict: "verified" | "unknown_chunk" | "quote_not_found"
+  /** Offsets into the cited chunk's text AS IT WAS at answer time; present
+   *  exactly when verdict = 'verified' (CHECK-enforced equality). */
+  span_start: number | null
+  span_end: number | null
+  url: string | null
+  heading_path: string | null
+}
+
 /** The Kysely database contract. Every query in the codebase is typed
  *  against this interface — a column typo is a compile error. */
 interface Database {
@@ -198,6 +268,9 @@ interface Database {
   chunks: ChunksTable
   chunk_embeddings: ChunkEmbeddingsTable
   ingest_jobs: IngestJobsTable
+  conversations: ConversationsTable
+  messages: MessagesTable
+  message_citations: MessageCitationsTable
 }
 //#endregion
 
@@ -215,5 +288,8 @@ export type {
   ChunksTable,
   ChunkEmbeddingsTable,
   IngestJobsTable,
+  ConversationsTable,
+  MessagesTable,
+  MessageCitationsTable,
 }
 //#endregion
