@@ -122,13 +122,16 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   if (question.trim().length === 0) throw new Error("question must not be blank")
 
   // ── Conversation ─────────────────────────────────────────────────────────
-  // Validated against the org BEFORE anything is written: a conversation id
-  // is client-supplied input, and accepting a foreign org's id here would be
-  // a cross-tenant write.
+  // Validated against the org AND the visitor BEFORE anything is written: a
+  // conversation id is client-supplied input. The org check stops a
+  // cross-tenant write; the visitor check stops one visitor of the same org
+  // continuing (and thereby reading context into) another visitor's thread
+  // — the session token binds the visitor id precisely so this holds.
   let conversationId = options.conversationId
   if (conversationId !== undefined) {
     const existing = await db.selectFrom("conversations")
       .select(["id"]).where("id", "=", conversationId).where("org_id", "=", orgId)
+      .where("visitor_id", "=", options.visitorId)
       .executeTakeFirst()
     if (!existing) throw new Error("conversation not found for this organization")
   } else {

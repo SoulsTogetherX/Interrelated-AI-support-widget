@@ -40,6 +40,10 @@ services:
       # the poll loop costs nothing — and CI's e2e job should boot the same
       # code paths production will eventually run.
       INGEST_WORKER: "1"
+      # Widget surface: the mock LLM answers from retrieved context, so the
+      # e2e job exercises the REAL chat route keylessly. Ephemeral token
+      # secret — nothing in this stack outlives the stack.
+      LLM_PROVIDER: mock
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     depends_on:

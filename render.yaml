@@ -61,3 +61,15 @@ services:
       # together with an in-process wake on enqueue (poll as fallback only).
       - key: INGEST_WORKER
         value: "0"
+      # ── Widget surface (M2.5) ──
+      # Session-token HMAC secret — set in the Render dashboard (any 32+
+      # char random string) so widget sessions survive deploys; unset would
+      # mean ephemeral and every deploy would silently log visitors out.
+      - key: WIDGET_TOKEN_SECRET
+        sync: false
+      # mock until per-org BYO credentials land in M3: production serves
+      # context-quoting mock answers, which is honest for a stack that has
+      # no tenant keys yet. The M2.7 demo flips this to a real provider
+      # with Xavier's own free-tier keys.
+      - key: LLM_PROVIDER
+        value: "mock"

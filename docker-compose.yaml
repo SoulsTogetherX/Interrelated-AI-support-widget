@@ -51,6 +51,17 @@ services:
       # is free, so both compose stacks run it.
       INGEST_WORKER: "1"
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
+      # Widget surface (M2.5). mock serves grounded answers derived from the
+      # retrieved context — the full loop with zero keys. Point LLM_PROVIDER
+      # at groq/gemini/ollama (keys in .env) to chat against a real model.
+      # An empty WIDGET_TOKEN_SECRET means ephemeral (fine in dev — the
+      # widget re-mints after a restart).
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      WIDGET_TOKEN_SECRET: ${WIDGET_TOKEN_SECRET:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     volumes:

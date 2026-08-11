@@ -57,6 +57,31 @@ await check("GET /api/definitely-not-a-route returns 404", async () => {
   if (res.status !== 404) throw new Error(`status ${res.status}`)
 })
 
+// ── Widget surface is mounted AND closed (M2.5) ─────────────────────────────
+// No seeded org exists in a fresh stack, so what a probe can verify is the
+// security posture: the session route answers (mounted) and refuses a
+// request with no Origin (closed). A 404 here means the widget routes fell
+// off the app; a 200 would mean the origin gate fell off the route.
+await check("POST /v1/widget/session without Origin returns 403", async () => {
+  const res = await fetch(`${base}/v1/widget/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ publishableKey: "pk_smoke_probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 403) throw new Error(`status ${res.status}`)
+})
+
+await check("POST /v1/widget/chat without a session returns 401", async () => {
+  const res = await fetch(`${base}/v1/widget/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://smoke.example" },
+    body: JSON.stringify({ question: "probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 401) throw new Error(`status ${res.status}`)
+})
+
 if (failures > 0) {
   console.error(`\n${failures} smoke check(s) failed`)
   process.exit(1)

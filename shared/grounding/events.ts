@@ -22,6 +22,12 @@ type AnswerEvent =
    *  verification). The widget renders the fallback text and, later (M4),
    *  offers escalation. */
   | { type: "refusal"; text: string }
+  /** A transient failure AFTER the stream opened (model failed the JSON
+   *  contract twice, provider outage mid-answer). Distinct from refusal —
+   *  a refusal is an answer, an error is the absence of one; the widget
+   *  offers "try again" here and never does for refusals. Carries no
+   *  detail: failure specifics on a public stream are reconnaissance. */
+  | { type: "error" }
   /** Terminal event: verification stats for observability. claimsTotal
    *  counts what the model EMITTED; claimsShown what survived. */
   | { type: "done"; claimsTotal: number; claimsShown: number }

@@ -5,6 +5,8 @@ import { createApp } from "@/app"
 import pool, { db } from "@/db/pool"
 import { migrateToLatest } from "@/db/migrate"
 import { IngestWorker } from "@/ingest/worker"
+import { buildLLMProvider } from "@/answer/buildLLM"
+import { resolveTokenSecret } from "@/widget/sessionToken"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import type { EmbeddingProvider } from "@providers/embedding/types"
 //#endregion
@@ -52,7 +54,26 @@ async function start(): Promise<void> {
   const names = applied.results?.map((r) => r.migrationName).join(", ") || "none"
   console.log(`[boot] migrations applied: ${names}`)
 
-  const app = createApp()
+  // The widget surface. One embedder serves both the worker and retrieval —
+  // they MUST agree on the model or queries search an empty vector space.
+  // LLM_PROVIDER defaults to the context-quoting mock so every stack (dev
+  // compose, prod compose, CI e2e) serves real grounded answers keylessly;
+  // env-configured real providers are a dev convenience that M3 replaces
+  // with per-org encrypted credentials.
+  const embedder = await buildEmbedder()
+  const llm = buildLLMProvider(process.env.LLM_PROVIDER ?? "mock")
+  const maxDistance = Number(process.env.ANSWER_MAX_DISTANCE)
+  const dailyCap = Number(process.env.WIDGET_DAILY_ANSWER_CAP)
+  console.log(`[boot] widget: llm=${llm.model} embeddings=${embedder.model}`)
+
+  const app = createApp({
+    widget: {
+      db, embedder, llm,
+      tokenSecret: resolveTokenSecret(),
+      ...(Number.isFinite(maxDistance) ? { maxDistance } : {}),
+      ...(Number.isFinite(dailyCap) ? { dailyAnswerCap: dailyCap } : {}),
+    },
+  })
   const server = createServer(app)
 
   server.listen(port, () => {
@@ -69,7 +90,10 @@ async function start(): Promise<void> {
   let worker: IngestWorker | null = null
   if (process.env.INGEST_WORKER === "1") {
     const pollMs = Number(process.env.INGEST_POLL_MS) || undefined
-    worker = new IngestWorker({ db, embedder: await buildEmbedder(), ...(pollMs ? { pollMs } : {}) })
+    // Same embedder instance as the widget surface — the agreement that
+    // ingest-time and query-time vectors share a model is enforced by
+    // construction here, not by two env reads happening to match.
+    worker = new IngestWorker({ db, embedder, ...(pollMs ? { pollMs } : {}) })
     worker.start()
     console.log(`[boot] ingest worker polling${pollMs ? ` every ${pollMs}ms` : ""}`)
   }

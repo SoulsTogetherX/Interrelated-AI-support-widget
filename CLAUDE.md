@@ -36,8 +36,14 @@ OpenAI-compatible adapter with Groq as a named preset, native Gemini
 (server-side schema enforcement via responseJsonSchema), and native
 Ollama (full-schema `format`), all tested keylessly against in-test
 loopback protocol servers and reachable from `npm run ask --llm …`.
-Still to come in M2: widget session auth + the SSE route, the widget
-itself, and the eval-derived refusal threshold. Packages that appear in
+M2.5 is done — the widget's public surface (§3.17–3.18, DATAFLOW §5.3):
+HMAC session tokens bound to org + origin + visitor, the server-enforced
+origin allowlist with allowlist-scoped CORS, per-IP and per-visitor token
+buckets, the per-org daily answer ceiling checked before any model call,
+and the SSE chat route that serializes the answer pipeline's events —
+mounted in every stack and driven keylessly by the context-quoting mock.
+Still to come in M2: the widget itself (M2.6) and the eval-derived
+refusal threshold + demo (M2.7). Packages that appear in
 the plan but not here (web/, widget/, loadtest/) do not exist yet — they
 arrive across M2–M4.
 
@@ -364,7 +370,12 @@ dashboard; secrets never enter the repo. Exactly ONE service by design: the
 free tier's ~750 instance-hours/month keep one service always warm, not two
 (the M3 dashboard goes to Vercel instead). `INGEST_WORKER` is pinned to "0"
 here: the worker's poll loop would hold Neon's compute awake (§3.7), and
-production has no way to enqueue a job until M3 anyway.
+production has no way to enqueue a job until M3 anyway. Since M2.5 it
+also declares `WIDGET_TOKEN_SECRET` (sync: false — set in the Render
+dashboard so widget sessions survive deploys; unset would silently log
+visitors out on every deploy) and pins `LLM_PROVIDER=mock` until per-org
+BYO credentials exist (M3) — honest for a stack that has no tenant keys
+yet; the M2.7 demo flips it to a real provider.
 
 ### §2.6 `.env.example`
 The single documented registry of every environment variable the system
@@ -515,9 +526,12 @@ Two probes with deliberately different contracts:
 ### §3.6 `src/app.ts`
 Builds the Express app without binding a port, so tests can drive it on an
 ephemeral port while server.ts owns boot. `trust proxy: 1` (Render sits one
-proxy hop away; needed for honest `req.ip` when rate limits arrive in M2);
+proxy hop away; what makes `req.ip` honest for the widget rate limits);
 JSON bodies capped at 64 KB (no route needs more; a big limit is a free
-memory-pressure lever).
+memory-pressure lever). The widget surface (§3.18) mounts only when its
+dependencies are passed in — server.ts always passes them; tests that only
+probe health build the bare app and never construct providers they won't
+use.
 
 ### §3.7 `src/server.ts`
 Boot order is a contract: **migrate, then listen** — a process that can't
@@ -542,6 +556,14 @@ mechanism. `EMBEDDING_PROVIDER` picks mock (default) or local — mock is an
 honest placeholder until per-org BYO providers (M3): its vectors carry no
 semantics, which costs nothing while no retrieval exists, and it is what
 lets CI drive the full pipeline keylessly.
+
+Since M2.5 boot also assembles the widget surface's dependencies: ONE
+embedder instance shared by the worker and retrieval (the
+ingest-and-query-must-agree-on-a-model rule enforced by construction, not
+by two env reads happening to match), the LLM from `LLM_PROVIDER`
+(default mock — §3.15.4), the token secret from `resolveTokenSecret`
+(§3.17.1), and the optional ANSWER_MAX_DISTANCE / WIDGET_DAILY_ANSWER_CAP
+overrides, all handed to createApp.
 
 Shutdown: SIGTERM → stop accepting, stop the worker (it requeues an
 in-flight job between pages — §3.10.5) → drain pool → exit; a second signal
@@ -618,6 +640,23 @@ force-exits.
   stop-word-only queries return empty; equal-score ties order by chunk id
   reproducibly; hybrid fusion reports per-arm ranks with exact RRF scores;
   k beyond corpus size returns the whole corpus.
+- `widget/__tests__/sessionToken.test.ts` + `rateLimit.test.ts` —
+  keyless. Tokens: round-trip, the expiry boundary (valid at exp−1,
+  rejected AT exp), tampered payload and signature, wrong secret,
+  malformed garbage, and validly-signed-wrong-shape. Buckets: exactly
+  capacity takes then denial, refill at the boundary, long-absence caps
+  at capacity, key independence, hammering recovers on schedule, sweep.
+- `routes/__tests__/widget.test.ts` — DB-gated, drives a REAL http
+  listener. Session: allowlisted mint with CORS echo, unlisted origin
+  rejected WITHOUT CORS, missing Origin, unknown/revoked keys collapse
+  to one uniform 401, preflight, per-IP mint flood. Chat: the grounded
+  SSE stream end to end (meta/claim/done with citations, persistence
+  under the token's visitor), uniform 401 for missing/tampered/expired/
+  wrong-secret tokens, token replay from a different origin, question
+  length edges, own-conversation continuation vs the cross-visitor
+  hijack probe (opaque error event, nothing to learn), malformed
+  conversation ids, the daily cap 429 BEFORE the model call, and a
+  rate-limit 429 that still carries CORS.
 - `answer/__tests__/gate.test.ts` + `prompt.test.ts` — keyless. The gate
   at its boundaries (exactly-at-threshold answers, just-past refuses; min
   over mixed dense/lexical hits; lexical-only fails closed) and the prompt
@@ -634,7 +673,13 @@ force-exits.
   second response accepted); double failure (AnswerSchemaError, visitor
   message survives, NO assistant row); conversation continuation and the
   cross-tenant append rejection; blank-question rejection.
-- `ingest/__tests__/worker.test.ts` — DB-gated. The first suite where the
+- `ingest/__tests__/worker.test.ts` — DB-gated. **Run-book note: bring up
+  ONLY the compose database (`docker compose up -d database`) for test
+  runs.** A running realtime container polls this same Postgres with its
+  ingest worker and can adopt a job the suite just requeued — the
+  stop()-requeue test then fails on the park update's CHECK. DATAFLOW §6
+  prescribes database-only for exactly this reason; it bit for real once.
+  The first suite where the
   ENTIRE pipeline runs against real Postgres and a real (loopback) site,
   through three crawls of a two-version fixture: initial ingest (documents,
   chunks with heading paths, embeddings, statuses), identical recrawl
@@ -922,6 +967,16 @@ verification failure persists refused=false with the fallback text and a
 100% strip rate on record, and a double schema failure throws
 AnswerSchemaError leaving no assistant row at all.
 
+#### §3.15.4 `src/answer/mockResponder.ts` + `src/answer/buildLLM.ts`
+The context-quoting mock responder lives in answer/ (not providers/)
+because it knows the prompt format — formatChunk is the other half of its
+contract and the two must change together. It is what lets every stack
+and the CI e2e job drive the REAL chat route keylessly. buildLLM maps a
+provider name to a configured instance — ONE selection table shared by
+server boot (LLM_PROVIDER env) and the askDev CLI (--llm flag); a missing
+key throws a one-line usage error. Server-level env selection is a
+stopgap M3 replaces with per-org encrypted credentials.
+
 ### §3.16 `realtime/scripts/askDev.ts`
 Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
 con_…] [--llm mock|groq|gemini|ollama] [--tamper]`): the full M2 loop
@@ -936,6 +991,60 @@ real provider (§2.4.5f–i), configured by the GROQ_/GEMINI_/OLLAMA_ vars
 in .env.example — the first place real model output meets the verifier,
 ahead of the M2.5 route; a missing key is a one-line usage error and a
 provider 429 prints as a human sentence with the retry delay.
+
+### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
+
+#### §3.17.1 `src/widget/sessionToken.ts`
+Trust-model layer 2. The publishable key is spent ONCE at bubble-open;
+chat authenticates with a short-lived (30 min) HMAC token BINDING org +
+origin + visitor. Hand-rolled compact token, deliberately not a JWT
+library: the payload is four fields, the algorithm is fixed, and JWT's
+flexibility — pluggable algorithms, unverified-decode APIs — is precisely
+its historical vulnerability surface. Verification is timingSafeEqual on
+the signature, then expiry, then SHAPE (a validly-signed but structurally
+wrong payload is rejected — pinned by a test that signs malformed
+payloads with the real secret); it returns payload-or-null, never a
+reason, because invalid-vs-expired distinguishable to an attacker is an
+oracle. The secret comes from WIDGET_TOKEN_SECRET, or an ephemeral random
+one when unset/empty — correct in dev (the widget re-mints after
+restart), wrong in prod (render.yaml prompts for it, sync:false); a
+nonempty-but-short secret refuses to boot rather than limp.
+
+#### §3.17.2 `src/widget/rateLimit.ts`
+Trust-model layer 3 — the layer that actually bounds SCRIPTED abuse
+(Origin defeats browsers; curl forges it, and the plan says so).
+Classic token buckets, in-memory BY DESIGN: this deployment is exactly
+one always-on instance, so a shared store would be a second stateful
+service defending against a topology that cannot occur; the DB-backed
+daily ceiling stays exact regardless. Injectable clock (rate math
+verified with sleeps is rate math unverified), refill accrued even on
+denials (a hammering client must still recover on schedule — pinned with
+an IEEE-754-aware boundary test), and an opportunistic sweep of
+fully-refilled buckets past 10k keys instead of a timer (no interval
+handle to leak; a map only grows when traffic touches it).
+
+### §3.18 `src/routes/widget.ts`
+The only routes an untrusted browser ever calls, implementing the trust
+model in layer order. `POST /v1/widget/session`: Origin header required
+(absence means a script — no free sessions), per-IP mint bucket, pk
+lookup (unknown and revoked collapse into ONE 401 — key state is not
+probeable), exact-match allowlist check (failures carry NO CORS headers,
+so an unlisted site's browser cannot even read the error), then the
+token mint — which is also the handshake that warms Neon while the
+visitor types (the free-tier design's DB-warming path). `POST
+/v1/widget/chat`: token verify (uniform 401), live-Origin-vs-token-origin
+re-check (kills replay from another site), rate limits AFTER auth (their
+429s carry CORS so the widget can render "one moment") and BEFORE work,
+then the daily ceiling counted from messages via the (org_id,
+created_at) index — model spend, not conversation length, refusals
+included — then SSE. Headers flush before retrieval so TTFB precedes the
+slow work; a closed tab aborts the pipeline mid-generation via
+AbortController; every failure past the SSE boundary is one opaque
+{type:"error"} event (failure detail on a public stream is
+reconnaissance — including hijack probes of another visitor's
+conversation id, which learn nothing but "error"). CORS is hand-rolled
+(~15 lines for two routes) and preflight grants nothing: enforcement
+rides on the actual request's response headers.
 
 ---
 
@@ -959,6 +1068,13 @@ containers always use `database:5432` internally. Two hard-won details:
 
 Both compose stacks set `INGEST_WORKER: "1"` — polling a LOCAL Postgres is
 free, and the dev loop (`npm run enqueue`, §3.11) depends on a live worker.
+(Corollary, learned the hard way: bring up ONLY the database service when
+running the DB-gated test suite — §3.8's worker-test note.) Both stacks
+also mount the widget surface: dev passes through LLM_PROVIDER and the
+provider keys from .env (mock default), prod pins LLM_PROVIDER=mock so
+the e2e job drives the real chat route keylessly; token secrets are
+ephemeral in both, which is correct for stacks whose sessions should not
+outlive them.
 
 ### §4.3 `docker-compose.prod.yaml`
 Production shape: prod image target, no bind mounts, Postgres **not**
@@ -998,10 +1114,14 @@ repo variable so it no-ops until the service exists.
 ### §6.1 `scripts/smoke-test.mjs`
 Zero-dependency probe (Node 22 stdlib only — runs without `npm install`,
 pointable at any base URL including production). Checks health, readiness,
-and that unknown routes 404. Failures are counted rather than thrown so one
-broken endpoint doesn't mask the state of the rest; every fetch carries a
-timeout because a probe that can hang turns a dead service into a stuck CI
-job.
+that unknown routes 404, and — since M2.5 — the widget surface's POSTURE:
+a fresh stack has no seeded org, so what a probe can verify is that the
+session route is mounted AND closed (no Origin → 403; a 404 would mean
+the routes fell off the app, a 200 that the origin gate fell off the
+route) and that chat without a session is 401. Failures are counted
+rather than thrown so one broken endpoint doesn't mask the state of the
+rest; every fetch carries a timeout because a probe that can hang turns a
+dead service into a stuck CI job.
 
 ---
 

@@ -11,10 +11,11 @@ health probes (§1), the full ingest pipeline (§3): source → crawl → parse
 RRF fusion → ranked chunks, the evaluation harness (§4.4) that scores §4
 against a golden set and gates CI on the result, and — new in M2.3 — the
 grounded answer pipeline (§5): question → retrieval → groundedness gate →
-LLM → claim verification → stripped, cited answer. §5 has no HTTP surface
-yet by design; the SSE widget route arrives with session auth (M2.5) and
-will serialize §5's events verbatim. Coming after: dashboard auth (M3),
-handoff (M4).
+LLM → claim verification → stripped, cited answer. As of M2.5 the
+pipeline HAS its HTTP surface (§5.3): the widget session mint (origin
+allowlist → HMAC token) and the token-authenticated SSE chat route that
+serializes §5's events verbatim. Coming after: the widget bundle (M2.6),
+dashboard auth (M3), handoff (M4).
 
 ---
 
@@ -395,6 +396,44 @@ abort (visitor gone)    provider throws mid-stream; nothing persisted past
                         the visitor message
 ```
 
+### §5.3 The HTTP surface — bubble-open → session → SSE answer (M2.5)
+
+```
+widget (M2.6) or curl-with-headers
+  → POST /v1/widget/session            realtime/src/routes/widget.ts
+      Origin header required           absent → 403 (a script; no free
+                                       sessions — layer 3 bounds scripts)
+      per-IP token bucket              realtime/src/widget/rateLimit.ts
+      api_keys lookup                  kind=public, live; unknown and
+                                       revoked → ONE uniform 401
+      allowed_origins exact match      miss → 403 with NO CORS headers —
+                                       an unlisted site's browser cannot
+                                       even read the error
+      api_keys.last_used_at = NOW()    ← this handshake is also what warms
+                                       Neon while the visitor types
+      → mintSessionToken               realtime/src/widget/sessionToken.ts
+        {org, origin, visitor, exp}    HMAC-signed, 30 min TTL
+      → 200 {token, expiresAt, visitorId} + CORS echo of the origin
+
+  → POST /v1/widget/chat  (Authorization: Bearer <token>)
+      verifySessionToken               tampered/expired/foreign → uniform 401
+      token.origin === live Origin     mismatch → 403 (replay from another
+                                       site dies even before rate limits)
+      per-IP + per-visitor buckets     429 WITH CORS — the widget renders
+                                       a "one moment" state
+      per-org daily ceiling            COUNT assistant messages today via
+                                       the (org_id, created_at) index,
+                                       BEFORE any model call
+      validate question (≤2000 chars) and conversationId shape
+      → SSE headers flush              TTFB paid before retrieval starts
+      → answerQuestion(§5.1)           visitorId = token.visitor — the
+                                       binding that stops one visitor
+                                       continuing another's thread
+          each AnswerEvent             → `data: <json>\n\n`
+      req 'close' → AbortController    a closed tab stops the token spend
+      any failure past the SSE start   → one opaque {type:"error"} event
+```
+
 ## §6 The test and CI flows (how the above gets verified)
 
 ```
@@ -405,7 +444,11 @@ local, no DB     npm test (root, realtime)
                      servers, no Postgres) and retrieval input validation;
                      DB-gated suites self-skip (POSTGRES_PASSWORD unset)
 
-local, with DB   docker compose up -d database
+local, with DB   docker compose up -d database   ← DATABASE ONLY, not the
+                   full stack: a running realtime container polls this
+                   same Postgres with its ingest worker and can adopt a
+                   job the worker suite just requeued (it bit for real —
+                   the stop()-requeue test fails on its park update)
                    → export .env vars → npm test in realtime/
                    → full suite: migrations, pgvector, constraint
                      boundaries, the worker suite driving §3 end to end

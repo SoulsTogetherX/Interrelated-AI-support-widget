@@ -54,67 +54,22 @@ async function main(): Promise<void> {
   const { answerQuestion } = await import("@/answer/pipeline")
   const { MockEmbeddingProvider } = await import("@providers/embedding/mock")
   const { MockLLMProvider } = await import("@providers/llm/mock")
-  const { GroqProvider } = await import("@providers/llm/groq")
-  const { GeminiProvider } = await import("@providers/llm/gemini")
-  const { OllamaProvider } = await import("@providers/llm/ollama")
-  type LLMProvider = import("@providers/llm/types").LLMProvider
+  const { buildLLMProvider } = await import("@/answer/buildLLM")
+  const { groundedMockResponder } = await import("@/answer/mockResponder")
 
   const embedder = process.env.EMBEDDING_PROVIDER === "local"
     ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
     : new MockEmbeddingProvider()
 
-  // The context-quoting responder: finds each "[chunk chk_… | url …]" block
-  // in the user turn and claims the first sentence-ish span of the two best
-  // chunks, verbatim. Deliberately simple — its only job is producing claims
-  // that VERIFY, so the strip path stays observable by corrupting one quote
-  // with --tamper.
+  // Provider selection shares server boot's table (answer/buildLLM.ts) —
+  // one place to know how env config maps to providers. The lone CLI
+  // special case is --tamper, which needs its own responder instance to
+  // corrupt a quote; a missing key throws a one-line usage error below.
   const tamper = args.includes("--tamper")
-  const buildMock = () => new MockLLMProvider((request) => {
-    const user = request.messages.at(-1)?.content ?? ""
-    const blocks = [...user.matchAll(/\[chunk (chk_[0-9a-z]{32}) \|[^\]]*\]\n([^\n]+)/g)]
-    const claims = blocks.slice(0, 2).map(([, chunkId, firstLine], i) => {
-      const quote = (firstLine as string).slice(0, 90)
-      return {
-        text: `According to the documentation: ${quote}`,
-        chunkId: chunkId as string,
-        quote: tamper && i === 0 ? `${quote} (embellished)` : quote,
-      }
-    })
-    return { text: JSON.stringify({ claims }) }
-  })
-
-  // Real-provider selection. Config comes from the env vars documented in
-  // .env.example — a missing key is a usage error worth a sentence, not a
-  // stack trace. Production never takes this path: per-org credentials
-  // arrive encrypted from the database in M3.
   const llmChoice = args.includes("--llm") ? (args[args.indexOf("--llm") + 1] ?? "mock") : "mock"
-  let llm: LLMProvider
-  switch (llmChoice) {
-    case "mock":
-      llm = buildMock()
-      break
-    case "groq": {
-      const apiKey = process.env.GROQ_API_KEY
-      if (!apiKey) { console.error("--llm groq needs GROQ_API_KEY (see .env.example)"); process.exit(1) }
-      llm = new GroqProvider({ apiKey, ...(process.env.GROQ_MODEL ? { model: process.env.GROQ_MODEL } : {}) })
-      break
-    }
-    case "gemini": {
-      const apiKey = process.env.GEMINI_API_KEY
-      if (!apiKey) { console.error("--llm gemini needs GEMINI_API_KEY (see .env.example)"); process.exit(1) }
-      llm = new GeminiProvider({ apiKey, ...(process.env.GEMINI_MODEL ? { model: process.env.GEMINI_MODEL } : {}) })
-      break
-    }
-    case "ollama": {
-      const model = process.env.OLLAMA_MODEL
-      if (!model) { console.error("--llm ollama needs OLLAMA_MODEL (see .env.example)"); process.exit(1) }
-      llm = new OllamaProvider({ model, ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}) })
-      break
-    }
-    default:
-      console.error(`unknown --llm "${llmChoice}" (mock | groq | gemini | ollama)`)
-      process.exit(1)
-  }
+  const llm = tamper && llmChoice === "mock"
+    ? new MockLLMProvider(groundedMockResponder(true))
+    : buildLLMProvider(llmChoice)
 
   const org = await db.selectFrom("organizations").select(["id"]).where("name", "=", orgName).executeTakeFirst()
   if (!org) {
