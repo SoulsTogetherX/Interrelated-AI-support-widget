@@ -1,8 +1,9 @@
 # Realtime service image — multi-stage on node:22-alpine.
 #
 # Build context is the REPO ROOT (set in compose), not realtime/: the service
-# imports shared/ through a path alias, and shared/ must exist inside the
-# image for both dev (tsx resolves it live) and build (esbuild inlines it).
+# imports shared/ and providers/ through path aliases, and both must exist
+# inside the image for dev (tsx resolves them live) and build (esbuild
+# inlines them).
 #
 # Stages:
 #   deps   — npm ci only; cached until package-lock.json changes
@@ -24,6 +25,7 @@ WORKDIR /app/realtime
 COPY realtime/tsconfig.json ./
 COPY realtime/src ./src
 COPY shared /app/shared
+COPY providers /app/providers
 CMD ["npx", "tsx", "watch", "src/server.ts"]
 
 # ── build ────────────────────────────────────────────────────────────────────
@@ -32,9 +34,16 @@ WORKDIR /app/realtime
 COPY realtime/tsconfig.json ./
 COPY realtime/src ./src
 COPY shared /app/shared
-# esbuild resolves the @/ and @shared/ aliases from tsconfig.json and inlines
-# both into one CJS bundle. --packages=external keeps node_modules imports
-# (express, kysely, pg) external — they are installed in the prod stage.
+COPY providers /app/providers
+# esbuild inlines src + shared + providers into one CJS bundle.
+# --packages=external keeps node_modules imports (express, kysely, pg,
+# undici, htmlparser2) external — installed in the prod stage.
+# @shared/@providers are passed as explicit --alias flags in the build
+# script: --packages=external classifies them as scoped npm packages before
+# tsconfig paths are consulted (they LOOK like @scope/name), and alias
+# substitution is the one mechanism that takes precedence over it. The @/
+# alias needs no flag — "@" alone is not a valid package name, so it falls
+# through to tsconfig path resolution.
 RUN npm run build
 
 # ── prod ─────────────────────────────────────────────────────────────────────

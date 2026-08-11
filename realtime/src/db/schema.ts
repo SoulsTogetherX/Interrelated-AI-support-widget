@@ -125,7 +125,9 @@ interface DocumentsTable {
   title: string | null
   content_hash: string
   token_count: number | null
-  fetched_at: ColumnType<Date, string | Date | undefined, never>
+  /** Updatable on purpose: a recrawl refreshes fetched_at whether or not the
+   *  content changed — it answers "how stale is this page?" in the dashboard. */
+  fetched_at: ColumnType<Date, string | Date | undefined, string | Date>
   deleted_at: ColumnType<Date | null, never, string | Date>
 }
 

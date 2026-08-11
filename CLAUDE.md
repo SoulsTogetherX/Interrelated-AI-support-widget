@@ -13,9 +13,15 @@ Companion documents:
   describes what WILL BE.
 
 **Current milestone: M1 (ingest, retrieval, eval) — in progress.** M0 is
-complete. Everything below exists and is tested. Packages that appear in the
-plan but not here (web/, widget/, providers/, eval/, loadtest/) do not exist
-yet — they arrive across M1–M4.
+complete; M1.1 (content-pipeline schema), M1.2 (chunker, vectors, embedding
+providers), M1.3 (crawler, parsers, ingest worker — §3.10), and M1.4
+(hybrid retrieval — §2.4.3, §3.12) are done. Content flows in end to end
+(source → crawl → parse → chunk → embed → store) and back out again
+(query → dense + lexical arms → RRF fusion → ranked chunks). Next: the
+eval harness (golden set, recall@k/MRR/nDCG, CI floor). Everything below
+exists and is tested. Packages that appear in the plan but not here
+(web/, widget/, eval/, loadtest/) do not exist yet — they arrive across
+M1–M4.
 
 ---
 
@@ -83,7 +89,7 @@ The heading-aware chunker — the policy layer between parsers and embedding.
 Input is a parsed document: ordered blocks (`heading` / `paragraph` /
 `code`) honoring the parser contract `block.text === source.slice(charStart,
 charEnd)`; output is chunks shaped for the `chunks` table. Splitting parse
-from chunk means one chunking policy serves HTML, Markdown, and PDF alike,
+from chunk means one chunking policy serves every source format alike,
 and the chunker is tested with hand-built blocks instead of fixture files.
 
 Key behaviors, each pinned by a test: headings close the running chunk (a
@@ -115,6 +121,23 @@ and double-click selection; the fixed total length lets the schema enforce
 (15 lines) because shared/ is dependency-free by construction.
 `newId`'s prefix union is **closed** — adding an entity type means touching
 this file, keeping the registry in one reviewable place.
+
+#### §2.4.3 `shared/retrieval/rrf.ts`
+Reciprocal Rank Fusion — how the two retrieval arms become one ranking.
+Hand-written (~20 lines) because retrieval is this project's technical
+content; the anti-tutorial rules exist precisely so this isn't a framework
+call. Why rank fusion and not score fusion: cosine distance and ts_rank_cd
+live on incomparable scales (bounded [0,2] vs unbounded), so any weighted
+sum needs per-corpus calibration that drifts — ranks are always comparable.
+k=60 from Cormack, Clarke & Buettcher (2009); its job is damping the
+rank-1-vs-rank-2 gap so one arm's head pick can't steamroll consensus.
+Two contracts pinned by tests: ties break by first appearance
+(**deterministic output** — the eval harness diffs ranked lists across
+runs, and nondeterministic tie order would read as a retrieval
+regression), and a duplicate id within one ranking throws (both arms
+return each chunk at most once by construction, so a duplicate is an
+upstream bug worth a loud failure). The fused score is EXPOSED, not just
+the order: it is the number M2's refusal threshold cuts on.
 
 ### §2.4.5 `providers/`
 The model-provider abstraction — the BYO-provider feature's foundation.
@@ -158,7 +181,9 @@ every push (flip to `main` when the demo should track releases). Neon
 connection values are marked `sync: false` — Render prompts for them in its
 dashboard; secrets never enter the repo. Exactly ONE service by design: the
 free tier's ~750 instance-hours/month keep one service always warm, not two
-(the M3 dashboard goes to Vercel instead).
+(the M3 dashboard goes to Vercel instead). `INGEST_WORKER` is pinned to "0"
+here: the worker's poll loop would hold Neon's compute awake (§3.7), and
+production has no way to enqueue a job until M3 anyway.
 
 ### §2.6 `.env.example`
 The single documented registry of every environment variable the system
@@ -172,8 +197,16 @@ containers always use `database:5432` internally (§4.2).
 ## §3 `realtime/` — the data plane
 
 Express 5 + Kysely + pg, CommonJS, bundled to a single `dist/server.js` by
-esbuild. This package will grow the SSE chat path (M2), ingest worker (M1),
-and handoff WebSocket (M4); at M0 it is the boot spine those will hang off.
+esbuild. As of M1.4 it contains the full ingest pipeline (§3.10) and the
+retrieval layer (§3.12) alongside the boot spine; the SSE chat path (M2)
+and handoff WebSocket (M4) still hang off later milestones. Runtime dependencies grew by two, each earning
+its place: `undici` (the guarded HTTP agent — §3.10.2) and `htmlparser2`
+(HTML tokenization — §3.10.3). A third, `pdf-parse`, was built, tested, and
+then REMOVED on review: crawled docs sites are HTML/Markdown, and nothing
+can hand the product a PDF until file uploads exist (M3) — 21 MB of image
+weight and a large third-party parsing surface for a feature with no
+caller. It returns with uploads; §3.10.3 records how PDFs are skipped
+meanwhile.
 
 ### §3.1 `src/db/schema.ts`
 Hand-written Kysely types for every table. **kysely-codegen was rejected**
@@ -287,8 +320,24 @@ convention (compose, render.yaml); PORT is the generic convention PaaS
 routers inject, honored so the service binds correctly on platforms that
 only speak that. The http
 server is created explicitly (not `app.listen`) because M4 attaches the
-WebSocket upgrade handler to the same server object. Shutdown: SIGTERM →
-stop accepting → drain pool → exit; a second signal force-exits.
+WebSocket upgrade handler to the same server object.
+
+After listen, the ingest worker (§3.10.5) starts **only when
+`INGEST_WORKER=1`**. Opt-in because the worker polls Postgres: free against
+compose's local database (both stacks set the flag), but on Neon a few-second
+poll would hold compute awake around the clock against the ~100 CU-hour
+monthly budget — the same budget the DB-free health route protects. So
+render.yaml pins it to "0" until M3, which is also when production first
+GAINS a way to enqueue a job; flipping it on arrives together with an
+in-process wake-on-enqueue so polling becomes the fallback, not the
+mechanism. `EMBEDDING_PROVIDER` picks mock (default) or local — mock is an
+honest placeholder until per-org BYO providers (M3): its vectors carry no
+semantics, which costs nothing while no retrieval exists, and it is what
+lets CI drive the full pipeline keylessly.
+
+Shutdown: SIGTERM → stop accepting, stop the worker (it requeues an
+in-flight job between pages — §3.10.5) → drain pool → exit; a second signal
+force-exits.
 
 ### §3.8 Tests (`src/**/__tests__/`)
 - `routes/__tests__/health.test.ts` — drives the real HTTP listener via
@@ -312,6 +361,56 @@ stop accepting → drain pool → exit; a second signal force-exits.
   `(chunk_id, model)` (while a second model for the same chunk is legal),
   duplicate `(document_id, ord)`, inverted char span, live-URL collision
   (and non-collision with a tombstone), unowned running job.
+- `ingest/__tests__/safeFetch.test.ts` — no DB needed. The address
+  classifier's blocked/allowed table is tested **at range edges** (172.15
+  vs 172.16 vs 172.32, CGNAT bounds, NAT64 with public vs loopback
+  payloads) plus the fail-closed cases: exotic spellings (`0x7f000001`,
+  `127.1`, octal) that bypass naive filters by parsing differently in
+  different resolvers. URL vetting runs against an injected resolver; live
+  behavior (redirect chains and per-hop re-vetting, both size-cap paths,
+  timeout) runs against an in-test loopback server — including the pinned
+  security default that loopback itself is REJECTED without an explicit
+  hostGuard.
+- `ingest/__tests__/parsers.test.ts` — no DB. Every fixture is checked
+  against the offset contract (`block.text === text.slice(...)`). One test
+  chains parseMarkdown → chunkBlocks to prove the heading trail survives
+  the whole path; another pins that two HTML formattings of the same
+  content extract identical text (what makes content_hash meaningful); a
+  third pins that a detected PDF is REJECTED rather than garbled into
+  markdown paragraphs (PDF support is deferred to M3 — §3.10.3).
+- `ingest/__tests__/crawler.test.ts` — no DB. An in-test fixture site with
+  every scope hazard: fragments, duplicate links, redirects, cross-origin
+  links, binary assets, broken pages, markdown served as text/plain,
+  sitemap + sitemapindex. Asserts what was and was NOT requested (the
+  server records paths), not just what was yielded.
+- `retrieval/__tests__/search.test.ts` — DB-gated, plus an always-on
+  input-validation block (limit guards fire before any query, so they run
+  keylessly). The centerpiece is the multi-tenant regression test from the
+  plan: 20 orgs × 30 chunks share one HNSW index, and every org must
+  retrieve exactly k — through a dedicated SINGLE-connection Kysely with
+  `enable_seqscan = off`, because on the shared pool the session SET and
+  the search could land on different connections, and a seqscan (exact,
+  unstarvable) would pass the test without exercising what it guards. Its
+  companion asserts that with iterative scans OFF some tenant starves —
+  20×k=100 > ef_search=40, so by pigeonhole the fixture MUST bite; if that
+  ever fails, the planner stopped using HNSW and the regression test has
+  gone vacuous. Also pinned: soft-deleted documents invisible to both arms
+  even when the query is the deleted chunk's exact text; cross-tenant
+  isolation under byte-identical texts (same mock vector, same tsv — only
+  the org filter separates them); hostile lexical syntax never throws;
+  stop-word-only queries return empty; equal-score ties order by chunk id
+  reproducibly; hybrid fusion reports per-arm ranks with exact RRF scores;
+  k beyond corpus size returns the whole corpus.
+- `ingest/__tests__/worker.test.ts` — DB-gated. The first suite where the
+  ENTIRE pipeline runs against real Postgres and a real (loopback) site,
+  through three crawls of a two-version fixture: initial ingest (documents,
+  chunks with heading paths, embeddings, statuses), identical recrawl
+  (zero embed calls — the content_hash short-circuit observed, not
+  assumed), changed recrawl (chunks replaced, vanished page soft-deleted).
+  Queue semantics get their own tests: two workers claiming concurrently
+  under SKIP LOCKED (held open by gated fake crawlers), stale-lease
+  reclaim on both sides of the attempts cap, stop() requeuing between
+  pages, crawl failure and upload-source failure paths.
 
 ### §3.9 `realtime/Dockerfile`
 Multi-stage on node:22-alpine, **build context = repo root** (shared/ must
@@ -320,6 +419,190 @@ exist inside the image). `deps → dev → build → prod`. Prod runs
 healthcheck on `/api/health`, and `CMD ["node", "dist/server.js"]` — plain
 node, not `npm start`, because npm swallows SIGTERM and would turn graceful
 shutdown into a 10-second kill.
+
+### §3.10 `src/ingest/` — the ingest pipeline (M1.3)
+
+Source → crawl → parse → chunk → embed → store, traced end to end in
+DATAFLOW.md §3. Layering is strict and each layer is testable alone:
+`safeFetch` knows nothing about crawling, the crawler knows nothing about
+the database, the worker owns ALL persistence. The chunker sits in shared/
+(§2.4.0) because policy is cross-package; everything here is data-plane
+mechanics.
+
+#### §3.10.1 `src/ingest/ip.ts`
+Byte-level IP classification for the SSRF guard: "is this address
+affirmatively public-routable?" Hand-rolled v4/v6 parsers (16 bytes, then
+prefix checks) because this is a security boundary that must FAIL CLOSED —
+anything unparseable is non-public by definition, and the alternate
+spellings resolvers interpret creatively (`0x7f000001`, `127.1`, leading
+zeros) are deliberately *not recognized* rather than normalized, since
+"ambiguous" is an answer of no. Blocks loopback, RFC1918, link-local
+(which is what makes 169.254.169.254 — the cloud metadata endpoint —
+unreachable), CGNAT, TEST-NETs, benchmarking, multicast/reserved, ULA, and
+the v6 transition ranges: v4-mapped and NAT64 defer to the verdict of the
+EMBEDDED v4 address; 6to4/Teredo are rejected wholesale because the guard
+cannot see through a tunnel.
+
+#### §3.10.2 `src/ingest/safeFetch.ts`
+The SSRF-guarded HTTP client every ingest fetch goes through — crawl
+targets are user-supplied URLs this server then fetches, the textbook SSRF
+shape. Three layers that must move together: (1) per-hop vetting — scheme,
+no embedded credentials, and ALL DNS answers public (one private A record
+taints the set, since the socket layer may dial any of them); (2) the
+undici Agent's connect-time lookup hook re-classifies the addresses
+actually dialed, which closes DNS rebinding (resolve-public-then-answer-
+private hits the hook, not our network); (3) redirects followed MANUALLY so
+layer 1 applies to every `location` — a literal-IP redirect target never
+touches DNS, which is exactly why URL vetting exists alongside the hook.
+Bodies are size-capped while STREAMING (Content-Length is attacker-
+supplied, checked but never trusted) and the timeout budget spans the whole
+redirect chain. `hostGuard` is the one seam: passing a custom guard also
+routes through an unguarded agent (tests reaching loopback fixtures; later,
+tenant-declared Ollama base URLs in M3). `undici` became an explicit
+dependency for its typed `dispatcher` option — the global fetch cannot
+carry a custom agent.
+
+#### §3.10.3 `src/ingest/parsers/`
+One contract rules all of them (`types.ts`):
+`block.text === text.slice(charStart, charEnd)` — the identity that makes
+span-verified citations (M2) able to deep-link into source text. `text` is
+the parser's normalized extraction; it is also exactly what
+`documents.content_hash` fingerprints, so parsers must be deterministic
+functions of content (the HTML whitespace-collapse test pins this).
+
+- `markdown.ts` — hand-written line scanner. Hand-written BECAUSE of the
+  contract: every Markdown library returns a transformed AST, and
+  recovering verbatim source offsets from one is more and worse code than
+  classifying lines ourselves. The canonical text is the source itself.
+  Recognized: ATX headings, fenced code (fence lines excluded), list items
+  (marker stripped via offsets, each item its own block), paragraphs.
+  Deliberately not: setext headings (ambiguous with rules), inline markup
+  stripping (would desync offsets; `**` noise costs retrieval nothing).
+- `html.ts` — htmlparser2 streaming callbacks; the canonical text is
+  CONSTRUCTED during extraction, so the contract holds by construction.
+  htmlparser2 is a dependency where Markdown got hand-rolled because
+  tokenizing real-world HTML is a swamp with a well-maintained boring
+  answer — HTML parsing is infrastructure, not the thesis. Chrome subtrees
+  (nav/header/footer/script/style/forms/svg) are dropped wholesale — a
+  support answer citing a nav menu is worse than none — but their `<a
+  href>` values ARE collected: nav menus are how docs sites interlink.
+  `<pre>` preserves whitespace as a code block; prose whitespace collapses
+  (HTML's own rendering rule, and what makes extraction deterministic).
+- PDF — deliberately ABSENT until M3. A `pdf-parse` implementation was
+  built and then removed on review: no caller can supply a PDF before file
+  uploads exist, and the dependency cost 21 MB of image plus a browser-
+  sized parsing surface. What remains is the honest edge handling: PDFs
+  are still DETECTED (magic bytes / media type) and rejected with a clear
+  error the crawler reports as a skipped page, and the crawler's
+  extension filter never spends a fetch on an obvious `.pdf` link —
+  detection without parsing is what keeps a crawled PDF from being
+  garbled into "paragraphs" of binary soup by the markdown fallback.
+- `index.ts` — decode + dispatch. Detection in trust order: magic bytes
+  (`%PDF-`, unfakeable) → declared media type → URL extension → sniff →
+  markdown as fallback (it degrades to plain-text paragraphs; the HTML
+  parser would strip nothing). Decoding
+  strips the BOM and normalizes CRLF→LF BEFORE any parser runs, so server
+  line-ending churn can never change a content_hash.
+
+#### §3.10.4 `src/ingest/crawler.ts`
+Source → stream of parsed pages, as an async GENERATOR: a crawl is minutes
+of network, so the worker persists page-by-page, reports progress, and can
+stop between pages — none of which an awaited array allows. Memory is
+bounded by one page, not one site. Scope is enforced here, not trusted to
+callers: same-origin only (checked against the FINAL URL, so an on-origin
+link that redirects off-origin is skipped), every fetch through safeFetch,
+maxPages cap, politeness delay, depth from the schema-capped `crawl_depth`.
+BFS rather than DFS so depth means "link distance from the root" — the
+intuitive meaning of the knob. Failure policy: a dead ROOT throws
+`CrawlError` (nothing was crawlable → source failed); a dead PAGE is an
+`error` event and the crawl continues (one broken link must not abort a
+100-page ingest). Sitemaps (plus one level of sitemapindex nesting) are
+parsed with a regex over `<loc>` — legitimate here because the sitemap
+schema forbids the nesting and attributes that make regex-over-XML a trap.
+Not yet implemented, stated honestly: robots.txt (belongs with the M3
+dashboard, where a customer can see WHY a page was skipped; the cap and
+delay bound our footprint meanwhile).
+
+#### §3.10.5 `src/ingest/worker.ts`
+The queue consumer that ties the pipeline together; runs IN-PROCESS on a
+poll loop (a separate worker service was rejected: Render's free tier funds
+one instance, and the throughput ceiling is embedding rate limits, not
+CPU). The claim is one atomic UPDATE over a `FOR UPDATE SKIP LOCKED`
+subquery — concurrent workers skip each other's rows instead of blocking,
+so "a second worker is a deploy, not a rewrite" is literally true and
+tested. Crashed workers leave stale leases; the reclaim pass requeues them
+under the attempts cap and FAILS them visibly past it — work is never lost
+silently. `stop()` requeues an in-flight job between pages so deploys don't
+burn attempts on healthy work.
+
+Per page: sha256 the normalized text; an unchanged hash refreshes
+bookkeeping and spends NOTHING (the recrawl short-circuit — embedding
+quota is the scarcest resource in the pipeline); otherwise chunk, embed
+with the heading trail PREPENDED (the stored chunk text stays trail-free —
+the trail is retrieval context, not quotable content), then one SHORT
+transaction for document + chunks + embeddings. Embedding happens BEFORE
+the transaction: it is seconds of external network, and holding a
+connection (Neon pool: 5) across it buys no atomicity — a failed embed
+just leaves the previous document version standing. Pages live last crawl
+but absent now are soft-deleted, so retrieval stops seeing them while
+history survives.
+
+### §3.11 `realtime/scripts/enqueueSource.ts`
+Dev-only CLI (`npm run enqueue -- <url> [--depth N] [--sitemap]`):
+registers a source and queues a job so the worker can be watched end to end
+before the M3 dashboard exists. Deliberately glue over the same inserts the
+integration tests make — no logic of its own to drift. Falls back to
+reading the repo-root `.env` when Postgres vars are unset (already-set env
+always wins) — which requires the DEFERRED imports both CLIs use: the pool
+reads env at module load, and a hoisted top-level import would construct it
+before the fallback ran, silently pointing at the wrong Postgres.
+
+### §3.12 `src/retrieval/search.ts`
+The query side of the content pipeline (traced in DATAFLOW.md §4): three
+public entry points, because the eval harness measures each arm alone
+against the fusion — the delta is the case for hybrid.
+
+- `denseSearch` — cosine nearest-neighbor through the per-model partial
+  HNSW index. Runs in a transaction because the pgvector knobs are applied
+  via `set_config(…, is_local => true)`: transaction-scoped so nothing
+  leaks onto a pooled connection, and set_config rather than SET LOCAL
+  because SET cannot take bind parameters (the values travel as parameters
+  instead of being spliced into SQL text). `hnsw.iterative_scan =
+  'relaxed_order'` is the load-bearing setting: without it HNSW yields
+  ~ef_search candidates, the org filter discards other tenants' rows, and
+  a small tenant silently gets fewer than k results. `"off"` is accepted
+  because the eval harness measures the with/without delta — the number
+  that justifies the setting. The ORDER BY is exactly the index's distance
+  expression, no secondary tie-break key — the planner abandons HNSW for a
+  full sort otherwise (fp16 ties are harmless; fusion re-ranks).
+- `lexicalSearch` — `ts_rank_cd` (cover density: rewards query terms NEAR
+  each other, the reason tsv keeps positions) over the GIN-indexed
+  generated column, parsed by `websearch_to_tsquery` — identical to
+  plainto for prose but never throws on hostile syntax, a requirement once
+  M2 feeds it end-user text. Ties order by chunk id for reproducibility.
+- `hybridSearch` — both arms concurrently at poolSize depth (50: deeper
+  arms let RRF surface consensus neither arm ranked highly), RRF-fused,
+  cut to k, then ONE metadata hydration query for the survivors — arm
+  queries stay pure index-shaped work. Returns `RetrievedChunk` with the
+  quotable text, its location (url + heading trail + char span), the fused
+  score (M2's refusal threshold input), and per-arm ranks for
+  observability.
+
+Both arms exclude chunks of soft-deleted documents through the documents
+join: the worker soft-deletes a vanished page but leaves its chunks for
+history, so "deleted" lives on documents alone and retrieval must look
+through the join or it would keep answering from pages a site removed.
+Limits are validated as if they were already user input (M2 makes them so).
+
+### §3.13 `realtime/scripts/searchDev.ts`
+Dev-only CLI (`npm run search -- "<question>" [--org N] [--k N]
+[--dense-only]`): hybrid retrieval against ingested content, so the whole
+M1 loop — enqueue → crawl → embed → retrieve — is drivable by hand before
+M2's chat surface exists. Same glue-only rule as §3.11. Picks its embedder
+from EMBEDDING_PROVIDER exactly as the worker does, and warns when the org
+has no embeddings under that model — the routine dev mistake is ingesting
+under one provider and querying under another, which otherwise looks like
+retrieval returning nothing.
 
 ---
 
@@ -340,6 +623,9 @@ containers always use `database:5432` internally. Two hard-won details:
   container refuse to initialize.
 - `depends_on.condition: service_healthy` — realtime migrates immediately at
   boot, and racing Postgres init would make every `up` a coin flip.
+
+Both compose stacks set `INGEST_WORKER: "1"` — polling a LOCAL Postgres is
+free, and the dev loop (`npm run enqueue`, §3.11) depends on a live worker.
 
 ### §4.3 `docker-compose.prod.yaml`
 Production shape: prod image target, no bind mounts, Postgres **not**

@@ -36,6 +36,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       BACKEND_PORT: "3000"
+      # Worker on: this stack's Postgres is local to the compose network, so
+      # the poll loop costs nothing — and CI's e2e job should boot the same
+      # code paths production will eventually run.
+      INGEST_WORKER: "1"
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     depends_on:

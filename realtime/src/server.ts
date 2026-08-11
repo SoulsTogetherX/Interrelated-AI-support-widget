@@ -4,6 +4,28 @@ import { createServer } from "node:http"
 import { createApp } from "@/app"
 import pool, { db } from "@/db/pool"
 import { migrateToLatest } from "@/db/migrate"
+import { IngestWorker } from "@/ingest/worker"
+import { MockEmbeddingProvider } from "@providers/embedding/mock"
+import type { EmbeddingProvider } from "@providers/embedding/types"
+//#endregion
+
+//#region Embedder selection
+// Which embedding provider the ingest worker uses, from EMBEDDING_PROVIDER:
+//   - "local": fastembed/ONNX (bge-small-en-v1.5) — dev machines and the
+//     eval harness. Dynamic import so onnxruntime is only loaded when
+//     actually selected (it wants ~250–400 MB of RAM — see
+//     providers/embedding/local.ts; it must never run on Render).
+//   - anything else: the deterministic mock. An honest placeholder until
+//     per-org BYO providers land in M3 — mock vectors carry no semantics,
+//     which is fine while nothing retrieves (M2), and it is what lets CI
+//     drive the full ingest pipeline with zero API keys.
+async function buildEmbedder(): Promise<EmbeddingProvider> {
+  if (process.env.EMBEDDING_PROVIDER === "local") {
+    const { LocalEmbeddingProvider } = await import("@providers/embedding/local")
+    return new LocalEmbeddingProvider()
+  }
+  return new MockEmbeddingProvider()
+}
 //#endregion
 
 //#region Boot
@@ -37,20 +59,39 @@ async function start(): Promise<void> {
     console.log(`[boot] realtime listening on :${port}`)
   })
 
+  // The ingest worker is OPT-IN (INGEST_WORKER=1): its poll loop queries
+  // Postgres every few seconds, which on Neon would hold compute awake
+  // around the clock — the same ~100 CU-hour budget the DB-free health
+  // route exists to protect. Both compose stacks turn it on (local Postgres
+  // has no such budget); render.yaml leaves it OFF until M3 gives the
+  // worker something that can enqueue in production plus an in-process wake
+  // instead of a poll.
+  let worker: IngestWorker | null = null
+  if (process.env.INGEST_WORKER === "1") {
+    const pollMs = Number(process.env.INGEST_POLL_MS) || undefined
+    worker = new IngestWorker({ db, embedder: await buildEmbedder(), ...(pollMs ? { pollMs } : {}) })
+    worker.start()
+    console.log(`[boot] ingest worker polling${pollMs ? ` every ${pollMs}ms` : ""}`)
+  }
+
   //#region Shutdown
   // SIGTERM is what Render (and docker stop) sends. Drain in order: stop
-  // accepting connections, then release the pool. A second signal while
-  // draining forces exit — an operator mashing Ctrl+C outranks graceful.
+  // accepting connections AND stop the worker (it requeues an in-flight job
+  // between pages), then release the pool. A second signal while draining
+  // forces exit — an operator mashing Ctrl+C outranks graceful.
   let draining = false
   const shutdown = (signal: string): void => {
     if (draining) process.exit(1)
     draining = true
     console.log(`[shutdown] ${signal} received, draining`)
+    const workerStopped = worker ? worker.stop() : Promise.resolve()
     server.close(() => {
-      pool.end().then(
-        () => process.exit(0),
-        () => process.exit(1),
-      )
+      workerStopped
+        .then(() => pool.end())
+        .then(
+          () => process.exit(0),
+          () => process.exit(1),
+        )
     })
   }
   process.on("SIGTERM", () => shutdown("SIGTERM"))

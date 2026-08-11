@@ -1,7 +1,8 @@
 //#region Type Defs
 /**
  * The chunker's input is a PARSED document: an ordered list of blocks that a
- * format-specific parser (HTML, Markdown, PDF — M1.3) has already extracted.
+ * format-specific parser (HTML and Markdown today; uploads add more in M3)
+ * has already extracted.
  * Splitting "parse" from "chunk" means one chunking policy serves every
  * format, and the chunker can be tested exhaustively with hand-built blocks
  * instead of fixture files.

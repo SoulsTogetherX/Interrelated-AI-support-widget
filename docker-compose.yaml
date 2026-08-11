@@ -46,14 +46,20 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       BACKEND_PORT: "3000"
+      # The ingest worker is opt-in (see server.ts) because its poll loop
+      # would keep Neon's compute awake; against a LOCAL Postgres, polling
+      # is free, so both compose stacks run it.
+      INGEST_WORKER: "1"
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     volumes:
       # Live-edit mounts. node_modules is NOT masked with an anonymous
-      # volume because src/ and shared/ are mounted individually — the
-      # image's own node_modules stays untouched.
+      # volume because src/, shared/, and providers/ are mounted
+      # individually — the image's own node_modules stays untouched.
       - ./realtime/src:/app/realtime/src
       - ./shared:/app/shared
+      - ./providers:/app/providers
     depends_on:
       database:
         # Gate on HEALTHY, not on started: the realtime boot path runs
