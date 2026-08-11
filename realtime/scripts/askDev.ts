@@ -5,14 +5,17 @@
 // widget exist.
 //
 //   npm run ask -- "how do refunds work" [--org "Name"] [--conversation con_…]
+//                  [--llm mock|groq|gemini|ollama] [--tamper]
 //
 // Glue over answerQuestion(), same rule as the sibling CLIs: no logic of its
-// own to drift. The LLM is the deterministic mock in RESPONDER mode: it
-// parses the [chunk …] blocks out of the prompt it receives and answers by
-// quoting the opening of each of the top chunks — grounded by construction,
-// so verification PASSES and the whole loop (including citations and
-// persistence) is observable with zero API keys. Real providers plug into
-// the same seam in M2.4.
+// own to drift. The default LLM is the deterministic mock in RESPONDER
+// mode: it parses the [chunk …] blocks out of the prompt it receives and
+// answers by quoting the opening of each of the top chunks — grounded by
+// construction, so verification PASSES and the whole loop (including
+// citations and persistence) is observable with zero API keys. --llm picks
+// a real provider instead, configured by the GROQ_/GEMINI_/OLLAMA_ vars
+// documented in .env.example — the first place real model output meets the
+// verifier, ahead of the M2.5 route.
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 //#endregion
@@ -51,6 +54,10 @@ async function main(): Promise<void> {
   const { answerQuestion } = await import("@/answer/pipeline")
   const { MockEmbeddingProvider } = await import("@providers/embedding/mock")
   const { MockLLMProvider } = await import("@providers/llm/mock")
+  const { GroqProvider } = await import("@providers/llm/groq")
+  const { GeminiProvider } = await import("@providers/llm/gemini")
+  const { OllamaProvider } = await import("@providers/llm/ollama")
+  type LLMProvider = import("@providers/llm/types").LLMProvider
 
   const embedder = process.env.EMBEDDING_PROVIDER === "local"
     ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
@@ -62,7 +69,7 @@ async function main(): Promise<void> {
   // that VERIFY, so the strip path stays observable by corrupting one quote
   // with --tamper.
   const tamper = args.includes("--tamper")
-  const llm = new MockLLMProvider((request) => {
+  const buildMock = () => new MockLLMProvider((request) => {
     const user = request.messages.at(-1)?.content ?? ""
     const blocks = [...user.matchAll(/\[chunk (chk_[0-9a-z]{32}) \|[^\]]*\]\n([^\n]+)/g)]
     const claims = blocks.slice(0, 2).map(([, chunkId, firstLine], i) => {
@@ -75,6 +82,39 @@ async function main(): Promise<void> {
     })
     return { text: JSON.stringify({ claims }) }
   })
+
+  // Real-provider selection. Config comes from the env vars documented in
+  // .env.example — a missing key is a usage error worth a sentence, not a
+  // stack trace. Production never takes this path: per-org credentials
+  // arrive encrypted from the database in M3.
+  const llmChoice = args.includes("--llm") ? (args[args.indexOf("--llm") + 1] ?? "mock") : "mock"
+  let llm: LLMProvider
+  switch (llmChoice) {
+    case "mock":
+      llm = buildMock()
+      break
+    case "groq": {
+      const apiKey = process.env.GROQ_API_KEY
+      if (!apiKey) { console.error("--llm groq needs GROQ_API_KEY (see .env.example)"); process.exit(1) }
+      llm = new GroqProvider({ apiKey, ...(process.env.GROQ_MODEL ? { model: process.env.GROQ_MODEL } : {}) })
+      break
+    }
+    case "gemini": {
+      const apiKey = process.env.GEMINI_API_KEY
+      if (!apiKey) { console.error("--llm gemini needs GEMINI_API_KEY (see .env.example)"); process.exit(1) }
+      llm = new GeminiProvider({ apiKey, ...(process.env.GEMINI_MODEL ? { model: process.env.GEMINI_MODEL } : {}) })
+      break
+    }
+    case "ollama": {
+      const model = process.env.OLLAMA_MODEL
+      if (!model) { console.error("--llm ollama needs OLLAMA_MODEL (see .env.example)"); process.exit(1) }
+      llm = new OllamaProvider({ model, ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}) })
+      break
+    }
+    default:
+      console.error(`unknown --llm "${llmChoice}" (mock | groq | gemini | ollama)`)
+      process.exit(1)
+  }
 
   const org = await db.selectFrom("organizations").select(["id"]).where("name", "=", orgName).executeTakeFirst()
   if (!org) {
@@ -99,6 +139,17 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  // Duck-typed rather than instanceof so the check needs no import at this
+  // scope: a 429 is the routine free-tier experience and deserves a human
+  // sentence (the M2.5 queue turns this into a "one moment" state).
+  if (err instanceof Error && err.name === "LLMHttpError") {
+    const status = (err as { status?: number }).status
+    const retryAfterMs = (err as { retryAfterMs?: number | null }).retryAfterMs
+    if (status === 429) {
+      console.error(`rate limited by the provider${retryAfterMs ? ` — retry in ${Math.ceil(retryAfterMs / 1000)}s` : ""}`)
+      process.exit(1)
+    }
+  }
   console.error("ask failed:", err instanceof Error ? err.message : err)
   process.exit(1)
 })

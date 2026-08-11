@@ -360,6 +360,8 @@ caller (askDev CLI | tests | M2.5 SSE route later)
            boundary: crawled pages are untrusted input)
       8. llm.stream({messages, temperature: 0, maxTokens, responseSchema,
                      signal})            providers/llm/*
+           mock (tests/CI) | groq/openai-compatible (json_object mode) |
+           gemini (schema enforced server-side) | ollama (native format)
            deltas collected; TTFT measured at first delta, in the
            pipeline (not per-provider) so every provider measures alike
       9. parseAnswerText                 shared/grounding/claims.ts

@@ -31,9 +31,13 @@ delimited prompt → stream → parse with one retry → verify → strip →
 persist → claim-granular events, drivable keylessly via `npm run ask`
 (§3.16). The SSE route deliberately lands WITH widget session auth (M2.5)
 so an unauthenticated LLM-spending route never reaches the auto-deploying
-dev branch. Still to come in M2: real providers (Groq, Gemini,
-OpenAI-compatible, Ollama), widget session auth + the SSE route, the
-widget itself, and the eval-derived refusal threshold. Packages that appear in
+dev branch. M2.4 is done — the real LLM providers (§2.4.5f–i): a generic
+OpenAI-compatible adapter with Groq as a named preset, native Gemini
+(server-side schema enforcement via responseJsonSchema), and native
+Ollama (full-schema `format`), all tested keylessly against in-test
+loopback protocol servers and reachable from `npm run ask --llm …`.
+Still to come in M2: widget session auth + the SSE route, the widget
+itself, and the eval-derived refusal threshold. Packages that appear in
 the plan but not here (web/, widget/, loadtest/) do not exist yet — they
 arrive across M2–M4.
 
@@ -292,6 +296,63 @@ Besides the scripted list there is a RESPONDER mode (a pure
 request→response function) for callers that cannot know retrieval results
 before the call — the askDev CLI (§3.16) uses it to derive grounded
 claims from the prompt it receives, keeping the full loop keyless.
+
+#### §2.4.5f `llm/http.ts`
+Shared plumbing for the HTTP providers, zero imports (fetch/streams are
+Node 22 globals — providers/ keeps its no-package-json rule without even
+a dynamic import). `LLMHttpError` carries status + retryAfterMs so the
+M2.5 queue can implement backoff policy without string-matching, and its
+message includes a truncated response body but NEVER request headers or
+the URL (a misconfigured base URL could embed credentials, and errors end
+up in logs) — the 429 test asserts the key is absent. `postStream` is the
+single point where provider requests leave the process. `byteLines` runs
+TextDecoder in streaming mode because socket chunk boundaries land
+mid-multibyte-character — a test splits "café" inside the é to pin it.
+`sseData` is deliberately minimal (one JSON document per data line — the
+only shape these APIs emit; event/id/retry handling would be dead code);
+`ndjsonObjects` is Ollama's framing.
+
+#### §2.4.5g `llm/openaiCompatible.ts` + `llm/groq.ts`
+The generic OpenAI-compatible chat adapter — one implementation covering
+Groq, OpenRouter, Together, vLLM, LM Studio, and Ollama's compat
+endpoint: exactly the one-adapter-for-N-providers trade the plan calls
+out. responseSchema maps to `response_format: json_object` — the lowest
+common denominator (enforcement is "please emit JSON", which is why the
+pipeline validates and retries); json_schema variants are deliberately
+NOT attempted generically, support being too fragmented. jsonMode:"none"
+exists for servers that reject response_format outright. Reasoning-model
+side channels (delta.reasoning_content) are dropped: deliberation is not
+answer text. Usage reads both the standard field and Groq's x_groq
+placement. GroqProvider is a named PRESET of this adapter (base URL,
+llama-3.3-70b default, json_object, error label) — a subclass so a Groq
+quirk has an obvious home, with an instanceof test pinning that no
+duplicate stream loop exists.
+
+#### §2.4.5h `llm/gemini.ts`
+Native, not compat, for one load-bearing reason:
+`generationConfig.responseJsonSchema` takes our standard JSON Schema
+VERBATIM and enforces it server-side — the strongest structured-output
+guarantee of any supported provider (the older responseSchema field wants
+Gemini's OpenAPI dialect; a lossy translation we refuse to maintain).
+The pipeline still validates — trust isn't transitive — but Gemini's
+near-dead retry path makes the per-provider schema-violation metric a
+comparison instead of a constant. Dialect mapping: system messages →
+systemInstruction, assistant → "model" turns, STOP/MAX_TOKENS →
+stop/length. Auth rides the x-goog-api-key HEADER, never ?key= — URLs
+land in logs, and the test asserts the URL is key-free.
+
+#### §2.4.5i `llm/ollama.ts`
+The self-hosted path, speaking native /api/chat (NDJSON) rather than
+Ollama's compat endpoint because the native `format` field takes a FULL
+JSON Schema and constrains generation server-side — the reason a small
+local model can hold the claims contract at all. No apiKey (Ollama is
+unauthenticated); no default model (what is pulled locally is a machine
+fact this file can't guess). The SSRF note that matters: today the base
+URL is developer-supplied; when tenants supply their own (M3), vetting
+happens at the realtime boundary through the safeFetch hostGuard seam
+BEFORE a provider is constructed — the defense belongs where the URL
+enters the system. A down-server test pins that connection failure
+throws rather than hangs.
 
 ### §2.5 `render.yaml`
 The Render deployment as code (a "Blueprint"): one free-tier Docker web
@@ -863,13 +924,18 @@ AnswerSchemaError leaving no assistant row at all.
 
 ### §3.16 `realtime/scripts/askDev.ts`
 Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
-con_…] [--tamper]`): the full M2 loop drivable by hand, keylessly. Same
-glue-only rule as the sibling CLIs. Its LLM is the mock in responder mode
-(§2.4.5e): it parses the [chunk …] blocks out of the prompt it actually
-receives and quotes the top chunks verbatim — grounded by construction,
-so verification passes and persistence/citations/events are all
-observable. `--tamper` corrupts one quote so the strip path is observable
-too: the tampered claim is stored quote_not_found and never displayed.
+con_…] [--llm mock|groq|gemini|ollama] [--tamper]`): the full M2 loop
+drivable by hand. Same glue-only rule as the sibling CLIs. The default
+LLM is the mock in responder mode (§2.4.5e): it parses the [chunk …]
+blocks out of the prompt it actually receives and quotes the top chunks
+verbatim — grounded by construction, so verification passes and
+persistence/citations/events are all observable keylessly. `--tamper`
+corrupts one quote so the strip path is observable too: the tampered
+claim is stored quote_not_found and never displayed. `--llm` swaps in a
+real provider (§2.4.5f–i), configured by the GROQ_/GEMINI_/OLLAMA_ vars
+in .env.example — the first place real model output meets the verifier,
+ahead of the M2.5 route; a missing key is a one-line usage error and a
+provider 429 prints as a human sentence with the retry delay.
 
 ---
 
