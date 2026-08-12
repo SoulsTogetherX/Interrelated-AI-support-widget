@@ -1,7 +1,7 @@
 //#region Imports
 import { describe, expect, it } from "vitest"
 
-import { isId, newId } from "../ids"
+import { isId, newId, newPublishableKey } from "../ids"
 //#endregion
 
 //#region Constants
@@ -28,6 +28,21 @@ describe("newId", () => {
     const seen = new Set<string>()
     for (let i = 0; i < 10_000; i++) seen.add(newId("org"))
     expect(seen.size).toBe(10_000)
+  })
+})
+
+describe("newPublishableKey", () => {
+  it("produces pk_live_<32 base32 chars>, distinct per draw", () => {
+    const key = newPublishableKey()
+    // The pk_ prefix is what realtime's session route gates on before any
+    // lookup (routes/widget.ts) — the cross-package contract under test.
+    expect(key).toMatch(/^pk_live_[0-9abcdefghjkmnpqrstvwxyz]{32}$/)
+    expect(newPublishableKey()).not.toBe(key)
+  })
+
+  it("is never mistakable for an api_keys row id", () => {
+    // The credential and the row id must stay visibly different shapes.
+    expect(isId("key", newPublishableKey())).toBe(false)
   })
 })
 

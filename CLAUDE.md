@@ -69,8 +69,14 @@ cookie, signup/login/logout as Server Actions, and requireUser() gating
 the dashboard — the schema types moved to shared/db (§2.4.6) so web
 types its queries against the same contract realtime does. The whole
 loop is verified by a DB-gated integration suite AND live in a real
-browser. Org onboarding (M3.3) is next. The one package in the plan but
-not here — loadtest/ — arrives with M4.
+browser. M3.3 is done — org onboarding (§9.7, DATAFLOW §7.6–§7.7): org +
+owner membership + publishable widget key created in one transaction,
+the org-scoped dashboard at /dashboard/[orgId] behind requireOrgMember
+(non-members get a 404 that reveals nothing), and newPublishableKey in
+the shared id registry (§2.4.1) because the pk format is a cross-package
+contract with realtime's session route. Provider credentials (M3.4) are
+next. The one package in the plan but not here — loadtest/ — arrives
+with M4.
 
 ---
 
@@ -170,7 +176,12 @@ and double-click selection; the fixed total length lets the schema enforce
 `char_length` CHECKs against hand-fabricated ids. The encoder is hand-rolled
 (15 lines) because shared/ is dependency-free by construction.
 `newId`'s prefix union is **closed** — adding an entity type means touching
-this file, keeping the registry in one reviewable place.
+this file, keeping the registry in one reviewable place. Since M3.3 the
+file also mints `newPublishableKey` (`pk_live_<32 base32>`): the pk VALUE
+format is a cross-package contract — realtime's session route gates on the
+`pk_` prefix and looks the value up verbatim — so it lives beside the id
+formats rather than in web/, its only minter; a test pins that a pk can
+never pass as an api_keys row id.
 
 #### §2.4.3 `shared/retrieval/rrf.ts`
 Reciprocal Rank Fusion — how the two retrieval arms become one ranking.
@@ -1544,10 +1555,13 @@ original WHY header plus what changed in translation:
   "wrong password"). Registration's "already registered" is knowingly
   enumerable — fixing that needs a verification mailer, recorded as
   future work rather than half-done.
-- **requireUser.ts** — the RSC gate: `currentUser()` or redirect to
-  /login. Deliberately NO middleware.ts: middleware can't reach the
-  database cheaply, and a cookie-presence check there would be theater
-  next to the page-level DB-backed check.
+- **requireUser.ts** — the RSC gate: `currentUser()` (wrapped in React
+  cache() since M3.3 — the dashboard layout renders chrome from it AND
+  every page re-asserts it, and layouts don't re-run on soft navigation,
+  so the honest double-check would otherwise be a double session query)
+  or redirect to /login. Deliberately NO middleware.ts: middleware can't
+  reach the database cheaply, and a cookie-presence check there would be
+  theater next to the page-level DB-backed check.
 - **actions.ts** — signup/login/logout as Server Actions in
   useActionState shape (user errors return as form state; success sets
   the cookie then redirects). CSRF: Next's own action origin check plus
@@ -1572,9 +1586,8 @@ original WHY header plus what changed in translation:
   autocomplete hint). Both redirect an already-signed-in visitor to
   /dashboard. signup imports login's page.css — one authpage shell, no
   duplicate.
-- **dashboard/** — the authenticated shell: requireUser() opening line,
-  decrypted email in the header, sign-out as a form action. Placeholder
-  body until org onboarding (M3.3).
+- **dashboard/** — restructured by M3.3 into a layout + org-scoped
+  routes; see §9.7.
 - **instrumentation.ts** — Next's one server-start hook, gated to the
   nodejs runtime: production asserts the email secrets exist at BOOT
   (the lazy readers are only reached from register/login, so without
@@ -1587,3 +1600,45 @@ compose database): signup → dashboard with decrypted email,
 document.cookie empty (httpOnly), sign-out → /login, wrong password →
 the uniform inline error, anonymous /dashboard → redirect, mixed-case
 email sign-in → same account.
+
+### §9.7 `src/lib/orgs/` + the dashboard routes (M3.3)
+
+The org layer, in the lib/auth split: queries in `index.ts` (plain
+vitest-testable), Server Actions in `actions.ts`, next/navigation only in
+the page guard.
+
+- **createOrgForUser** — org + owner org_member + publishable api_key in
+  ONE transaction: an org missing any of the three is corruption, not a
+  partial onboarding state. Only the PUBLIC key is minted; the secret
+  (sk) key arrives with its consumer (server-side session minting) —
+  minting a credential nobody can use would just be something to rotate.
+- **getOrgForMember / requireOrgMember** — every org read in the
+  dashboard goes through membership, so a cross-tenant page is
+  unrepresentable at this layer (the web-side sibling of retrieval's
+  org_id filter). Non-members get notFound(), NOT a redirect: a probe of
+  /dashboard/org_… must not learn whether the org exists, and a wrong id
+  looks exactly the same. Malformed ids fail isId() before any query.
+- **validateOrgName** — bounds only (2–64, trimmed); a name is a display
+  label, not an identifier.
+- **Routes** — `dashboard/layout.tsx` owns the chrome (brand, cached
+  currentUser email, sign-out) and deliberately does NOT gate (layouts
+  skip re-running on soft navigation; pages own the check).
+  `/dashboard` is the router: no orgs → the CreateOrgForm IS onboarding;
+  otherwise redirect to the first org, keeping "/dashboard" a stable
+  bookmark. `/dashboard/new` (literal segment, wins over the dynamic
+  sibling; "new" would fail isId anyway) creates additional orgs.
+  `/dashboard/[orgId]` is the overview: plan + role, the publishable key
+  shown IN FULL (public by design — the trust model's guarding lives in
+  the origin allowlist and rate limits, and saying so on the page is the
+  product teaching its own security model), an other-orgs switcher, and
+  an honest next-steps map naming which increments unlock providers,
+  sources, and the snippet.
+- **Tests** — keyless: org-name boundaries (1/2, 64/65), pk format and
+  its never-an-entity-id property (in shared's ids suite). DB-gated:
+  the atomic create (all three rows, DB-default plan), member access vs
+  the outsider/fabricated-id/malformed-id denials all collapsing to
+  null, multi-org listing in creation order with distinct keys.
+
+Verified live at M3.3: sign-in → onboarding form (org-less user) →
+create → /dashboard/org_… overview with the minted pk and owner badge;
+fetch of a fabricated org id under a live session → 404.

@@ -92,5 +92,21 @@ export function isId(prefix: IdPrefix, value: string): boolean {
   return true
 }
 
+/**
+ * Generates a publishable widget key: `pk_live_<32 chars of base32>`.
+ * Lives here rather than in web/ (its only minter today) because the VALUE
+ * format is a cross-package contract exactly like entity ids: realtime's
+ * session route looks it up verbatim and gates on the `pk_` prefix
+ * (realtime/src/routes/widget.ts), and the customer pastes it into their
+ * snippet. Not an entity id on purpose — api_keys rows have their own
+ * `key_…` id; this is the CREDENTIAL the row carries, and keeping the two
+ * shapes visibly different is what stops one being used as the other.
+ * "live" is the only mode that exists; a test-mode variant would slot in
+ * here the way Stripe's pk_test_ does.
+ */
+export function newPublishableKey(): string {
+  return `pk_live_${toBase32(randomBytes(ID_BYTES))}`
+}
+
 export type { IdPrefix }
 //#endregion

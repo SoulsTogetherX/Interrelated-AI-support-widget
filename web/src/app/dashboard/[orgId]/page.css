@@ -1,0 +1,75 @@
+/* Org overview. */
+
+.orghome {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.orghome-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.orghome-name {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.orghome-meta {
+  margin: 0.25rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+.orghome-neworg {
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.orghome-switcher {
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.orghome-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+.orghome-cardtitle {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.orghome-pk {
+  display: block;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+
+.orghome-cardnote {
+  margin: 0.75rem 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.orghome-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+}

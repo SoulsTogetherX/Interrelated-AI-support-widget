@@ -21,9 +21,10 @@ closed the milestone: the gate's threshold is eval-derived (§4.4's
 --sweep-threshold mode; analysis in eval/RESULTS.md), and GET /demo +
 GET /widget.js (realtime/src/routes/demo.ts) put the whole loop on one
 public URL. M3 (the dashboard) is underway: the web/ package exists
-(§7.1), and as of M3.2 it authenticates — sign-up, sign-in, sign-out,
-and the gated page are traced in §7.2–§7.5. Coming after: org
-onboarding (M3.3), handoff (M4).
+(§7.1), as of M3.2 it authenticates — sign-up, sign-in, sign-out, and
+the gated page are traced in §7.2–§7.5 — and as of M3.3 it onboards
+organizations (§7.6) with every org page behind the membership guard
+(§7.7). Coming after: provider credentials (M3.4), handoff (M4).
 
 ---
 
@@ -621,3 +622,44 @@ page RSC render
 There is deliberately no middleware doing a cookie-presence pre-check —
 it cannot reach the database cheaply, so the page-level check is the only
 one (requireUser.ts's header explains).
+
+### §7.6 Org creation — POST (Server Action) from `/dashboard` or `/dashboard/new`
+
+```
+CreateOrgForm submit
+  → createOrgAction                      web/src/lib/orgs/actions.ts
+    → currentUser (cached)                   actions are their own trust
+      · null → redirect("/login")            boundary: a POST can arrive
+                                             without the page rendering
+    → validateOrgName                    web/src/lib/orgs/index.ts (2–64, trimmed)
+    → createOrgForUser                   web/src/lib/orgs/index.ts
+        ONE transaction:
+          INSERT organizations (id = org_…, plan by DB default)
+          INSERT org_members   (role 'owner' — the partial unique
+                                index allows exactly one per org)
+          INSERT api_keys      (kind 'public',
+                                public_id = newPublishableKey()
+                                           shared/utils/ids.ts pk_live_…)
+        an org missing any of the three is corruption, so the three
+        rows are indivisible
+    → redirect("/dashboard/<orgId>")
+```
+
+### §7.7 Any org-scoped page — e.g. GET `/dashboard/[orgId]`
+
+```
+page RSC render
+  → requireOrgMember(orgId)              web/src/lib/orgs/index.ts
+    → requireUser                            §7.5's session resolve
+    → getOrgForMember(orgId, user.id)
+        isId("org", orgId) fails fast on malformed ids (no query)
+        SELECT org_members ⋈ organizations
+          WHERE org_id = … AND user_id = …   ← membership IS the tenant
+                                               boundary; there is no
+                                               unscoped org lookup
+    → no row → notFound()                    404, NOT a redirect: a
+                                             non-member probe must not
+                                             learn whether the org exists
+  → page renders (overview: getPublishableKey among live keys, the
+    other-orgs switcher via listOrgsForUser)
+```
