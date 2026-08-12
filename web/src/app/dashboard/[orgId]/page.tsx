@@ -63,8 +63,12 @@ export default async function OrgOverviewPage({
         <h2 className="orghome-cardtitle">Next steps</h2>
         <ol className="orghome-steps">
           <li>
-            <strong>Connect an AI provider</strong> — bring your own Groq,
-            Gemini, Ollama, or OpenAI-compatible key. Arrives with M3.4.
+            <strong>
+              <Link href={`/dashboard/${org.id}/providers`}>
+                Connect an AI provider
+              </Link>
+            </strong>{" "}
+            — bring your own Groq, Gemini, Ollama, or OpenAI-compatible key.
           </li>
           <li>
             <strong>Index your documentation</strong> — point a crawler at

@@ -11,6 +11,7 @@ export type {
   OrgMembersTable,
   SessionsTable,
   ApiKeysTable,
+  OrgProviderCredentialsTable,
   AllowedOriginsTable,
   SourcesTable,
   DocumentsTable,

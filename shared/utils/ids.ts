@@ -22,6 +22,7 @@ type IdPrefix =
   | "mem"   // org_members
   | "ses"   // sessions (dashboard login)
   | "key"   // api_keys (publishable + secret widget keys)
+  | "prv"   // org_provider_credentials (BYO provider key rows)
   | "ori"   // allowed_origins
   | "src"   // sources (a crawl target or upload)
   | "doc"   // documents (one fetched page / uploaded file)

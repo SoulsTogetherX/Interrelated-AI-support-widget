@@ -74,9 +74,16 @@ owner membership + publishable widget key created in one transaction,
 the org-scoped dashboard at /dashboard/[orgId] behind requireOrgMember
 (non-members get a 404 that reveals nothing), and newPublishableKey in
 the shared id registry (§2.4.1) because the pk format is a cross-package
-contract with realtime's session route. Provider credentials (M3.4) are
-next. The one package in the plan but not here — loadtest/ — arrives
-with M4.
+contract with realtime's session route. M3.4 is done — the credential
+vault (migration 004 §3.3.3, vault + validate §3.21, internal API §3.22,
+web surface §9.8, DATAFLOW §7.8): tenant provider keys tested with a
+LIVE round-trip before save, AES-256-GCM encrypted under a realtime-only
+master key, displayed only as a suffix, guarded by a read-back denial
+test and an SSRF vet on tenant base URLs; the dashboard's provider page
+drives it through a shared-secret server-to-server API that simply does
+not mount unconfigured. Embedding-role credentials are schema-ready but
+API-rejected until the remote embedding adapters land (M3.5, next). The
+one package in the plan but not here — loadtest/ — arrives with M4.
 
 ---
 
@@ -424,7 +431,12 @@ also declares `WIDGET_TOKEN_SECRET` (sync: false — set in the Render
 dashboard so widget sessions survive deploys; unset would silently log
 visitors out on every deploy) and pins `LLM_PROVIDER=mock` until per-org
 BYO credentials exist (M3) — honest for a stack that has no tenant keys
-yet; the M2.7 demo flips it to a real provider.
+yet; the M2.7 demo flips it to a real provider. Since M3.4 it also
+declares the internal-API pair (INTERNAL_API_SECRET +
+CREDENTIAL_MASTER_KEY, both sync: false) with the runbook in its
+comments: leave BOTH empty until the Vercel dashboard deploys — while
+unset the /internal/* routes do not exist, and server.ts refuses the
+half-configured state at boot.
 
 ### §2.6 `.env.example`
 The single documented registry of every environment variable the system
@@ -552,6 +564,20 @@ CHECK tie offsets to verified rows exactly; `content` on messages is what
 the visitor actually SAW (verified claims after stripping, or the refusal
 fallback), never raw model output. Composite `(message_id, ord)` key, like
 chunk_embeddings — nothing references a citation row individually.
+
+### §3.3.3 `src/db/migrations/004_provider_credentials.ts`
+BYO-provider storage: `org_provider_credentials`, one row per (org, role),
+the key as AES-GCM ciphertext (vault §3.21, AAD = row id) with `key_suffix`
+the only plaintext fragment. Deliberate deviation from the plan's
+partial-unique sketch: **UNIQUE(org_id, role) with HARD DELETE on
+replace** — a widget pk is OUR credential (rotation audit trail = asset);
+a provider key is SOMEONE ELSE'S (retained superseded ciphertexts =
+liability, one more thing a master-key compromise unlocks). Shape CHECKs
+in the api_keys style: ollama must NOT carry a key (unauthenticated),
+hosted providers must, openai_compatible goes either way (self-hosted
+vLLM/LM Studio run keyless); self-hosted shapes require base_url, hosted
+ones forbid it (a writable endpoint on a hosted provider is a
+request-forgery lever, not a feature).
 
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
@@ -709,6 +735,23 @@ force-exits.
   hijack probe (opaque error event, nothing to learn), malformed
   conversation ids, the daily cap 429 BEFORE the model call, and a
   rate-limit 429 that still carries CORS.
+- `credentials/__tests__/vault.test.ts` — keyless. Round-trip, AAD swap,
+  tamper/garbage rejection, and the NO-dev-fallback stance (missing or
+  short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
+  the opposite choice and someone will one day "align" them).
+- `routes/__tests__/internal.test.ts` — DB-gated, real HTTP listener, a
+  loopback OpenAI-compatible fake as the tenant's provider (recording
+  every request so tests assert what left the process). Pinned: uniform
+  empty 401s; 404 for unknown AND malformed org ids; test-without-save
+  storing nothing while the round-trip really hit the upstream;
+  encrypted-at-rest proof (ciphertext decrypts only under the row id);
+  replace-destroys-the-old-ciphertext; the READ-BACK DENIAL (no key
+  substring, no ciphertext in the status response); embedding-role
+  refusal naming M3.5; shape violations rejected with zero upstream
+  calls; a failing upstream storing nothing and never echoing the key;
+  the PRODUCTION url vet rejecting loopback (the SSRF default, asserted
+  by NOT injecting the test seam); and the unconfigured app 404ing the
+  whole surface.
 - `routes/__tests__/demo.test.ts` — keyless and DB-free (the demo surface
   is static config → static responses). The configured page carries the
   snippet with same-origin data-api; the unconfigured page is honest
@@ -1156,6 +1199,49 @@ through an attribute escape though it is server config, and a test feeds
 a hostile key to prove it. The bundle is read per request, no cache: 8 KB,
 immutable in prod, and a cache would go stale under the dev bind mount.
 
+### §3.21 `src/credentials/` — the vault and the validator (M3.4)
+
+- **vault.ts** — AES-256-GCM under CREDENTIAL_MASTER_KEY (32B base64,
+  realtime-only env: web handles plaintext for the seconds between paste
+  and save but can never decrypt at rest). Same v1.iv.tag.ct format and
+  AAD-binds-row pattern as web's email crypto, with two deliberate
+  differences: NO dev fallback key (a provider key is real even in dev —
+  encrypting under a published constant would be silently worthless), and
+  NO blind index (nothing looks credentials up by key; a searchable
+  digest would be pure attack surface).
+- **validate.ts** — everything between "payload arrived" and "worth
+  encrypting": shape checks per provider (mirroring migration 004's
+  CHECKs), the SSRF vet on tenant base URLs (safeFetch's assertPublicUrl,
+  injectable for tests via the same seam shape as hostGuard — honest
+  limitation recorded for M6: the vet runs at save time, and the
+  provider's own fetch has no connect-time re-check against DNS
+  rebinding), provider construction over the §2.4.5f–i adapters, and the
+  LIVE round-trip: one real 16-token completion, latency measured to
+  done, because a key that "looks right" but is revoked or out of quota
+  must fail at the Test button, not at a visitor's first question.
+  Embedding-role payloads are rejected by name until M3.5's remote
+  embedding adapters exist — the schema is ready; the API refuses to fake
+  the feature.
+
+### §3.22 `src/routes/internal.ts` — the dashboard's server-to-server API
+
+The only surface that ever sees a tenant key in plaintext, and only in
+transit. Auth is ONE shared secret (INTERNAL_API_SECRET, identical on
+Render and Vercel) compared in constant time — signed-request ceremony
+buys nothing between two backends we own on TLS. Uniform empty 401s; org
+ids vetted and existence-checked with 404 for both unknown and malformed
+(the id rides res.locals so handlers never re-trust req.params); no CORS
+at all, so browsers cannot read responses cross-origin. POST tests AND
+saves through one code path (`save:false` = the Test button — the two
+can never drift on what "valid" means); save is replace-by-delete in one
+transaction; GET returns display fields ONLY (the read-back denial test
+pins that neither ciphertext nor any key substring appears); DELETE hard-
+removes. The surface MOUNTS ONLY when configured (app.ts): unconfigured
+deployments 404 these paths — indistinguishable from the routes not
+existing, which the smoke probe (§6.1) asserts from outside. server.ts
+enforces the all-or-nothing env pair: a secret without the master key
+refuses to boot rather than accept keys it cannot encrypt.
+
 ---
 
 ## §4 `database/` and compose
@@ -1233,7 +1319,10 @@ route) and that chat without a session is 401. Since M2.7 it also probes
 the demo surface: /demo must be 200 in BOTH states (widget page or setup
 instructions — a recruiter must never see a 500) and /widget.js must
 serve with a JS content type, proving the bundle actually shipped inside
-the image. Failures are counted
+the image. Since M3.4 it also asserts the internal credential API is
+CLOSED from outside in every state — 404 (unconfigured: routes absent)
+or 401 (configured: secretless request rejected); anything else means
+the admin surface leaks. Failures are counted
 rather than thrown so one broken endpoint doesn't mask the state of the
 rest; every fetch carries a timeout because a probe that can hang turns a
 dead service into a stuck CI job.
@@ -1642,3 +1731,45 @@ the page guard.
 Verified live at M3.3: sign-in → onboarding form (org-less user) →
 create → /dashboard/org_… overview with the minted pk and owner badge;
 fetch of a fabricated org id under a live session → 404.
+
+### §9.8 `src/lib/realtime/`, `src/lib/providers/`, the providers page (M3.4)
+
+The web half of the credential path. The plaintext key exists web-side in
+exactly one flow — FormData → action → lib/realtime request body — and is
+never assigned, logged, or stored anywhere else.
+
+- **lib/realtime/index.ts** — the server-to-server client
+  (REALTIME_INTERNAL_URL + INTERNAL_API_SECRET; Server Actions only —
+  nothing client-side can import env secrets). Missing config is a NORMAL
+  state surfaced as a typed "not connected" result, not a crash; a 401 is
+  named as an OPERATOR error (secret mismatch) because a tenant retrying
+  it forever helps nobody. cache: "no-store" on every call. Tested
+  against a loopback fake of the internal API — OUR half of the wire
+  (secret header, save flag, error mapping); the real API's behavior is
+  realtime's own suite.
+- **lib/providers/queries.ts** — the READ side, straight from Postgres so
+  a realtime outage cannot blank the settings page. The iron, greppable
+  rule: NO query in web/ ever selects key_ciphertext; the column list
+  here is the complete set of things the dashboard may know.
+- **lib/providers/actions.ts** — trust rules in order: signed-in →
+  member (an outsider POSTing a foreign orgId gets the same not-found
+  shape the pages give) → OWNER for writes (provider keys are
+  billing-adjacent; agents answer conversations, they don't rewire the
+  org). Test and Save are one action distinguished by the pressed
+  button's intent value; unexpected intent degrades to the safe option
+  (test).
+- **components/ProviderForm/** + **dashboard/[orgId]/providers/** — the
+  provider picker drives field VISIBILITY only (requirements are
+  enforced server-side in checkCredentialInput; the form never
+  duplicates that logic). The page states the key's lifecycle on the
+  page — pasted over TLS, tested live, encrypted, suffix-only forever —
+  and shows the current credential from queries.ts with an owner-only
+  remove. Embedding card is an honest M3.5 placeholder.
+
+Verified live at M3.4 (realtime dev + web dev, both secrets set): a
+private base URL rejected through the whole chain with "must resolve to
+a public address", and a fake Groq key rejected by the REAL Groq API
+with the clean 401 message — the key itself absent from the error, and
+nothing persisted on either failure. A successful save is covered by the
+loopback-fake integration tests; live-saving waits on real free-tier
+keys (the plan's open item).

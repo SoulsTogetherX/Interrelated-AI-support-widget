@@ -7,6 +7,8 @@ import { configureWidgetRoutes } from "@/routes/widget"
 import type { WidgetRouteOptions } from "@/routes/widget"
 import { configureDemoRoutes } from "@/routes/demo"
 import type { DemoRouteOptions } from "@/routes/demo"
+import { configureInternalRoutes } from "@/routes/internal"
+import type { InternalRouteOptions } from "@/routes/internal"
 //#endregion
 
 //#region App Def
@@ -23,6 +25,10 @@ import type { DemoRouteOptions } from "@/routes/demo"
 interface CreateAppOptions {
   widget?: WidgetRouteOptions
   demo?: DemoRouteOptions
+  /** The dashboard's server-to-server surface (M3.4). Mounts only when a
+   *  secret is configured — an unconfigured deployment 404s these paths,
+   *  indistinguishable from the surface not existing. */
+  internal?: InternalRouteOptions
 }
 
 function createApp(options: CreateAppOptions = {}): Express {
@@ -42,6 +48,7 @@ function createApp(options: CreateAppOptions = {}): Express {
   configureHealthRoutes(app)
   if (options.widget !== undefined) configureWidgetRoutes(app, options.widget)
   if (options.demo !== undefined) configureDemoRoutes(app, options.demo)
+  if (options.internal !== undefined) configureInternalRoutes(app, options.internal)
 
   return app
 }

@@ -8,8 +8,35 @@ import { migrateToLatest } from "@/db/migrate"
 import { IngestWorker } from "@/ingest/worker"
 import { buildLLMProvider } from "@/answer/buildLLM"
 import { resolveTokenSecret } from "@/widget/sessionToken"
+import { hasMasterKey } from "@/credentials/vault"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import type { EmbeddingProvider } from "@providers/embedding/types"
+import type { InternalRouteOptions } from "@/routes/internal"
+//#endregion
+
+//#region Internal API opt-in
+// The dashboard's server-to-server surface (routes/internal.ts) mounts only
+// when INTERNAL_API_SECRET is configured — pre-M3 deployments keep booting
+// with the routes absent. Configuration is all-or-nothing: a secret WITHOUT
+// the vault's master key would accept a tenant's credential and then throw
+// at encryption time (after the plaintext crossed the wire), so the
+// half-configured state refuses to boot instead. A short secret refuses
+// too — same stance as the widget token secret.
+function resolveInternalOptions(): InternalRouteOptions | undefined {
+  const secret = process.env.INTERNAL_API_SECRET
+  if (!secret) return undefined
+  if (secret.length < 32) {
+    throw new Error("INTERNAL_API_SECRET must be at least 32 characters.")
+  }
+  if (!hasMasterKey()) {
+    throw new Error(
+      "INTERNAL_API_SECRET is set but CREDENTIAL_MASTER_KEY is not — the " +
+        "internal API would accept tenant keys it cannot encrypt. Set both " +
+        "or neither.",
+    )
+  }
+  return { secret }
+}
 //#endregion
 
 //#region Embedder selection
@@ -67,6 +94,9 @@ async function start(): Promise<void> {
   const dailyCap = Number(process.env.WIDGET_DAILY_ANSWER_CAP)
   console.log(`[boot] widget: llm=${llm.model} embeddings=${embedder.model}`)
 
+  const internal = resolveInternalOptions()
+  console.log(`[boot] internal api: ${internal ? "mounted" : "not configured"}`)
+
   const app = createApp({
     widget: {
       db, embedder, llm,
@@ -74,6 +104,7 @@ async function start(): Promise<void> {
       ...(Number.isFinite(maxDistance) ? { maxDistance } : {}),
       ...(Number.isFinite(dailyCap) ? { dailyAnswerCap: dailyCap } : {}),
     },
+    ...(internal ? { internal } : {}),
     demo: {
       // Null until DEMO_PUBLISHABLE_KEY is set — /demo then serves setup
       // instructions instead of a broken widget (routes/demo.ts).

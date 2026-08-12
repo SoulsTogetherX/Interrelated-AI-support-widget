@@ -1,0 +1,330 @@
+// The internal credential API, driven over real HTTP against real Postgres
+// (DB-gated like the widget suite) with a LOOPBACK OpenAI-compatible fake
+// playing the tenant's provider — the same in-test upstream pattern as the
+// provider suites. The security assertions are the point: uniform 401s,
+// the read-back denial, encrypted-at-rest proof, and the SSRF default that
+// REJECTS loopback (the tests that need to reach the fake inject a
+// permissive vet through the same seam production leaves alone).
+import { createServer } from "node:http"
+import { randomBytes } from "node:crypto"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
+
+import pool, { db } from "@/db/pool"
+import { migrateToLatest } from "@/db/migrate"
+import { createApp } from "@/app"
+import { decryptProviderKey } from "@/credentials/vault"
+import { newId } from "@shared/utils/ids"
+
+import type { Server } from "node:http"
+
+const hasDb = Boolean(process.env.POSTGRES_PASSWORD)
+const SECRET = "internal-test-secret-0123456789abcdef" // ≥32 chars
+const TENANT_KEY = "sk-tenant-supersecret-abcd1234"
+
+/** What the API's JSON bodies can carry — typed so assertions stay checked. */
+interface ApiBody {
+  ok?: boolean
+  saved?: boolean
+  model?: string
+  latencyMs?: number
+  suffix?: string | null
+  error?: string
+  credentials?: Array<Record<string, unknown>>
+}
+
+let appServer: Server
+let base: string
+let fakeProvider: Server
+let fakeBase: string
+let orgId: string
+let requestsSeen: Array<{ url: string; auth: string | undefined }>
+
+function post(path: string, body: unknown, secret?: string): Promise<Response> {
+  return fetch(`${base}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(secret !== undefined ? { "x-internal-secret": secret } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+describe.skipIf(!hasDb)("internal credential API", () => {
+  beforeAll(async () => {
+    process.env.CREDENTIAL_MASTER_KEY = randomBytes(32).toString("base64")
+    await migrateToLatest(db)
+
+    orgId = newId("org")
+    await db.insertInto("organizations").values({ id: orgId, name: "Internal Test Org" }).execute()
+
+    // A minimal OpenAI-compatible upstream: SSE deltas then [DONE]. Records
+    // every request so tests can assert what left the process.
+    requestsSeen = []
+    fakeProvider = createServer((req, res) => {
+      requestsSeen.push({ url: req.url ?? "", auth: req.headers.authorization })
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n')
+      res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
+      res.write("data: [DONE]\n\n")
+      res.end()
+    })
+    await new Promise<void>((r) => fakeProvider.listen(0, "127.0.0.1", r))
+    const fp = fakeProvider.address() as { port: number }
+    fakeBase = `http://127.0.0.1:${fp.port}/v1`
+
+    // vetBaseUrl: allow loopback so the fake is reachable; the production
+    // default's fail-closed behavior gets its own dedicated app below.
+    const app = createApp({
+      internal: { secret: SECRET, vetBaseUrl: async () => {}, testTimeoutMs: 3000 },
+    })
+    appServer = createServer(app)
+    await new Promise<void>((r) => appServer.listen(0, "127.0.0.1", r))
+    const ap = appServer.address() as { port: number }
+    base = `http://127.0.0.1:${ap.port}`
+  })
+
+  afterAll(async () => {
+    appServer?.close()
+    fakeProvider?.close()
+    await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+    await pool.end()
+    delete process.env.CREDENTIAL_MASTER_KEY
+  })
+
+  it("rejects a missing or wrong secret with one uniform empty 401", async () => {
+    const missing = await post(`/internal/orgs/${orgId}/credentials`, {})
+    const wrong = await post(`/internal/orgs/${orgId}/credentials`, {}, "x".repeat(36))
+    expect(missing.status).toBe(401)
+    expect(wrong.status).toBe(401)
+    expect(await missing.text()).toBe("")
+    expect(await wrong.text()).toBe("")
+  })
+
+  it("404s unknown and malformed org ids alike", async () => {
+    const fabricated = await post(`/internal/orgs/${newId("org")}/credentials`, {}, SECRET)
+    const malformed = await post("/internal/orgs/not-an-org/credentials", {}, SECRET)
+    expect(fabricated.status).toBe(404)
+    expect(malformed.status).toBe(404)
+  })
+
+  it("tests without saving when save:false — the Test button path", async () => {
+    const res = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      {
+        role: "generation",
+        provider: "openai_compatible",
+        apiKey: TENANT_KEY,
+        baseUrl: fakeBase,
+        model: "test-model",
+        save: false,
+      },
+      SECRET,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as ApiBody
+    expect(body.saved).toBe(false)
+    expect(body.model).toBe("test-model")
+    expect(typeof body.latencyMs).toBe("number")
+
+    const rows = await db
+      .selectFrom("org_provider_credentials")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .execute()
+    expect(rows).toHaveLength(0)
+    // The round-trip really happened, carrying the tenant's key upstream.
+    expect(requestsSeen.at(-1)?.auth).toBe(`Bearer ${TENANT_KEY}`)
+  })
+
+  it("saves a credential encrypted at rest after a live round-trip", async () => {
+    const res = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      {
+        role: "generation",
+        provider: "openai_compatible",
+        apiKey: TENANT_KEY,
+        baseUrl: fakeBase,
+        model: "test-model",
+      },
+      SECRET,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as ApiBody
+    expect(body.saved).toBe(true)
+    expect(body.suffix).toBe("1234")
+
+    const row = await db
+      .selectFrom("org_provider_credentials")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .executeTakeFirstOrThrow()
+    // At rest: no plaintext anywhere in the row, and the ciphertext
+    // decrypts back only under this row's id.
+    expect(row.key_ciphertext).not.toBeNull()
+    expect(row.key_ciphertext).not.toContain(TENANT_KEY)
+    expect(row.key_suffix).toBe("1234")
+    expect(decryptProviderKey(row.key_ciphertext!, row.id)).toBe(TENANT_KEY)
+    expect(row.last_validation).toContain("test-model")
+  })
+
+  it("replaces on re-save: the superseded ciphertext ceases to exist", async () => {
+    const res = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      {
+        role: "generation",
+        provider: "openai_compatible",
+        apiKey: "sk-tenant-replacement-key-9999",
+        baseUrl: fakeBase,
+        model: "test-model",
+      },
+      SECRET,
+    )
+    expect(res.status).toBe(200)
+    const rows = await db
+      .selectFrom("org_provider_credentials")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .execute()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].key_suffix).toBe("9999")
+  })
+
+  it("status read-back returns NO key material — the denial test", async () => {
+    const res = await fetch(`${base}/internal/orgs/${orgId}/credentials`, {
+      headers: { "x-internal-secret": SECRET },
+    })
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    // Not the current key, not the replaced one, not any ciphertext.
+    expect(text).not.toContain("replacement")
+    expect(text).not.toContain(TENANT_KEY)
+    expect(text).not.toContain("v1.")
+    const body = JSON.parse(text)
+    expect(body.credentials).toHaveLength(1)
+    expect(body.credentials[0]).toMatchObject({
+      role: "generation",
+      provider: "openai_compatible",
+      key_suffix: "9999",
+    })
+    expect("key_ciphertext" in body.credentials[0]).toBe(false)
+  })
+
+  it("rejects embedding-role credentials until M3.5, naming the reason", async () => {
+    const res = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      { role: "embedding", provider: "gemini", apiKey: "AIza-embedding-key" },
+      SECRET,
+    )
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as ApiBody).error).toContain("M3.5")
+  })
+
+  it("rejects shape violations without any upstream call", async () => {
+    const before = requestsSeen.length
+    const cases: Array<Record<string, unknown>> = [
+      { role: "generation", provider: "groq" }, // key required
+      { role: "generation", provider: "ollama", baseUrl: fakeBase, model: "m", apiKey: "k".repeat(10) }, // ollama+key
+      { role: "generation", provider: "openai_compatible", model: "m" }, // base required
+      { role: "generation", provider: "groq", apiKey: "k".repeat(10), baseUrl: fakeBase }, // fixed endpoint
+      { role: "generation", provider: "openai_compatible", baseUrl: fakeBase, apiKey: "k".repeat(10) }, // model required
+      { role: "generation", provider: "openai_compatible", baseUrl: "ftp://x/", model: "m" },
+      { role: "generation", provider: "openai_compatible", baseUrl: "http://user:pw@host/v1", model: "m" },
+    ]
+    for (const body of cases) {
+      const res = await post(`/internal/orgs/${orgId}/credentials`, body, SECRET)
+      expect(res.status).toBe(422)
+    }
+    expect(requestsSeen.length).toBe(before)
+  })
+
+  it("a failing upstream fails the save and stores nothing", async () => {
+    const dead = createServer((_req, res) => {
+      res.writeHead(500)
+      res.end("upstream exploded")
+    })
+    await new Promise<void>((r) => dead.listen(0, "127.0.0.1", r))
+    const dp = dead.address() as { port: number }
+    try {
+      const res = await post(
+        `/internal/orgs/${orgId}/credentials`,
+        {
+          role: "generation",
+          provider: "openai_compatible",
+          apiKey: "sk-should-never-persist-0000",
+          baseUrl: `http://127.0.0.1:${dp.port}/v1`,
+          model: "test-model",
+        },
+        SECRET,
+      )
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as ApiBody
+      // The failure message must never carry the tenant's key.
+      expect(JSON.stringify(body)).not.toContain("should-never-persist")
+      const rows = await db
+        .selectFrom("org_provider_credentials")
+        .selectAll()
+        .where("org_id", "=", orgId)
+        .execute()
+      expect(rows.every((r) => r.key_suffix !== "0000")).toBe(true)
+    } finally {
+      dead.close()
+    }
+  })
+
+  it("DELETE removes the role's credential", async () => {
+    const res = await fetch(`${base}/internal/orgs/${orgId}/credentials/generation`, {
+      method: "DELETE",
+      headers: { "x-internal-secret": SECRET },
+    })
+    expect(res.status).toBe(200)
+    const rows = await db
+      .selectFrom("org_provider_credentials")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .execute()
+    expect(rows).toHaveLength(0)
+  })
+
+  it("the PRODUCTION url vet rejects private/loopback base URLs", async () => {
+    // A second app WITHOUT the injected vet: the default must refuse our
+    // loopback fake — this is the SSRF boundary doing its job, and it is
+    // exactly why the other tests had to inject a permissive one.
+    const prodApp = createApp({ internal: { secret: SECRET } })
+    const prodServer = createServer(prodApp)
+    await new Promise<void>((r) => prodServer.listen(0, "127.0.0.1", r))
+    const pp = prodServer.address() as { port: number }
+    try {
+      const res = await fetch(`http://127.0.0.1:${pp.port}/internal/orgs/${orgId}/credentials`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-internal-secret": SECRET },
+        body: JSON.stringify({
+          role: "generation",
+          provider: "openai_compatible",
+          apiKey: "k".repeat(10),
+          baseUrl: fakeBase,
+          model: "test-model",
+        }),
+      })
+      expect(res.status).toBe(422)
+      expect(((await res.json()) as ApiBody).error).toContain("public address")
+    } finally {
+      prodServer.close()
+    }
+  })
+
+  it("stays absent (404) when no secret is configured", async () => {
+    const bareApp = createApp({})
+    const bareServer = createServer(bareApp)
+    await new Promise<void>((r) => bareServer.listen(0, "127.0.0.1", r))
+    const bp = bareServer.address() as { port: number }
+    try {
+      const res = await fetch(`http://127.0.0.1:${bp.port}/internal/orgs/${orgId}/credentials`, {
+        headers: { "x-internal-secret": SECRET },
+      })
+      expect(res.status).toBe(404)
+    } finally {
+      bareServer.close()
+    }
+  })
+})

@@ -1,0 +1,131 @@
+//#region Why this file
+// The server-to-server client for realtime's internal API — the dashboard
+// half of the M3.4 credential path. Runs ONLY on the server (Server
+// Actions import it; nothing client-side can, because the secret lives in
+// env). The plaintext provider key exists web-side exactly here, exactly
+// in transit: request body out, never logged, never stored, never in an
+// error message.
+//
+// Config is two env vars: REALTIME_INTERNAL_URL (the Render service, or
+// localhost:3000 in dev) and INTERNAL_API_SECRET (identical value on both
+// services). Missing config is a NORMAL state — a fresh checkout or a
+// Vercel preview without secrets — so it surfaces as a typed "not
+// connected" result the UI can explain, not a crash.
+//#endregion
+
+//#region Types
+export interface CredentialPayload {
+  role: "generation" | "embedding"
+  provider: string
+  apiKey?: string
+  baseUrl?: string
+  model?: string
+}
+
+export type InternalResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: string }
+
+export interface SaveOutcome {
+  saved: boolean
+  model: string
+  latencyMs: number
+  suffix: string | null
+}
+//#endregion
+
+//#region Config
+function config(): { baseUrl: string; secret: string } | null {
+  const baseUrl = process.env.REALTIME_INTERNAL_URL
+  const secret = process.env.INTERNAL_API_SECRET
+  if (!baseUrl || !secret) {
+    return null
+  }
+  return { baseUrl: baseUrl.replace(/\/$/, ""), secret }
+}
+
+const NOT_CONNECTED =
+  "The dashboard is not connected to the realtime service — " +
+  "REALTIME_INTERNAL_URL and INTERNAL_API_SECRET must both be set."
+//#endregion
+
+//#region Calls
+async function call(
+  path: string,
+  init: { method: string; body?: unknown },
+): Promise<InternalResult<Record<string, unknown>>> {
+  const cfg = config()
+  if (!cfg) {
+    return { ok: false, error: NOT_CONNECTED }
+  }
+  let res: Response
+  try {
+    res = await fetch(`${cfg.baseUrl}${path}`, {
+      method: init.method,
+      headers: {
+        "content-type": "application/json",
+        "x-internal-secret": cfg.secret,
+      },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      // Credential operations must never be cached by Next's fetch layer.
+      cache: "no-store",
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch {
+    return { ok: false, error: "Could not reach the realtime service." }
+  }
+
+  if (res.status === 401) {
+    // A secret mismatch is an OPERATOR error, and saying so beats a
+    // generic failure the tenant will retry forever.
+    return { ok: false, error: "The internal API secret is misconfigured (401)." }
+  }
+  let body: Record<string, unknown> = {}
+  try {
+    body = (await res.json()) as Record<string, unknown>
+  } catch {
+    // Non-JSON body (404 .end(), proxies) — fall through to status check.
+  }
+  if (!res.ok) {
+    const error = typeof body.error === "string" ? body.error : `Request failed (${res.status}).`
+    return { ok: false, error }
+  }
+  return { ok: true, value: body }
+}
+
+/** Test (save=false) or save a credential — one call shape because the
+ *  server keeps them one code path. */
+export async function submitCredential(
+  orgId: string,
+  payload: CredentialPayload,
+  save: boolean,
+): Promise<InternalResult<SaveOutcome>> {
+  const result = await call(`/internal/orgs/${orgId}/credentials`, {
+    method: "POST",
+    body: { ...payload, save },
+  })
+  if (!result.ok) {
+    return result
+  }
+  const v = result.value
+  return {
+    ok: true,
+    value: {
+      saved: v.saved === true,
+      model: typeof v.model === "string" ? v.model : "unknown",
+      latencyMs: typeof v.latencyMs === "number" ? v.latencyMs : 0,
+      suffix: typeof v.suffix === "string" ? v.suffix : null,
+    },
+  }
+}
+
+export async function removeCredential(
+  orgId: string,
+  role: "generation" | "embedding",
+): Promise<InternalResult<null>> {
+  const result = await call(`/internal/orgs/${orgId}/credentials/${role}`, {
+    method: "DELETE",
+  })
+  return result.ok ? { ok: true, value: null } : result
+}
+//#endregion

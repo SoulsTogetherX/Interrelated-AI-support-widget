@@ -100,6 +100,17 @@ await check("GET /widget.js serves the bundle", async () => {
   if (!type.includes("javascript")) throw new Error(`content-type ${type}`)
 })
 
+// The M3.4 internal API must be CLOSED from the outside in every state:
+// unconfigured stacks (the e2e compose) don't mount it at all → 404;
+// configured deployments (Render with INTERNAL_API_SECRET set) reject a
+// secretless request → 401. Anything else means the admin surface leaks.
+await check("internal credential API is closed to outsiders", async () => {
+  const res = await get("/internal/orgs/org_probe/credentials")
+  if (res.status !== 404 && res.status !== 401) {
+    throw new Error(`status ${res.status} — internal surface reachable without a secret`)
+  }
+})
+
 if (failures > 0) {
   console.error(`\n${failures} smoke check(s) failed`)
   process.exit(1)

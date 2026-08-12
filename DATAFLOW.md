@@ -22,9 +22,12 @@ closed the milestone: the gate's threshold is eval-derived (§4.4's
 GET /widget.js (realtime/src/routes/demo.ts) put the whole loop on one
 public URL. M3 (the dashboard) is underway: the web/ package exists
 (§7.1), as of M3.2 it authenticates — sign-up, sign-in, sign-out, and
-the gated page are traced in §7.2–§7.5 — and as of M3.3 it onboards
+the gated page are traced in §7.2–§7.5 — as of M3.3 it onboards
 organizations (§7.6) with every org page behind the membership guard
-(§7.7). Coming after: provider credentials (M3.4), handoff (M4).
+(§7.7), and as of M3.4 it connects BYO provider keys through realtime's
+internal API (§7.8): live-tested, encrypted at rest, suffix-only ever
+after. Coming after: per-org provider resolution in the answer path
+(M3.5), handoff (M4).
 
 ---
 
@@ -662,4 +665,38 @@ page RSC render
                                              learn whether the org exists
   → page renders (overview: getPublishableKey among live keys, the
     other-orgs switcher via listOrgsForUser)
+```
+
+### §7.8 Provider credential test/save — POST (Server Action) from `/dashboard/[orgId]/providers`
+
+The one flow where a tenant's provider key exists in plaintext, end to
+end; every hop it does NOT persist at is the point.
+
+```
+ProviderForm submit (Test or Test & save — intent from the pressed button)
+  → submitProviderAction                 web/src/lib/providers/actions.ts
+    → currentUser → getOrgForMember → role must be OWNER
+    → submitCredential(orgId, payload, save)
+                                         web/src/lib/realtime/index.ts
+        POST {REALTIME_INTERNAL_URL}/internal/orgs/<id>/credentials
+          x-internal-secret: INTERNAL_API_SECRET   (constant-time checked)
+          body: { role, provider, apiKey?, baseUrl?, model?, save }
+      → requireSecret → requireOrg       realtime/src/routes/internal.ts
+      → checkCredentialInput             realtime/src/credentials/validate.ts
+          shape per provider + SSRF vet: assertPublicUrl(base_url)
+          (resolves DNS, rejects private/loopback — fail closed)
+      → buildCredentialProvider → testGenerationRoundTrip
+          ONE real 16-token completion against the tenant's provider;
+          latency measured to done; failure → 422 with a message that
+          never contains the key (LLMHttpError strips by construction)
+      → save:false → report + STOP (nothing written — the Test button)
+      → save:true  → one transaction:
+            DELETE old (org, role) row      ← superseded ciphertext
+                                              ceases to exist
+            INSERT { key_ciphertext: AES-GCM(key, master, aad=row id),
+                     key_suffix: last 4, last_validation: "model, Nms" }
+                                         realtime/src/credentials/vault.ts
+    → success → revalidatePath(providers page) → status card re-renders
+      from web/src/lib/providers/queries.ts — which can never select
+      key_ciphertext; the suffix is all the dashboard will ever show
 ```

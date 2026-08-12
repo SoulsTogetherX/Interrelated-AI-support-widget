@@ -100,6 +100,28 @@ interface ApiKeysTable {
   created_at: ColumnType<Date, string | Date | undefined, never>
 }
 
+/** A tenant's BYO provider configuration, one row per (org, role). The API
+ *  key is AES-256-GCM ciphertext under realtime's server-held master key
+ *  (AAD = row id); key_suffix is the ONLY plaintext fragment that exists
+ *  outside it. Replacement hard-deletes the old row — retaining superseded
+ *  ciphertexts of someone else's credential is liability, not audit trail
+ *  (see migration 004 for the full argument + the shape CHECKs). */
+interface OrgProviderCredentialsTable {
+  id: string
+  org_id: string
+  role: "generation" | "embedding"
+  provider: "groq" | "gemini" | "ollama" | "openai_compatible" | "anthropic"
+  /** NULL = the provider's default model; validate.ts requires an explicit
+   *  model where no sane default exists (openai_compatible, ollama). */
+  model: string | null
+  base_url: string | null
+  key_ciphertext: string | null
+  key_suffix: string | null
+  last_validated_at: ColumnType<Date | null, string | Date | null, string | Date>
+  last_validation: string | null
+  created_at: ColumnType<Date, string | Date | undefined, never>
+}
+
 /** Origin allowlist: the set of exact origins allowed to mint widget
  *  sessions for an org. Exact match only — wildcard matching is a common
  *  source of allowlist bypasses (e.g. a suffix check that admits
@@ -274,6 +296,7 @@ interface Database {
   org_members: OrgMembersTable
   sessions: SessionsTable
   api_keys: ApiKeysTable
+  org_provider_credentials: OrgProviderCredentialsTable
   allowed_origins: AllowedOriginsTable
   sources: SourcesTable
   documents: DocumentsTable
@@ -294,6 +317,7 @@ export type {
   OrgMembersTable,
   SessionsTable,
   ApiKeysTable,
+  OrgProviderCredentialsTable,
   AllowedOriginsTable,
   SourcesTable,
   DocumentsTable,

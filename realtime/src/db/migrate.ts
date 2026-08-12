@@ -5,6 +5,7 @@ import type { Kysely, Migration, MigrationProvider, MigrationResultSet } from "k
 import * as migration001 from "@/db/migrations/001_initial_schema"
 import * as migration002 from "@/db/migrations/002_content_pipeline"
 import * as migration003 from "@/db/migrations/003_chat"
+import * as migration004 from "@/db/migrations/004_provider_credentials"
 //#endregion
 
 //#region Type Defs
@@ -30,6 +31,7 @@ const MIGRATIONS: Record<string, Migration> = {
   "001_initial_schema": migration001,
   "002_content_pipeline": migration002,
   "003_chat": migration003,
+  "004_provider_credentials": migration004,
 }
 //#endregion
 
