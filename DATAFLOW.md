@@ -14,8 +14,10 @@ grounded answer pipeline (§5): question → retrieval → groundedness gate →
 LLM → claim verification → stripped, cited answer. As of M2.5 the
 pipeline HAS its HTTP surface (§5.3): the widget session mint (origin
 allowlist → HMAC token) and the token-authenticated SSE chat route that
-serializes §5's events verbatim. Coming after: the widget bundle (M2.6),
-dashboard auth (M3), handoff (M4).
+serializes §5's events verbatim. As of M2.6 the surface has its CLIENT
+(§5.4): the embeddable widget — script-tag config, shadow-DOM UI,
+SSE consumption — verified live on the three fixture host pages. Coming
+after: dashboard auth (M3), handoff (M4).
 
 ---
 
@@ -432,6 +434,39 @@ widget (M2.6) or curl-with-headers
           each AnswerEvent             → `data: <json>\n\n`
       req 'close' → AbortController    a closed tab stops the token spend
       any failure past the SSE start   → one opaque {type:"error"} event
+```
+
+### §5.4 The widget client — snippet → bubble → answer (M2.6)
+
+```
+customer pastes the snippet anywhere in their page
+  <script src=".../widget.js" async data-key="pk_…" data-api="https://…">
+  → boot()                               widget/src/index.ts
+      window.fetch CAPTURED at evaluation (before analytics wrappers)
+      config from the script tag's own data- attributes
+      double-mount guard; DOMContentLoaded-safe body append
+      → mountWidget(host, new ApiClient(…))
+                                         widget/src/ui.ts
+          shadow root (mode open) + :host { all: initial } armor
+          styles via adoptedStyleSheets  (CSP-exempt; <style> fallback)
+
+visitor clicks the bubble
+  → ensureSession()                      widget/src/api.ts
+      POST /v1/widget/session (→ §5.3)   ALSO the Neon-warming handshake;
+      visitor id from guarded localStorage; token held in memory
+
+visitor asks
+  → ask(question, conversationId?)       widget/src/api.ts
+      POST /v1/widget/chat, Bearer token
+      401 → ONE silent re-mint + retry   30-min expiry, invisible
+      429 → QuotaError | RateLimitError  distinct visitor-facing states
+      → readAnswerEvents(body)           widget/src/sse.ts
+  → per event                            widget/src/ui.ts
+      meta    → conversation id threads into the NEXT ask
+      claim   → textContent paragraph + http(s)-vetted citation link
+                (NEVER innerHTML — claim text is model output)
+      refusal → ordinary assistant bubble
+      error   → notice + input recovery (the widget never bricks)
 ```
 
 ## §6 The test and CI flows (how the above gets verified)

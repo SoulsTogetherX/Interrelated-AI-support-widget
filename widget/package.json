@@ -1,0 +1,17 @@
+{
+  "name": "interrelated-widget",
+  "private": true,
+  "description": "The embeddable chat widget: vanilla TS, Shadow DOM, esbuild IIFE, ZERO runtime dependencies. The 15 KB gzipped CI budget (scripts/widget-size.mjs) is a design constraint, not an aspiration - every dependency proposal answers to it.",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --minify --outfile=dist/widget.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fixtures": "node scripts/serve.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

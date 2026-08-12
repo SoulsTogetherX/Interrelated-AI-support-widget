@@ -42,8 +42,12 @@ origin allowlist with allowlist-scoped CORS, per-IP and per-visitor token
 buckets, the per-org daily answer ceiling checked before any model call,
 and the SSE chat route that serializes the answer pipeline's events —
 mounted in every stack and driven keylessly by the context-quoting mock.
-Still to come in M2: the widget itself (M2.6) and the eval-derived
-refusal threshold + demo (M2.7). Packages that appear in
+M2.6 is done — the widget itself (§8): vanilla TS, Shadow DOM with
+`:host { all: initial }` armor, zero runtime dependencies, 3.8 KB gzipped
+against the CI-enforced 15 KB budget (§6.2), verified live in a real
+browser on all three fixture host pages (Tailwind, Bootstrap, and the
+hostile `* { all: unset }` + strict-CSP page — §8.4). Still to come in
+M2: the eval-derived refusal threshold + public demo (M2.7). Packages that appear in
 the plan but not here (web/, widget/, loadtest/) do not exist yet — they
 arrive across M2–M4.
 
@@ -1046,6 +1050,20 @@ conversation id, which learn nothing but "error"). CORS is hand-rolled
 (~15 lines for two routes) and preflight grants nothing: enforcement
 rides on the actual request's response headers.
 
+### §3.19 `realtime/scripts/seedWidgetDemo.ts`
+Dev-only CLI (`npm run seed-demo`): the fixture/demo organization —
+org, the fixed publishable key the fixture pages hardcode (pk values are
+public by design), the :4400 fixture origins, and a six-chunk support
+corpus. Idempotent by REPLACEMENT (the demo source is deleted and
+re-seeded, so the seed is always exactly what the file says), and it
+refuses to reassign the pk if it somehow exists under another org. One
+subtle decision, learned live: embedding input is trail-free under the
+MOCK embedder but trail-prepended (the §3.10.5 production
+representation) under local — the mock hashes its input, so prepending
+the heading trail doesn't shift the vector, it REPLACES it, silently
+killing exact-text retrieval (the mock's only mode) and making the gate
+refuse everything, which looks like a widget bug and is not.
+
 ---
 
 ## §4 `database/` and compose
@@ -1087,8 +1105,9 @@ probed is the artifact shipped.
 
 ### §5.1 `ci.yml`
 `verify` (10-min timeout): pgvector service container + per-package
-`npm ci` → typechecks (shared, providers, eval, realtime) → tests; the
-DB-gated suites run for real here. `e2e` (needs verify): generates a
+`npm ci` → typechecks (shared, providers, eval, realtime, widget) →
+tests (including the widget's jsdom suite) → widget build → the §6.2
+size budget; the DB-gated suites run for real here. `e2e` (needs verify): generates a
 throwaway `.env`, `compose -f prod up --build --wait`, runs
 `scripts/smoke-test.mjs` against the live stack, dumps logs on failure,
 always tears down. `eval` (needs verify, parallel with e2e): its own
@@ -1133,6 +1152,14 @@ the root runner owns its tests, `typecheck:eval` its types, and the runner
 (realtime/scripts/runEval.ts, §3.14) consumes it through the `@eval/*`
 alias. Committed artifacts only — `eval/results/` (per-run droppings) is
 gitignored; what IS committed is what someone chose to publish.
+
+### §6.2 `scripts/widget-size.mjs`
+The 15 KB gzipped budget as a merge blocker. Gzip, not raw — gzip is what
+crosses the wire from any CDN and what a customer's performance audit
+sees. The budget is deliberately far above the actual size (~3.8 KB at
+M2.6): it exists to flag a dependency creeping in or a framework-shaped
+rewrite, not normal growth, and the number printed on every CI run is
+what keeps the README's size claim honest.
 
 ### §7.1 `eval/corpus/`
 The frozen documentation snapshot: 31 Fastify v5.11.3 pages, MIT-licensed,
@@ -1188,3 +1215,76 @@ recall-vs-ef_search curve WITH the explanation of why it is flat at this
 corpus size, the 400-vs-800 chunk ablation behind the 400 default, and a
 failure analysis that categorizes all 12 misses and commits to not padding
 the golden set to bless near-misses.
+
+---
+
+## §8 `widget/` — the embeddable chat widget (M2.6)
+
+Vanilla TS bundled by esbuild into one IIFE, Shadow DOM, ZERO runtime
+dependencies — the 15 KB gzipped budget (§6.2) is the package's design
+constraint, and M2.6 lands at ~3.8 KB. Own package.json (app packages own
+their deps; all four are devDependencies). shared/ contributes TYPE-ONLY
+imports (the AnswerEvent wire protocol) that esbuild erases — zero bytes,
+one source of truth for the contract.
+
+### §8.1 `src/index.ts` + `src/api.ts` + `src/sse.ts`
+The boot and network half. index.ts reads its config off its own
+`<script>` tag (data-key / data-api / data-title / data-accent) via
+document.currentScript, captures window.fetch at evaluation time (before
+any analytics snippet can wrap it — Promise needs no capture: es2020
+async functions use the engine's internal Promise, not window.Promise),
+guards double-mounting, and degrades a misconfigured snippet to "no
+widget", never a broken host page. api.ts speaks the §3.18 route
+contract: mint at bubble-open (the DB-warming handshake), the visitor id
+persisted in guarded localStorage (Safari private mode throws on ACCESS
+— degraded mode is a per-load visitor), ONE silent re-mint on a 401 so
+the 30-minute token expiry is invisible mid-conversation, and the two
+429 bodies mapped to distinct errors (daily quota is terminal for today;
+a bucket limit is "one moment"). sse.ts is the browser twin of
+realtime's SSE parser — reimplemented rather than imported because the
+widget imports RUNTIME code from nowhere; streaming TextDecoder, frame
+buffering, trailing-partial-frame discard.
+
+### §8.2 `src/ui.ts` + `src/styles.ts`
+The rendering half, built on a three-line element factory with one iron
+rule: everything textual goes through textContent, NEVER innerHTML —
+claim text is MODEL OUTPUT relayed from crawled documents
+(attacker-reachable), and the widget runs inside a customer's page; one
+innerHTML would be stored XSS on someone else's site. A test feeds a
+literal <img onerror> claim and asserts it renders inert. Citation hrefs
+are re-vetted for http(s) (defense in depth over safeFetch's crawl-time
+vetting — the widget trusts nothing it didn't compute). The UI consumes
+the WidgetClient interface, not ApiClient, so DOM tests inject scripted
+fakes. Styling: `:host { all: initial }` severs every inherited property
+at the shadow boundary (the armor the hostile fixture proves), px units
+only (rem resolves against the HOST page's root font size — exactly the
+leak all:initial exists to stop), applied via adoptedStyleSheets
+(CSP-exempt constructed sheets) with a <style> fallback; --ir-accent is
+the ONE deliberate opening through the boundary (custom properties
+inherit), so hosts theme the bubble without a widget API.
+
+### §8.3 Tests (`src/__tests__/`, jsdom)
+sse: frame reassembly across network chunks, a multi-byte character
+split mid-encoding, non-data frames ignored, trailing partial never
+parsed. api: mint-once semantics, visitor-id persistence and reuse,
+bearer-token asks, the 401→re-mint→retry dance (and a SECOND 401
+surfacing as failure instead of looping), both 429 mappings. ui: shadow
+isolation (nothing leaks into light DOM), open/greet/warm behavior,
+claims with citation links, conversation-id threading between asks, the
+XSS and javascript:-href probes, refusal rendering, and all three
+failure shapes recovering the input — the widget never bricks.
+
+### §8.4 `fixtures/` + `scripts/serve.mjs`
+The three host pages the plan requires, each testing a distinct failure
+mode: Tailwind (preflight reset), Bootstrap (high-specificity components
++ a fixed navbar; also proves data-accent wins), and hostile —
+`* { all: unset }` plus a strict CSP whose every directive is explained
+in the page source (connect-src is the ONE thing customers must add;
+style-src deliberately excludes anything the widget would need, pinning
+the adoptedStyleSheets path). serve.mjs hosts them on :4400 because
+file:// sends `Origin: null`, which the allowlist rightly rejects — the
+fixtures exercise the SAME origin rules production enforces. Verified
+live in a real browser at M2.6: grounded answers with citations on all
+three pages, refusal on off-corpus questions, 56px styled bubble under
+the hostile reset. Prerequisite: `npm run seed-demo` (§3.19), `npm run
+build`, `npm run fixtures`.

@@ -63,6 +63,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             realtime/package-lock.json
+            widget/package-lock.json
 
       # ── root: shared/ + providers/ + eval/ tests + typechecks ────────────
       - name: root deps
@@ -92,6 +93,24 @@ jobs:
           POSTGRES_PASSWORD: ci-only-password
           POSTGRES_DB: interrelated
         run: npm test
+
+      # ── widget ───────────────────────────────────────────────────────────
+      - name: widget deps
+        working-directory: widget
+        run: npm ci
+      - name: widget typecheck
+        working-directory: widget
+        run: npm run typecheck
+      - name: widget tests
+        working-directory: widget
+        run: npm test
+      - name: widget build
+        working-directory: widget
+        run: npm run build
+      # The 15 KB gzipped budget from the plan — a size regression (a
+      # dependency creeping in, a framework-shaped rewrite) fails the merge.
+      - name: widget size budget
+        run: node scripts/widget-size.mjs
 
   eval:
     runs-on: ubuntu-latest
