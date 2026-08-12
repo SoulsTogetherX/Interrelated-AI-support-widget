@@ -70,16 +70,31 @@ services:
       # mean ephemeral and every deploy would silently log visitors out.
       - key: WIDGET_TOKEN_SECRET
         sync: false
-      # mock until per-org BYO credentials land in M3: production serves
-      # context-quoting mock answers, which is honest for a stack that has
-      # no tenant keys yet. Flipping the deployed demo to a real provider:
-      # set this to "groq"/"gemini" plus the matching *_API_KEY in the
-      # dashboard, seed the demo org against Neon
-      # (npm run seed-demo -- --corpus fastify --origin <render url>), and
-      # set DEMO_PUBLISHABLE_KEY below. Until then /demo serves honest
-      # setup instructions rather than a broken widget.
+      # The FALLBACK generation provider for orgs without a BYO credential
+      # of their own (since M3.5 a tenant's encrypted credential outranks
+      # this per answer). "mock" serves context-quoting grounded answers —
+      # honest for a stack whose demo org has no key yet.
+      #
+      # RUNBOOK — flipping the deployed demo to a real provider:
+      #   1. set LLM_PROVIDER to "groq" or "gemini" below
+      #   2. paste the matching key into GROQ_API_KEY / GEMINI_API_KEY in
+      #      the Render dashboard (declared sync:false below, so Render
+      #      prompts for them; both stay empty until then and the mock
+      #      keeps serving)
+      #   3. seed the demo org against Neon:
+      #      npm run seed-demo -- --corpus fastify --origin <render url>
+      #   4. set DEMO_PUBLISHABLE_KEY to the pk that prints
+      # Until then /demo serves honest setup instructions rather than a
+      # broken widget.
       - key: LLM_PROVIDER
         value: "mock"
+      # Same variable names the CLI, the local fallback, and the key-gated
+      # live test suite read (.env.example documents all three uses) — one
+      # name per provider everywhere, so nothing has to be kept in sync.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
       - key: DEMO_PUBLISHABLE_KEY
         sync: false
       # ── Internal API (M3.4) — the dashboard's server-to-server surface ──

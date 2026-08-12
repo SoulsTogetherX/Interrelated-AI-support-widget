@@ -459,11 +459,15 @@ also declares `WIDGET_TOKEN_SECRET` (sync: false — set in the Render
 dashboard so widget sessions survive deploys; unset would silently log
 visitors out on every deploy) and pins `LLM_PROVIDER=mock` until per-org
 BYO credentials exist (M3) — honest for a stack that has no tenant keys
-yet; the M2.7 demo flips it to a real provider. Since M3.4 it also
-declares the internal-API pair (INTERNAL_API_SECRET +
-CREDENTIAL_MASTER_KEY, both sync: false) with the runbook in its
-comments: leave BOTH empty until the Vercel dashboard deploys — while
-unset the /internal/* routes do not exist, and server.ts refuses the
+yet; the file's runbook comment is the four-step recipe for flipping the
+deployed demo to a real provider, and `GROQ_API_KEY`/`GEMINI_API_KEY`
+are declared `sync: false` so Render PROMPTS for them rather than
+requiring a hand-added variable — the same names the CLI, the local
+fallback, and the key-gated live suite read, so nothing is kept in sync.
+Since M3.4 it also declares the internal-API pair (INTERNAL_API_SECRET +
+CREDENTIAL_MASTER_KEY, both sync: false) with its own runbook: leave
+BOTH empty until the Vercel dashboard deploys — while unset the
+/internal/* routes do not exist, and server.ts refuses the
 half-configured state at boot.
 
 ### §2.6 `.env.example`
@@ -768,6 +772,21 @@ force-exits.
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
   the opposite choice and someone will one day "align" them).
+- `credentials/__tests__/liveProviders.test.ts` — **key-gated**, the
+  fastembed pattern (§2.4.5c) applied to providers: each provider's cases
+  run only when ITS key is in the environment (`GROQ_API_KEY`,
+  `GEMINI_API_KEY` — the same variables the CLI and server fallback read,
+  §2.6; there is deliberately no test-only variable to keep in sync).
+  What only a real provider can answer: does it accept the exact payload
+  the Test button sends and report a resolved model; does the key still
+  authenticate after an AES-GCM encrypt/decrypt cycle (a subtle encoding
+  or AAD corruption would pass every loopback test and fail only here);
+  and does its structured output honor the claims contract — logged
+  per-provider so §2.4.5h's "enforcement ranges from real to advisory"
+  becomes an observation instead of an assumption. A 429 is reported as
+  the free-tier rate limit it is, with the retry delay. With no keys the
+  cases skip AND a guard test asserts the keyless default, so "gated off"
+  can never be mistaken for "passed". CI sets no keys, by design.
 - `routes/__tests__/internal.test.ts` — DB-gated, real HTTP listener, a
   loopback OpenAI-compatible fake as the tenant's provider (recording
   every request so tests assert what left the process). Pinned: uniform
@@ -1853,8 +1872,9 @@ private base URL rejected through the whole chain with "must resolve to
 a public address", and a fake Groq key rejected by the REAL Groq API
 with the clean 401 message — the key itself absent from the error, and
 nothing persisted on either failure. A successful save is covered by the
-loopback-fake integration tests; live-saving waits on real free-tier
-keys (the plan's open item).
+loopback-fake integration tests; the SUCCESS path against a real
+provider is covered by the key-gated live suite (§3.8) the moment a free
+tier key is pasted into .env — no code change, no test-only variable.
 
 ### §9.9 `src/lib/sources/`, AddSourceForm, AutoRefresh, the sources page (M3.6a)
 
