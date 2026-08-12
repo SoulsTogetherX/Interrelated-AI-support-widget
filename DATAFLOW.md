@@ -32,8 +32,9 @@ env mock as fallback, so a saved key changes what model speaks on the
 very next question. As of M3.6a the dashboard is also the ingest
 producer (§7.9): connect a source → SSRF vet → source + job in one
 transaction → the worker WAKES (production has no poll timer at all —
-§3.1) → progress auto-refreshes on the sources page. Coming after: the
-embedding half of BYO (M3.6b), handoff (M4).
+§3.1) → progress auto-refreshes on the sources page. As of M3.7 the
+transcripts are readable (§7.10), stripped claims included. Coming
+after: the embedding half of BYO (M3.6b), handoff (M4).
 
 ---
 
@@ -747,4 +748,30 @@ meanwhile, in the browser:
     (sources + each one's LATEST job + live document counts)
   a queued/running job mounts          components/AutoRefresh — 4s
     router.refresh() until the job settles; idle pages poll nothing
+```
+
+### §7.10 Reading a transcript — GET `/dashboard/[orgId]/conversations/[id]`
+
+The read path that closes the loop §5 opened: what the pipeline verified
+and stripped becomes what the tenant can audit.
+
+```
+page RSC render
+  → requireOrgMember(orgId)            §7.7's membership guard
+  → getConversation(orgId, id)         web/src/lib/conversations/queries.ts
+      isId("con", id) → malformed short-circuits before any query
+      SELECT conversations WHERE id = … AND org_id = …
+        → null for a foreign tenant's id AND for a fabricated one —
+          indistinguishable by construction; the page 404s both
+      SELECT messages       ORDER BY created_at ASC
+      SELECT message_citations FOR those messages, ORDER BY ord
+        → EVERY citation row, verified and stripped alike (migration
+          003 stores both; a filter here would make the product's core
+          promise unauditable)
+  → render: message.content = what the VISITOR saw
+            citations      = per-claim verdicts underneath, each with
+                             its quote and source link, the stripped
+                             ones labelled with WHY (quote not found /
+                             chunk never retrieved)
+            assistant rows also show model, refused, ttft_ms, total_ms
 ```

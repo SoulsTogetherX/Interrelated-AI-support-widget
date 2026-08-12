@@ -98,10 +98,13 @@ deploy-stranded jobs, then the dashboard's enqueue IS the scheduler and
 Neon sleeps between ingests. Progress streams back through the sources
 page's conditional auto-refresh. Verified live end to end: two real
 public pages crawled — one recovered by the boot tick, one by the wake
-path — with the UI flipping to "indexed" unattended. Still open in
-M3.6: the embedding half of BYO (remote adapters + save + ingest/query
-under the org's model). The one package in the plan but not here —
-loadtest/ — arrives with M4.
+path — with the UI flipping to "indexed" unattended. M3.7 is done — conversations and citation verdicts (§9.10, DATAFLOW
+§7.10): the transcript view renders every claim's verdict, VERIFIED AND
+STRIPPED ALIKE, so the tenant sees what the verifier refused to show
+their visitor — the M2 thesis made visible in the product rather than
+only in tests. Still open in M3.6b: the embedding half of BYO (remote
+adapters + save + ingest/query under the org's model). The one package
+in the plan but not here — loadtest/ — arrives with M4.
 
 ---
 
@@ -1873,3 +1876,46 @@ Verified live at M3.6a with two real public pages: one job recovered by
 the BOOT tick after a dev-server restart (the deploy-stranded path), one
 run purely by wake (no poll timer existed), and the page's auto-refresh
 flipping to "1 pages indexed" unattended.
+
+### §9.10 `src/lib/conversations/` + the transcript routes (M3.7)
+
+Where the verification thesis faces the TENANT. Everything else in the
+dashboard is administration; this is the product explaining itself.
+
+- **queries.ts** — `listConversations` rides the (org_id,
+  last_message_at DESC) index migration 003 shaped for exactly this
+  page. `getConversation` is org-scoped in the WHERE, so another
+  tenant's conversation id and a fabricated one are INDISTINGUISHABLE
+  (both null → the page's 404); malformed ids fail isId() before any
+  query. Citations come back per message in `ord` order, ALL of them —
+  the one thing this file must never do is filter to verified rows.
+- **dashboard/[orgId]/layout.tsx** — the org section nav (Overview /
+  Conversations / Sources / Providers), built purely from the path
+  param: no queries, no auth (layouts skip re-running on soft
+  navigation, so pages keep their own requireOrgMember, and a nav
+  rendered for an inaccessible org links only to pages that 404).
+- **conversations/page.tsx** — the list: preview, message count,
+  status (including `escalated`, which M4 will start producing), and
+  the last-activity timestamp. Readable by agents as well as owners:
+  reading conversations IS the agent job.
+- **conversations/[conversationId]/page.tsx** — the transcript.
+  Assistant rows carry model, refused, TTFT and total latency
+  (per-answer observability M5 will aggregate); under each, every
+  citation with its verdict spelled out as a sentence — "stripped —
+  quote not found in the cited source" / "stripped — cited a chunk
+  that was never retrieved" — beside the quote and its source link.
+  `content` is what the visitor SAW; the stripped rows underneath are
+  what they were spared.
+- **Tests** — DB-gated: list ordering/counts/previews, list and
+  transcript both org-scoped (cross-tenant read indistinguishable from
+  a fabricated id, malformed ids short-circuited), and the
+  strip-visibility contract — an assistant message with one verified
+  and one `quote_not_found` claim must surface BOTH while `content`
+  contains only the verified text.
+
+Verified live at M3.7 end to end: a real crawl → a real widget session
+(mint + SSE chat) → a grounded answer whose transcript shows the
+verified citation; then `npm run ask --tamper` through the same pipeline
+→ the dashboard showing the fabricated quote marked stripped and absent
+from the visitor-facing content, with cross-tenant and fabricated ids
+both 404.

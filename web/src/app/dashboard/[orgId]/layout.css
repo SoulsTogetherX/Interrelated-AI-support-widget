@@ -1,0 +1,24 @@
+/* Org-section nav. */
+
+.orgnav-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.orgnav {
+  display: flex;
+  gap: 1rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.625rem;
+  font-size: 0.9375rem;
+}
+
+.orgnav-link {
+  text-decoration: none;
+  color: var(--ink-muted);
+}
+
+.orgnav-link:hover {
+  color: var(--accent);
+}
