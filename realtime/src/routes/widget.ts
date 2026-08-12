@@ -9,6 +9,7 @@ import type { LLMProvider } from "@providers/llm/types"
 import type { AnswerEvent } from "@shared/grounding/events"
 import { isId } from "@shared/utils/ids"
 import { answerQuestion } from "@/answer/pipeline"
+import { resolveGenerationProvider } from "@/credentials/resolve"
 import { RateLimiter } from "@/widget/rateLimit"
 import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
 //#endregion
@@ -41,6 +42,9 @@ import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
 interface WidgetRouteOptions {
   db: Kysely<Database>
   embedder: EmbeddingProvider
+  /** The FALLBACK generation provider (env-selected; mock in every keyless
+   *  stack). Since M3.5 an org's saved BYO credential outranks it at answer
+   *  time — credentials/resolve.ts. */
   llm: LLMProvider
   /** HMAC secret for session tokens (resolveTokenSecret() at boot). */
   tokenSecret: string
@@ -265,10 +269,19 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       req.on("close", () => aborter.abort())
 
       try {
+        // Per-org BYO generation (M3.5): the org's saved credential decides
+        // which model answers — decrypted here, inside realtime, for the
+        // lifetime of this request only. The app-level llm (the env-selected
+        // mock in every keyless stack) is the FALLBACK for orgs without a
+        // credential, which is what keeps the demo org and CI keyless. A
+        // resolve failure lands in the catch below: one opaque error event,
+        // the truth in the server log.
+        const orgLLM =
+          (await resolveGenerationProvider(options.db, session.org)) ?? options.llm
         await answerQuestion({
           db: options.db,
           embedder: options.embedder,
-          llm: options.llm,
+          llm: orgLLM,
           orgId: session.org,
           visitorId: session.visitor,
           question,

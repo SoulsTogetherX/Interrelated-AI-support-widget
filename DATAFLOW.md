@@ -26,8 +26,11 @@ the gated page are traced in §7.2–§7.5 — as of M3.3 it onboards
 organizations (§7.6) with every org page behind the membership guard
 (§7.7), and as of M3.4 it connects BYO provider keys through realtime's
 internal API (§7.8): live-tested, encrypted at rest, suffix-only ever
-after. Coming after: per-org provider resolution in the answer path
-(M3.5), handoff (M4).
+after. As of M3.5 those credentials ANSWER: the chat route resolves the
+org's generation credential per request (§5.3's resolve hop) with the
+env mock as fallback, so a saved key changes what model speaks on the
+very next question. Coming after: sources + ingest + the embedding half
+of BYO (M3.6), handoff (M4).
 
 ---
 
@@ -450,6 +453,13 @@ widget (M2.6) or curl-with-headers
                                        BEFORE any model call
       validate question (≤2000 chars) and conversationId shape
       → SSE headers flush              TTFB paid before retrieval starts
+      → resolveGenerationProvider      realtime/src/credentials/resolve.ts
+                                       (M3.5): the org's saved BYO
+                                       credential — decrypted for this
+                                       request only — outranks the
+                                       app-level fallback llm; no cache,
+                                       so rotation bites on the very
+                                       next question
       → answerQuestion(§5.1)           visitorId = token.visitor — the
                                        binding that stops one visitor
                                        continuing another's thread

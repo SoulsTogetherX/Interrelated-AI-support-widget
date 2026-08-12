@@ -70,11 +70,13 @@ export async function checkCredentialInput(
   }
   // The schema accepts embedding rows, but no remote embedding adapters
   // exist yet — saving a credential nothing can use would look like a
-  // finished feature. M3.5 builds the adapters and deletes this branch.
+  // finished feature. The whole embedding path (adapters + save + ingest
+  // under it + query under it) ships together with source indexing (M3.6),
+  // which deletes this branch.
   if (b.role === "embedding") {
     return {
       ok: false,
-      error: "Embedding credentials arrive with M3.5 — generation only for now.",
+      error: "Embedding credentials arrive with M3.6 — generation only for now.",
     }
   }
 

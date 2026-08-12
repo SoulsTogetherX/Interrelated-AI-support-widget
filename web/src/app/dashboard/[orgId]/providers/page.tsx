@@ -77,8 +77,9 @@ export default async function ProvidersPage({
       <section className="providers-card">
         <h2 className="providers-cardtitle">Embedding</h2>
         <p className="providers-empty">
-          Embedding credentials arrive with M3.5 — until then, indexing runs
-          on the platform&apos;s built-in embedding model.
+          Embedding credentials arrive together with source indexing (M3.6) —
+          until then, indexing runs on the platform&apos;s built-in embedding
+          model.
         </p>
       </section>
     </div>

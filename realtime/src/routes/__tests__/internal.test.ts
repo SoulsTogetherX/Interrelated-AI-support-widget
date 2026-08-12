@@ -210,14 +210,14 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     expect("key_ciphertext" in body.credentials[0]).toBe(false)
   })
 
-  it("rejects embedding-role credentials until M3.5, naming the reason", async () => {
+  it("rejects embedding-role credentials until M3.6, naming the reason", async () => {
     const res = await post(
       `/internal/orgs/${orgId}/credentials`,
       { role: "embedding", provider: "gemini", apiKey: "AIza-embedding-key" },
       SECRET,
     )
     expect(res.status).toBe(422)
-    expect(((await res.json()) as ApiBody).error).toContain("M3.5")
+    expect(((await res.json()) as ApiBody).error).toContain("M3.6")
   })
 
   it("rejects shape violations without any upstream call", async () => {

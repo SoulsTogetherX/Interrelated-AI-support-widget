@@ -81,9 +81,16 @@ LIVE round-trip before save, AES-256-GCM encrypted under a realtime-only
 master key, displayed only as a suffix, guarded by a read-back denial
 test and an SSRF vet on tenant base URLs; the dashboard's provider page
 drives it through a shared-secret server-to-server API that simply does
-not mount unconfigured. Embedding-role credentials are schema-ready but
-API-rejected until the remote embedding adapters land (M3.5, next). The
-one package in the plan but not here — loadtest/ — arrives with M4.
+not mount unconfigured. M3.5 is done — saved credentials now ANSWER
+(§3.21's resolve.ts, DATAFLOW §5.3): the chat route resolves the org's
+generation credential per request — decrypted inside realtime for the
+request's lifetime, deliberately uncached so rotation bites on the next
+question — with the env mock as the fallback that keeps the demo org and
+CI keyless; proven by an SSE round-trip through a loopback tenant
+provider plus the tenant-isolation and credential-removal cases.
+Embedding-role credentials stay schema-ready but API-rejected until the
+whole embedding path ships with source indexing (M3.6, next). The one
+package in the plan but not here — loadtest/ — arrives with M4.
 
 ---
 
@@ -752,6 +759,15 @@ force-exits.
   the PRODUCTION url vet rejecting loopback (the SSRF default, asserted
   by NOT injecting the test seam); and the unconfigured app 404ing the
   whole surface.
+- `routes/__tests__/widgetByo.test.ts` — DB-gated. Per-org BYO generation
+  in the LIVE chat path: a loopback OpenAI-compatible upstream wrapping
+  the context-quoting responder, reached through the REAL adapter with
+  the DECRYPTED tenant key (the Authorization header is asserted);
+  claims survive the full verify/strip loop and the persisted message
+  names the tenant's model. The multi-tenant cases are the point: a
+  credential-less org falls back to the mock and never touches the other
+  tenant's provider, and a removed credential stops being used on the
+  very next question (no cache to serve it stale).
 - `routes/__tests__/demo.test.ts` — keyless and DB-free (the demo surface
   is static config → static responses). The configured page carries the
   snippet with same-origin data-api; the unconfigured page is honest
@@ -1092,8 +1108,11 @@ contract and the two must change together. It is what lets every stack
 and the CI e2e job drive the REAL chat route keylessly. buildLLM maps a
 provider name to a configured instance — ONE selection table shared by
 server boot (LLM_PROVIDER env) and the askDev CLI (--llm flag); a missing
-key throws a one-line usage error. Server-level env selection is a
-stopgap M3 replaces with per-org encrypted credentials.
+key throws a one-line usage error. Since M3.5 the env selection is the
+FALLBACK, not a stopgap: an org's saved BYO credential outranks it per
+answer (credentials/resolve.ts), and env selection remains what keeps
+every keyless stack — dev compose, prod compose, CI, the demo org —
+serving grounded mock answers.
 
 ### §3.16 `realtime/scripts/askDev.ts`
 Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
@@ -1155,8 +1174,10 @@ re-check (kills replay from another site), rate limits AFTER auth (their
 429s carry CORS so the widget can render "one moment") and BEFORE work,
 then the daily ceiling counted from messages via the (org_id,
 created_at) index — model spend, not conversation length, refusals
-included — then SSE. Headers flush before retrieval so TTFB precedes the
-slow work; a closed tab aborts the pipeline mid-generation via
+included — then SSE. Since M3.5 the answer's LLM is resolved per request
+from the org's BYO credential (credentials/resolve.ts) with the
+app-level provider as fallback. Headers flush before retrieval so TTFB
+precedes the slow work; a closed tab aborts the pipeline mid-generation via
 AbortController; every failure past the SSE boundary is one opaque
 {type:"error"} event (failure detail on a public stream is
 reconnaissance — including hijack probes of another visitor's
@@ -1219,9 +1240,18 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   LIVE round-trip: one real 16-token completion, latency measured to
   done, because a key that "looks right" but is revoked or out of quota
   must fail at the Test button, not at a visitor's first question.
-  Embedding-role payloads are rejected by name until M3.5's remote
-  embedding adapters exist — the schema is ready; the API refuses to fake
-  the feature.
+  Embedding-role payloads are rejected by name until the remote embedding
+  adapters ship with source indexing (M3.6) — the schema is ready; the
+  API refuses to fake the feature.
+- **resolve.ts** (M3.5) — the vault's READ side: org → ready-to-call
+  LLMProvider, decrypted per ANSWER with deliberately NO cache (a cache
+  would serve a revoked key until eviction — the exact window rotation
+  exists to close; the cost is one indexed read plus a sub-microsecond
+  AES-GCM decrypt). Absence is normal (demo org, fresh org → caller falls
+  back to the app-level provider); decrypt failure throws LOUDLY rather
+  than degrading to the mock, which would look like the product working
+  while serving nonsense. An 'anthropic' row (schema forward-provision,
+  unreachable through validate.ts) also throws by name.
 
 ### §3.22 `src/routes/internal.ts` — the dashboard's server-to-server API
 
@@ -1764,7 +1794,7 @@ never assigned, logged, or stored anywhere else.
   duplicates that logic). The page states the key's lifecycle on the
   page — pasted over TLS, tested live, encrypted, suffix-only forever —
   and shows the current credential from queries.ts with an owner-only
-  remove. Embedding card is an honest M3.5 placeholder.
+  remove. Embedding card is an honest placeholder until M3.6.
 
 Verified live at M3.4 (realtime dev + web dev, both secrets set): a
 private base URL rejected through the whole chain with "must resolve to
