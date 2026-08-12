@@ -31,6 +31,9 @@ export default async function OrgLayout({
         <Link className="orgnav-link" href={`/dashboard/${orgId}/providers`}>
           Providers
         </Link>
+        <Link className="orgnav-link" href={`/dashboard/${orgId}/widget`}>
+          Install
+        </Link>
       </nav>
       {children}
     </div>

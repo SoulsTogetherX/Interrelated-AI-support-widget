@@ -102,9 +102,15 @@ path — with the UI flipping to "indexed" unattended. M3.7 is done — conversa
 §7.10): the transcript view renders every claim's verdict, VERIFIED AND
 STRIPPED ALIKE, so the tenant sees what the verifier refused to show
 their visitor — the M2 thesis made visible in the product rather than
-only in tests. Still open in M3.6b: the embedding half of BYO (remote
-adapters + save + ingest/query under the org's model). The one package
-in the plan but not here — loadtest/ — arrives with M4.
+only in tests. M3.8 is done, and with it the dashboard is
+SELF-SUFFICIENT (§9.11, DATAFLOW §7.11): the origin allowlist —
+trust-model layer 1 — is managed from the UI, with pasted URLs
+normalized to the exact origin a browser will send, and the install page
+carries the snippet and the two CSP directives a locked-down host needs.
+Nothing about running the product now requires SQL by hand. Still open
+in M3.6b: the embedding half of BYO (remote adapters + save +
+ingest/query under the org's model). The one package in the plan but not
+here — loadtest/ — arrives with M4.
 
 ---
 
@@ -1630,13 +1636,16 @@ is why it is gitignored, not committed (§9.1).
   "React is not defined".
 - **Vercel runbook**: import the GitHub repo in Vercel → set Root
   Directory to `web/` → framework auto-detects as Next.js → deploy the
-  `dev` branch. Project env as of M3.2: the POSTGRES_* variables
-  (pointing at Neon's POOLED `-pooler` host — serverless instances
-  multiply client pools) plus EMAIL_INDEX_PEPPER and
+  `dev` branch. Project env, complete as of M3.8: the POSTGRES_*
+  variables (pointing at Neon's POOLED `-pooler` host — serverless
+  instances multiply client pools); EMAIL_INDEX_PEPPER and
   EMAIL_ENCRYPTION_KEY, which production REFUSES to boot without
-  (§9.6's instrumentation note). M3.4 adds the realtime internal-API
-  secret. Zero config files needed: `vercel.json` earns a place only
-  when a default needs overriding.
+  (§9.6's instrumentation note); INTERNAL_API_SECRET matching Render's
+  (§3.22) and REALTIME_INTERNAL_URL pointing at the Render service; and
+  NEXT_PUBLIC_WIDGET_API_URL — the widget's PUBLIC base URL, which the
+  install page prints into the snippet (§9.11). Zero config files
+  needed: `vercel.json` earns a place only when a default needs
+  overriding.
 
 ### §9.2 `src/app/` — layout, landing page, global CSS
 
@@ -1919,3 +1928,64 @@ verified citation; then `npm run ask --tamper` through the same pipeline
 → the dashboard showing the fabricated quote marked stripped and absent
 from the visitor-facing content, with cross-tenant and fabricated ids
 both 404.
+
+### §9.11 `src/lib/origins/` + the install page (M3.8)
+
+The allowlist — trust-model layer 1, the layer that kills the
+copy-pasted-snippet attack outright — plus everything a customer needs
+to install the widget.
+
+- **lib/origins/index.ts** — validation, queries, and mutations. Written
+  directly through Kysely rather than proxied to realtime's internal
+  API: that API exists for what web CANNOT or MUST NOT do (decrypt
+  tenant keys, poke the in-process worker), and these rows hold no
+  secret — routing them through it would be ceremony without a reason.
+  `validateOrigin` normalizes what customers actually paste (full page
+  URL, trailing slash, mixed-case host, default port) into `url.origin`
+  — the browser's OWN definition of the string the `Origin` header will
+  carry — because every one of those variants stored raw is a row that
+  can never match, which reads as "the allowlist mysteriously doesn't
+  work" (migration 001's CHECK comment says exactly that). Two refusals
+  worth their code: a bare host (guessing https for someone's allowlist
+  would be us deciding their security posture) and the literal `null`
+  (what file:// and sandboxed iframes send — allowlisting it would open
+  the widget to every one of them). The schema CHECK stays as the
+  backstop that makes a bypass unrepresentable; the validator exists so
+  a tenant gets a sentence instead of a 500. add is idempotent
+  (re-adding satisfies the same intent), remove is unvalidated on
+  purpose — whatever string is in a row must be deletable.
+- **lib/origins/actions.ts** — the providers/sources trust ladder
+  verbatim (signed-in → member → OWNER: the allowlist IS the widget's
+  front door). Success echoes the NORMALIZED value so a customer who
+  pasted a page URL learns what was actually allowlisted.
+- **components/OriginForm/**, **components/CopyButton/** — the add form
+  (type=text, not type=url: the browser's own validation would reject a
+  bare host before our validator can explain why a scheme is required)
+  and a copy button that degrades honestly where the Clipboard API is
+  unavailable rather than silently doing nothing.
+- **dashboard/[orgId]/widget/** — the install page, three sections in
+  the order a customer hits them: allowlist (with the unforgeable-Origin
+  argument stated, which is also why the public key below it is safe),
+  the snippet with the org's real pk, and the exact two CSP directives —
+  no `style-src` entry, because the widget's styles ride
+  adoptedStyleSheets, a claim the hostile fixture page proves by
+  withholding one. `NEXT_PUBLIC_WIDGET_API_URL` is CONFIG, not derived:
+  the dashboard is on Vercel and the widget API on Render, so this host
+  cannot infer the other's; unset renders a visible placeholder and says
+  so, rather than emitting a snippet that would fail silently on the
+  customer's site.
+- **Tests** — keyless: normalization of every realistic paste, port
+  handling matching the browser (:443/:80 dropped, :8443 kept), the
+  bare-host and `null` refusals, and a property that every accepted
+  value satisfies the schema CHECK regex. DB-gated: add/list/remove,
+  idempotent re-add, silent no-op remove, per-org scoping including a
+  cross-tenant delete that must not touch the other tenant's row, and
+  the CHECK rejecting a path or trailing slash if validation is
+  bypassed.
+
+Verified live at M3.8, with the widget route as the oracle: pasting
+`  https://DOCS.Example.com/help/faq?x=1#top  ` stored
+`https://docs.example.com` and that origin immediately minted a session
+(200) while an unlisted one was refused (403); removing it flipped the
+same origin to 403 on the next request, with the other origin still at
+200. A bare host was rejected in the form with the scheme sentence.

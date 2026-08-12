@@ -1,0 +1,97 @@
+/* Install page. */
+
+.install {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.install-title {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.install-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.install-cardtitle {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.install-note {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.install-warning {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+}
+
+.install-empty {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #b45309;
+}
+
+.install-origins {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.install-origin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: var(--paper-soft);
+  font-size: 0.875rem;
+}
+
+.install-remove {
+  font: inherit;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  background: none;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+}
+
+.install-snippet {
+  margin: 0;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.install-back {
+  margin: 0;
+  font-size: 0.875rem;
+}

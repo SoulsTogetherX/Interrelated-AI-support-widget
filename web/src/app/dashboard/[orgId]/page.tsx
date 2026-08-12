@@ -80,13 +80,17 @@ export default async function OrgOverviewPage({
             citable.
           </li>
           <li>
-            <strong>Allowlist your site and copy the snippet</strong> —
-            arrives with M3.8.
+            <strong>
+              <Link href={`/dashboard/${org.id}/widget`}>
+                Allowlist your site and copy the snippet
+              </Link>
+            </strong>{" "}
+            — the two directives a strict CSP needs are on that page too.
           </li>
         </ol>
         <p className="orghome-cardnote">
-          Each step unlocks as its dashboard surface ships — this page is the
-          honest map of what exists today.
+          Every step above is live. Human handoff (M4) and usage metrics
+          (M5) are what the dashboard still owes you.
         </p>
       </section>
     </div>

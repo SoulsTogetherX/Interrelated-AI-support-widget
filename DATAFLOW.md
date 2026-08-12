@@ -33,8 +33,10 @@ very next question. As of M3.6a the dashboard is also the ingest
 producer (§7.9): connect a source → SSRF vet → source + job in one
 transaction → the worker WAKES (production has no poll timer at all —
 §3.1) → progress auto-refreshes on the sources page. As of M3.7 the
-transcripts are readable (§7.10), stripped claims included. Coming
-after: the embedding half of BYO (M3.6b), handoff (M4).
+transcripts are readable (§7.10), stripped claims included, and as of
+M3.8 the allowlist and install snippet are managed from the UI (§7.11)
+— the dashboard no longer needs SQL by hand for anything. Coming after:
+the embedding half of BYO (M3.6b), handoff (M4).
 
 ---
 
@@ -774,4 +776,34 @@ page RSC render
                              ones labelled with WHY (quote not found /
                              chunk never retrieved)
             assistant rows also show model, refused, ttft_ms, total_ms
+```
+
+### §7.11 Allowlisting an origin — POST (Server Action) from `/dashboard/[orgId]/widget`
+
+The dashboard half of trust-model layer 1; §5.3's session mint is the
+half that enforces it.
+
+```
+OriginForm submit
+  → addOriginAction                    web/src/lib/origins/actions.ts
+    → currentUser → getOrgForMember → OWNER
+    → validateOrigin                   web/src/lib/origins/index.ts
+        new URL(input).origin — the BROWSER's own definition of the
+        string its Origin header will carry, so a pasted page URL,
+        trailing slash, mixed-case host, or default port all collapse
+        to the one value that can actually match
+        rejects: bare host (scheme is the tenant's decision, not ours),
+                 "null" (file:// and sandboxed iframes), credentials,
+                 non-http schemes
+    → INSERT allowed_origins ON CONFLICT DO NOTHING   (idempotent: the
+        tenant's intent is already satisfied)
+        └ schema CHECK ^https?://[^/]+$ is the backstop behind the
+          validator, not a duplicate of it
+    → revalidatePath(install page) → the list re-renders from Postgres
+
+…and the effect, on the very next widget request (§5.3):
+  POST /v1/widget/session with Origin: <that origin>
+    → allowed_origins lookup hits  → token minted (200)
+  removal is equally immediate: the same origin → 403, no CORS headers,
+  so an unlisted site's browser cannot even read the error
 ```
