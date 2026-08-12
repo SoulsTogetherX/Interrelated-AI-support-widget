@@ -117,8 +117,15 @@ dimension it stores (§3.3.3, §3.21), and both ends of
 retrieval run under the org's model from that one row — the ingest
 worker per job (§3.10.5) and the chat route per question (§3.18) — with
 a model change re-queueing the org's sources inside the same transaction
-that changed the credential (§3.22). The one package in the plan but not
-here — loadtest/ — arrives with M4.
+that changed the credential (§3.22). **M3 IS COMPLETE.** The schema was
+then FLATTENED (§3.3): the five migrations that built it collapsed into one
+baseline, a one-time cost taken while the product is still pre-launch.
+M4 (human handoff) is underway. M4.1 is done — the escalation transition
+(§3.3.4, §3.23, DATAFLOW §8): a conversation becomes a person's exactly
+once, idempotent by SCHEMA rather than by application deduplication, and
+the bot then stays out of the thread while still persisting everything the
+visitor types, because that is what the waiting agent needs to read. The
+one package in the plan but not here — loadtest/ — arrives later in M4.
 
 ---
 
@@ -734,6 +741,36 @@ own `dim` column existed for. A CHECK ties the pairing exactly in the
 api_keys style: `role = 'embedding'` ⇔ `dim IS NOT NULL`, with the 1..1024
 range mirroring `chunk_embeddings.dim` and PADDED_DIM.
 
+### §3.3.4 `src/db/migrations/002_handoff.ts` — the handoff table
+The first migration after the flatten, and the shape every later one
+follows: additive, its own file, never a rewrite of 001.
+
+`handoff_sessions` is one row per escalation of a conversation from the bot
+to a person. A table rather than a column on `conversations` because an
+escalation has its own lifecycle (requested → claimed → closed), its own
+actors, and its own timestamps — and M5's headline product metric,
+time-to-first-human-response, is a duration BETWEEN two of them. A
+conversation can also be escalated more than once over its life (resolved,
+re-opened later), which a column would overwrite the moment it happened.
+`conversations.status` stays the coarse state the widget renders; this
+table is the record.
+
+The load-bearing constraint is the partial unique index: **at most one OPEN
+handoff per conversation** (`WHERE status <> 'closed'`). Double-escalation
+— a visitor mashing the button, a retry racing itself, an auto-escalation
+colliding with the button — is then unrepresentable rather than
+deduplicated in application code, which is what lets §3.23 be idempotent by
+construction instead of by a check-then-insert that races. Because the
+index covers only open rows, a closed handoff never blocks a later one.
+
+One CHECK is worth its comment, and a test caught it: `active` is tied to
+`claimed_at`, NOT `claimed_by`. The two say different things — WHEN it was
+taken (a fact about the handoff, permanent) versus BY WHOM (a fact about an
+account, which can be deleted). `claimed_by` is `ON DELETE SET NULL` so
+history outlives employment; tying the CHECK to it instead would have made
+that self-contradictory, and deleting a departing employee would fail on a
+constraint in a table nobody remembers exists.
+
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
 `MIGRATIONS` record, not discovered from disk. Kysely's stock
@@ -890,7 +927,24 @@ force-exits.
   length edges, own-conversation continuation vs the cross-visitor
   hijack probe (opaque error event, nothing to learn), malformed
   conversation ids, the daily cap 429 BEFORE the model call, and a
-  rate-limit 429 that still carries CORS.
+  rate-limit 429 that still carries CORS. Escalate (M4.1): the queue place
+  taken once and reported idempotently with CORS on the real response, the
+  bot falling silent on the next question, the cross-visitor hijack and a
+  fabricated id both 404 with nothing written, and bad token / malformed
+  id / replayed origin all rejected before any write.
+- `handoff/__tests__/escalate.test.ts` — DB-gated. The transition and its
+  record moving together; idempotence (a second request reports the first,
+  and does not rewrite why the visitor is waiting); the CONCURRENT
+  double-escalation — five simultaneous requests must yield one row, one
+  `created: true`, and no error — which is the only way to show that
+  idempotence comes from the index rather than from the read above it; the
+  three not-found shapes collapsing to one; a closed handoff followed by a
+  new one (the index is over OPEN rows precisely so a conversation can come
+  back); and deleting an agent MID-handoff, which must succeed and leave
+  the record intact — the test that caught the claimed_by/claimed_at
+  invariant (§3.3.4). Plus the schema states that would corrupt the queue:
+  active with nobody holding it, closed with no closing time, an unknown
+  reason.
 - `credentials/__tests__/vault.test.ts` — keyless. Round-trip, AAD swap,
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
@@ -1543,6 +1597,49 @@ already queued are skipped, uploads are skipped (the worker fails them
 by design), and re-pasting a rotated key for the SAME model queues
 nothing — the vector space did not move. The count comes back in the
 response so the dashboard can say so out loud (§9.8).
+
+### §3.23 `src/handoff/escalate.ts` — the escalation transition (M4.1)
+
+The moment a conversation stops being the bot's and becomes a person's.
+Everything else in M4 — the ticketed socket, presence, replay — carries
+messages once this has happened; this file decides THAT it has, and does so
+exactly once per conversation.
+
+Idempotence is the whole design problem: a visitor mashing the button, a
+widget retrying a request whose response was lost, and (later) an
+auto-escalation racing the button all arrive as concurrent requests for the
+same thing. The answer is not application-side deduplication — a
+check-then-insert races, and the loser corrupts the queue with a second row
+— but §3.3.4's partial unique index, which makes a second open handoff
+unrepresentable. `requestHandoff` reads first (the common case costs one
+indexed lookup), inserts inside a transaction that also flips
+`conversations.status` (a conversation showing 'escalated' with no row
+would be a visitor queued where nobody can see them), and on a unique
+violation reads back the winner. The race resolves in Postgres; the loser
+returns the same handoff with `created: false`, which the widget uses to
+avoid repeating itself and M5 needs so impatience does not inflate the
+escalation rate. Access is scoped by org AND visitor, and all three failure
+shapes — unknown conversation, another org's, another visitor's — collapse
+to one `not_found`, because distinguishing them on a public route is an
+oracle.
+
+`getOpenHandoff` is the read the answer pipeline runs on every question
+(§3.15.3): when a human owns the thread the bot emits `{type:"handoff"}`
+and stops — no retrieval, no model call, no assistant row — while the
+visitor's message is still persisted, deliberately, because it is exactly
+what the waiting agent needs to read and a queued visitor who keeps typing
+must not have those turns dropped. Answering anyway would put two voices in
+one conversation and bill the tenant for the privilege.
+
+The public surface is `POST /v1/widget/escalate` (§3.18): plain JSON, not
+SSE — the transition is one small state change, and the stream that carries
+the human's replies is M4's WebSocket. It reuses the chat route's
+per-visitor bucket rather than getting its own, because escalation is cheap
+for us and expensive for the tenant (it puts a person on the hook), so a
+visitor who has spent their question budget should not have a separate
+allowance for summoning staff. Reason is fixed to `visitor_request` at this
+boundary: `low_confidence` is the pipeline's call to make, not a request's
+to claim.
 
 ---
 

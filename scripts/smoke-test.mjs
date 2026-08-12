@@ -82,6 +82,18 @@ await check("POST /v1/widget/chat without a session returns 401", async () => {
   if (res.status !== 401) throw new Error(`status ${res.status}`)
 })
 
+// Same posture check for the second token-authenticated route (M4.1): a 404
+// would mean it fell off the app, a 200 that its auth did.
+await check("POST /v1/widget/escalate without a session returns 401", async () => {
+  const res = await fetch(`${base}/v1/widget/escalate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://smoke.example" },
+    body: JSON.stringify({ conversationId: "con_probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 401) throw new Error(`status ${res.status}`)
+})
+
 // ── Demo surface (M2.7) ─────────────────────────────────────────────────────
 // /demo must answer 200 in BOTH states (configured → the widget page;
 // unconfigured → setup instructions) — a recruiter must never see a 500.

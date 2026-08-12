@@ -292,6 +292,32 @@ interface MessageCitationsTable {
   heading_path: string | null
 }
 
+/** One escalation of a conversation from the bot to a person (§3.3.4).
+ *  Its own table rather than a column on conversations because an
+ *  escalation has a lifecycle, two actors, and the timestamps M5's
+ *  time-to-first-human-response metric measures between — and because a
+ *  conversation can be escalated more than once over its life, which a
+ *  column would overwrite. At most one OPEN row per conversation, enforced
+ *  by a partial unique index, which is what makes escalation idempotent by
+ *  construction rather than by a racing check-then-insert. */
+interface HandoffSessionsTable {
+  id: string
+  org_id: string
+  conversation_id: string
+  status: Generated<"pending" | "active" | "closed">
+  /** Why a human is involved: the visitor asked, or the bot could not
+   *  answer. M5's deflection rate is the ratio between them. */
+  reason: "visitor_request" | "low_confidence"
+  /** The agent holding it. NULL until claimed, and back to NULL if that
+   *  user is deleted — history outlives employment, which is why
+   *  claimed_at (WHEN, permanent) rather than claimed_by (WHO, deletable)
+   *  is what the 'active' CHECK depends on. */
+  claimed_by: string | null
+  requested_at: ColumnType<Date, string | Date | undefined, never>
+  claimed_at: ColumnType<Date | null, string | Date | null, string | Date | null>
+  closed_at: ColumnType<Date | null, string | Date | null, string | Date | null>
+}
+
 /** The Kysely database contract. Every query in the codebase is typed
  *  against this interface — a column typo is a compile error. */
 interface Database {
@@ -310,6 +336,7 @@ interface Database {
   conversations: ConversationsTable
   messages: MessagesTable
   message_citations: MessageCitationsTable
+  handoff_sessions: HandoffSessionsTable
 }
 //#endregion
 
@@ -331,5 +358,6 @@ export type {
   ConversationsTable,
   MessagesTable,
   MessageCitationsTable,
+  HandoffSessionsTable,
 }
 //#endregion

@@ -10,8 +10,10 @@ import type { AnswerEvent } from "@shared/grounding/events"
 import { isId } from "@shared/utils/ids"
 import { answerQuestion } from "@/answer/pipeline"
 import { resolveEmbeddingProvider, resolveGenerationProvider } from "@/credentials/resolve"
+import { requestHandoff } from "@/handoff/escalate"
 import { RateLimiter } from "@/widget/rateLimit"
 import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
+import type { SessionTokenPayload } from "@/widget/sessionToken"
 //#endregion
 
 //#region Type Defs
@@ -125,6 +127,35 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
 
   app.options("/v1/widget/session", preflight)
   app.options("/v1/widget/chat", preflight)
+  app.options("/v1/widget/escalate", preflight)
+
+  /** Token auth + the origin re-check, shared by every route that carries a
+   *  session. Returns the verified session, or null having ALREADY answered
+   *  — callers just return. Extracted when escalate became the second such
+   *  route (M4.1): two copies of an auth ladder is how one of them
+   *  eventually drifts. */
+  const authenticate = (req: Request, res: Response): SessionTokenPayload | null => {
+    const origin = req.headers.origin
+    if (typeof origin !== "string" || origin.length === 0) {
+      res.status(403).json({ error: "origin header required" })
+      return null
+    }
+    const auth = req.headers.authorization
+    const token = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : null
+    const session = token !== null ? verifySessionToken(token, options.tokenSecret) : null
+    if (session === null) {
+      res.status(401).json({ error: "invalid session" })
+      return null
+    }
+    if (session.origin !== origin) {
+      // A valid token replayed from a different site — exactly the
+      // exfiltration the origin binding exists to kill.
+      res.status(403).json({ error: "origin not allowed" })
+      return null
+    }
+    corsHeaders(res, origin)
+    return session
+  }
 
   // ── Session mint: the publishable key's ONLY moment ──────────────────────
   app.post("/v1/widget/session", async (req: Request, res: Response) => {
@@ -200,25 +231,9 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
   // ── Chat: token-authenticated SSE ────────────────────────────────────────
   app.post("/v1/widget/chat", async (req: Request, res: Response) => {
     try {
-      const origin = req.headers.origin
-      if (typeof origin !== "string" || origin.length === 0) {
-        res.status(403).json({ error: "origin header required" })
-        return
-      }
-      const auth = req.headers.authorization
-      const token = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : null
-      const session = token !== null ? verifySessionToken(token, options.tokenSecret) : null
-      if (session === null) {
-        res.status(401).json({ error: "invalid session" })
-        return
-      }
-      if (session.origin !== origin) {
-        // A valid token replayed from a different site — exactly the
-        // exfiltration the origin binding exists to kill.
-        res.status(403).json({ error: "origin not allowed" })
-        return
-      }
-      corsHeaders(res, origin)
+      const session = authenticate(req, res)
+      if (session === null) return
+      const origin = session.origin
 
       // Rate limits AFTER auth (so their 429s carry CORS headers and the
       // widget can render a "one moment" state) and BEFORE any real work.
@@ -316,6 +331,52 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       console.error("[widget] chat route failed:", err)
       if (!res.headersSent) res.status(500).json({ error: "internal error" })
       else res.end()
+    }
+  })
+
+  // ── Escalate: hand the conversation to a person (M4.1) ───────────────────
+  // Plain JSON, not SSE: the transition is one small state change, and the
+  // stream that carries the human's messages is M4's WebSocket, not this.
+  // The per-visitor chat bucket is deliberately REUSED rather than given its
+  // own: escalation is cheap for us but expensive for the tenant (it puts a
+  // person on the hook), and a visitor who has just spent their question
+  // budget should not have a separate allowance for summoning staff.
+  app.post("/v1/widget/escalate", async (req: Request, res: Response) => {
+    try {
+      const session = authenticate(req, res)
+      if (session === null) return
+
+      if (!chatIpLimiter.take(req.ip ?? "unknown") || !chatVisitorLimiter.take(`${session.org}:${session.visitor}`)) {
+        res.status(429).json({ error: "too many requests" })
+        return
+      }
+
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const conversationId = body["conversationId"]
+      if (typeof conversationId !== "string" || !isId("con", conversationId)) {
+        res.status(400).json({ error: "invalid conversationId" })
+        return
+      }
+
+      const outcome = await requestHandoff(options.db, {
+        orgId: session.org,
+        conversationId,
+        visitorId: session.visitor,
+        // The button. Auto-escalation after a refusal (reason
+        // 'low_confidence') is the pipeline's call to make, not a visitor's
+        // to claim — a request cannot ask for it.
+        reason: "visitor_request",
+      })
+      if (!outcome.ok) {
+        // Unknown, another org's, and another visitor's conversation are one
+        // answer: which it was is not information this surface shares.
+        res.status(404).json({ error: "conversation not found" })
+        return
+      }
+      res.json({ status: outcome.handoff.status, created: outcome.created })
+    } catch (err) {
+      console.error("[widget] escalate failed:", err)
+      res.status(500).json({ error: "internal error" })
     }
   })
 }

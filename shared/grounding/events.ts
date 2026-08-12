@@ -19,9 +19,16 @@ type AnswerEvent =
    *  appear here — they exist only in message_citations. */
   | { type: "claim"; ord: number; text: string; url: string | null; headingPath: string | null }
   /** The groundedness gate declined to answer (or nothing survived
-   *  verification). The widget renders the fallback text and, later (M4),
-   *  offers escalation. */
+   *  verification). The widget renders the fallback text and offers
+   *  escalation (M4). */
   | { type: "refusal"; text: string }
+  /** A human owns this conversation, so the bot did not answer (M4.1). The
+   *  visitor's message was still PERSISTED — it is what the agent needs to
+   *  read — and it arrives instead of claims, never alongside them: two
+   *  voices answering one question is the failure mode handoff exists to
+   *  prevent. `pending` is "waiting for someone", `active` is "someone is
+   *  here"; the widget words the wait differently for each. */
+  | { type: "handoff"; status: "pending" | "active" }
   /** A transient failure AFTER the stream opened (model failed the JSON
    *  contract twice, provider outage mid-answer). Distinct from refusal —
    *  a refusal is an answer, an error is the absence of one; the widget

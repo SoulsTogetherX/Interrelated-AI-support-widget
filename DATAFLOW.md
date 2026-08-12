@@ -39,7 +39,10 @@ M3.8 the allowlist and install snippet are managed from the UI (§7.11)
 the BYO loop: an org's own EMBEDDING model now indexes its corpus (§3.2's
 resolve hop) and embeds its visitors' questions (§5.3), from one
 credential row, with a model change re-queueing the corpus in the same
-transaction that changed it (§7.8). Coming after: handoff (M4).
+transaction that changed it (§7.8) — **M3 COMPLETE.** M4 (handoff) is
+underway: as of M4.1 a conversation can be handed to a person (§8), which
+is one idempotent state change and one deliberate silence — the bot stops
+answering that thread while still keeping every word the visitor types.
 
 ---
 
@@ -853,3 +856,62 @@ OriginForm submit
   removal is equally immediate: the same origin → 403, no CORS headers,
   so an unlisted site's browser cannot even read the error
 ```
+
+---
+
+## §8 Handoff — bot → human (M4, underway)
+
+M4.1 is the transition itself: the moment a conversation stops being the
+bot's. The socket that carries the human's replies, presence, and replay
+arrive in the increments after this one; what exists today is the state
+change, the queue row it writes, and the silence it imposes on the bot.
+
+### §8.1 Escalation — POST `/v1/widget/escalate`
+
+```
+widget "talk to a person"           (M4.3 renders the button)
+  → POST /v1/widget/escalate        realtime/src/routes/widget.ts
+      Origin + Bearer token         the SAME authenticate() ladder chat
+                                    uses: uniform 401 on a bad token, 403
+                                    on a token replayed from another site
+      per-IP + per-visitor buckets  deliberately the CHAT buckets, not new
+                                    ones — escalation is cheap for us and
+                                    expensive for the tenant, so a spent
+                                    question budget must not leave a
+                                    separate allowance for summoning staff
+      conversationId shape check    isId("con", …) before any query
+  → requestHandoff                  realtime/src/handoff/escalate.ts
+      conversation scoped by org AND visitor
+        · miss → { ok:false, not_found } → 404
+          (unknown / another org's / another visitor's are ONE answer;
+           distinguishing them on a public route is an oracle)
+      already open? → return it, created:false        ← the common retry
+      else ONE transaction:
+            INSERT handoff_sessions (pending, reason='visitor_request')
+            UPDATE conversations SET status='escalated'
+              (the coarse state and the record move together, or a
+               visitor waits in a queue nobody can see)
+        · unique violation (23505) → another request won the race in the
+          microseconds since the read → read back the winner, created:false
+          — idempotence lives in the partial unique index over OPEN rows
+            (§3.3.4), not in application deduplication
+  → 200 { status: "pending" | "active", created }
+```
+
+### §8.2 What the bot does afterwards
+
+```
+POST /v1/widget/chat (next question in that thread)     §5.3
+  → answerQuestion                  realtime/src/answer/pipeline.ts
+      conversation resolved, VISITOR MESSAGE PERSISTED, meta emitted
+      → getOpenHandoff(db, conversationId)
+          · open → emit {type:"handoff", status}
+                   emit {type:"done", claimsTotal:0, claimsShown:0}
+                   RETURN — no retrieval, no model call, no assistant row
+          · none → the ordinary answer path continues (§5.1)
+```
+
+The persist-then-stop order is the point: the visitor's words are exactly
+what the waiting agent needs to read, and someone who keeps typing while
+queued must not have those turns dropped. Answering anyway would put two
+voices in one conversation and bill the tenant for it.

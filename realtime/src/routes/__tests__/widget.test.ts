@@ -87,6 +87,13 @@ async function chat(
   }
   return { status: response.status, events: [], json: await response.json().catch(() => null) }
 }
+
+/** A session token for the allowlisted origin — every token-authenticated
+ *  route's starting point. */
+async function freshToken(): Promise<string> {
+  const response = await mintSession()
+  return ((await response.json()) as { token: string }).token
+}
 //#endregion
 
 describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
@@ -213,11 +220,6 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
   })
 
   describe("chat", () => {
-    async function freshToken(): Promise<string> {
-      const response = await mintSession()
-      return ((await response.json()) as { token: string }).token
-    }
-
     it("streams a grounded answer end to end — meta, claim with citation, done", async () => {
       const token = await freshToken()
       const { status, events } = await chat(token, { question: CHUNK_TEXT })
@@ -323,6 +325,69 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
         baseUrl = previousBase
         await new Promise((resolve) => limitedServer.close(resolve))
       }
+    })
+  })
+
+  describe("escalate", () => {
+    const escalate = (token: string, body: Record<string, unknown>, origin = GOOD_ORIGIN) =>
+      fetch(`${baseUrl}/v1/widget/escalate`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin, authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      })
+
+    it("queues the visitor for a human, idempotently, and stops the bot answering", async () => {
+      const token = await freshToken()
+      const opened = await chat(token, { question: CHUNK_TEXT })
+      const meta = opened.events.find((e) => e.type === "meta")
+      const conversationId = meta?.type === "meta" ? meta.conversationId : ""
+      expect(conversationId).not.toBe("")
+
+      const first = await escalate(token, { conversationId })
+      expect(first.status).toBe(200)
+      expect(await first.json()).toEqual({ status: "pending", created: true })
+      // CORS on the real response, not just preflight — the widget has to
+      // read this to render the waiting state.
+      expect(first.headers.get("access-control-allow-origin")).toBe(GOOD_ORIGIN)
+
+      // A visitor mashing the button gets the same queue place, not a second.
+      const second = await escalate(token, { conversationId })
+      expect(await second.json()).toEqual({ status: "pending", created: false })
+      expect(await db.selectFrom("handoff_sessions").selectAll()
+        .where("conversation_id", "=", conversationId).execute()).toHaveLength(1)
+
+      // And the next question is kept for the agent rather than answered.
+      const after = await chat(token, { question: CHUNK_TEXT, conversationId })
+      expect(after.events.map((e) => e.type)).toEqual(["meta", "handoff", "done"])
+      expect(await db.selectFrom("conversations").select("status")
+        .where("id", "=", conversationId).executeTakeFirstOrThrow()).toEqual({ status: "escalated" })
+    })
+
+    it("cannot escalate another visitor's conversation, or a fabricated one", async () => {
+      const mine = await freshToken()
+      const opened = await chat(mine, { question: CHUNK_TEXT })
+      const meta = opened.events.find((e) => e.type === "meta")
+      const conversationId = meta?.type === "meta" ? meta.conversationId : ""
+
+      const intruder = await freshToken()
+      const hijack = await escalate(intruder, { conversationId })
+      const fabricated = await escalate(mine, { conversationId: newId("con") })
+
+      // One answer for both: which it was is not information this surface
+      // shares, and nothing was queued either way.
+      expect(hijack.status).toBe(404)
+      expect(fabricated.status).toBe(404)
+      expect(await db.selectFrom("handoff_sessions").selectAll()
+        .where("conversation_id", "=", conversationId).execute()).toHaveLength(0)
+    })
+
+    it("rejects a bad token and a malformed conversationId before any write", async () => {
+      const token = await freshToken()
+      expect((await escalate("not-a-token", { conversationId: newId("con") })).status).toBe(401)
+      expect((await escalate(token, { conversationId: "con_nope" })).status).toBe(400)
+      expect((await escalate(token, {})).status).toBe(400)
+      // A valid token replayed from another site dies on the origin binding.
+      expect((await escalate(token, { conversationId: newId("con") }, EVIL_ORIGIN)).status).toBe(403)
     })
   })
 })

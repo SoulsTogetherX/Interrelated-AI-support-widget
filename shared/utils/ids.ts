@@ -30,6 +30,7 @@ type IdPrefix =
   | "job"   // ingest_jobs (queue rows for the ingest worker)
   | "con"   // conversations (one widget chat thread)
   | "msg"   // messages (one turn within a conversation)
+  | "hnd"   // handoff_sessions (one escalation of a conversation to a human)
 //#endregion
 
 //#region Constants

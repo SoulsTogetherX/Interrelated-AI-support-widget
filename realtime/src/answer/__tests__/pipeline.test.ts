@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import pool, { db } from "@/db/pool"
 import { migrateToLatest } from "@/db/migrate"
 import { answerQuestion, AnswerSchemaError, REFUSAL_TEXT, NOTHING_VERIFIED_TEXT } from "@/answer/pipeline"
+import { requestHandoff } from "@/handoff/escalate"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import { MockLLMProvider } from "@providers/llm/mock"
 import type { AnswerEvent } from "@shared/grounding/events"
@@ -194,6 +195,45 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
     // The gate signal is recorded even on refusals — threshold tuning needs
     // exactly these rows.
     expect(Number(assistant.retrieval_score)).toBeGreaterThan(0.75)
+  })
+
+  it("stays out of a handed-off conversation but keeps the question", async () => {
+    // M4.1: once a human owns the thread, the bot must not answer over
+    // them — and must not spend the tenant's tokens trying. The visitor's
+    // message still persists, because it is precisely what the waiting
+    // agent needs to read.
+    const opening = new MockLLMProvider([{ text: scriptedAnswer([
+      { text: "Refunds take five business days.", chunkId: refundChunkId, quote: "within five business days" },
+    ]) }])
+    const first = await answerQuestion({
+      db, embedder, llm: opening, orgId,
+      visitorId: "vis-handoff", question: "How long do refunds take?",
+    })
+
+    const escalated = await requestHandoff(db, {
+      orgId, conversationId: first.conversationId,
+      visitorId: "vis-handoff", reason: "visitor_request",
+    })
+    expect(escalated.ok).toBe(true)
+
+    const llm = new MockLLMProvider([]) // any call would throw "exhausted"
+    const events: AnswerEvent[] = []
+    const result = await answerQuestion({
+      db, embedder, llm, orgId,
+      visitorId: "vis-handoff", conversationId: first.conversationId,
+      question: "Actually, can someone check my order?",
+      onEvent: (e) => events.push(e),
+    })
+
+    expect(llm.calls).toHaveLength(0)
+    expect(result.handoff).toBe("pending")
+    expect(events.map((e) => e.type)).toEqual(["meta", "handoff", "done"])
+    // The question is history; no assistant row was invented to answer it.
+    const rows = await db.selectFrom("messages").selectAll()
+      .where("conversation_id", "=", first.conversationId).orderBy("created_at").execute()
+    expect(rows.at(-1)?.role).toBe("visitor")
+    expect(rows.at(-1)?.content).toBe("Actually, can someone check my order?")
+    expect(rows.filter((r) => r.id === result.messageId)).toHaveLength(0)
   })
 
   it("retries once on a schema violation, feeding the errors back", async () => {

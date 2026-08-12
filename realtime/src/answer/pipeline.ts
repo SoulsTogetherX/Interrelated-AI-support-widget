@@ -14,6 +14,7 @@ import { hybridSearch } from "@/retrieval/search"
 import type { RetrievedChunk } from "@/retrieval/search"
 import { evaluateGroundedness, DEFAULT_MAX_DISTANCE } from "@/answer/gate"
 import { buildAnswerMessages, buildRetryMessages } from "@/answer/prompt"
+import { getOpenHandoff } from "@/handoff/escalate"
 //#endregion
 
 //#region Type Defs
@@ -63,6 +64,10 @@ interface AnswerResult {
   claims: VerifiedClaim[]
   ttftMs: number | null
   totalMs: number
+  /** Set when a human already owns the conversation (M4.1): the question
+   *  was persisted for the agent and nothing was generated. Absent on every
+   *  normal answer, so a caller cannot mistake one for the other. */
+  handoff?: "pending" | "active"
 }
 
 /** Thrown when the model failed the JSON contract twice (initial + the one
@@ -160,6 +165,30 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
 
   const messageId = newId("msg")
   emit({ type: "meta", conversationId, messageId })
+
+  // ── Handed off? ──────────────────────────────────────────────────────────
+  // A human owns this thread, so the bot stays out of it: no retrieval, no
+  // model call, no assistant row. The visitor's message is already
+  // persisted above — deliberately, because it is exactly what the waiting
+  // agent needs to read, and a visitor who keeps typing while queued must
+  // not have those turns dropped. The alternative (answering anyway) is two
+  // voices in one conversation, which is the failure mode handoff exists to
+  // prevent, and it would bill the tenant for it.
+  const openHandoff = await getOpenHandoff(db, conversationId)
+  if (openHandoff) {
+    emit({ type: "handoff", status: openHandoff.status })
+    emit({ type: "done", claimsTotal: 0, claimsShown: 0 })
+    return {
+      conversationId,
+      messageId,
+      refused: false,
+      content: "",
+      claims: [],
+      ttftMs: null,
+      totalMs: Date.now() - startedAt,
+      handoff: openHandoff.status,
+    }
+  }
 
   // ── Retrieve and gate ────────────────────────────────────────────────────
   // task "query": an asymmetric embedding model puts a QUESTION into the
