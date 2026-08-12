@@ -35,8 +35,11 @@ transaction → the worker WAKES (production has no poll timer at all —
 §3.1) → progress auto-refreshes on the sources page. As of M3.7 the
 transcripts are readable (§7.10), stripped claims included, and as of
 M3.8 the allowlist and install snippet are managed from the UI (§7.11)
-— the dashboard no longer needs SQL by hand for anything. Coming after:
-the embedding half of BYO (M3.6b), handoff (M4).
+— the dashboard no longer needs SQL by hand for anything. M3.6b closed
+the BYO loop: an org's own EMBEDDING model now indexes its corpus (§3.2's
+resolve hop) and embeds its visitors' questions (§5.3), from one
+credential row, with a model change re-queueing the corpus in the same
+transaction that changed it (§7.8). Coming after: handoff (M4).
 
 ---
 
@@ -104,13 +107,16 @@ process start
   → start()                              realtime/src/server.ts
       1. migrateToLatest(db)             realtime/src/db/migrate.ts
            → ExplicitMigrationProvider yields the MIGRATIONS registry
-             (001_initial_schema, 002_content_pipeline, 003_chat —
-              realtime/src/db/migrations/)
+             (001_initial_schema — the flattened baseline; new work adds
+              002 onward. realtime/src/db/migrations/)
            → Kysely Migrator compares against its kysely_migration
              bookkeeping table, applies anything unapplied, in key order
            · error → throw → start().catch → console.error → exit(1)
              (orchestrator restarts with backoff; a process that cannot
-              reach its schema must not accept traffic)
+              reach its schema must not accept traffic. A database that
+              applied the PRE-flatten 001–005 fails here by design —
+              "corrupted migrations" — and needs the one-time reset the
+              migration's header spells out)
       2. createApp()                     realtime/src/app.ts
            → trust proxy, 64 KB JSON cap, configureHealthRoutes()
       3. createServer(app).listen(BACKEND_PORT ?? PORT ?? 3000)
@@ -180,6 +186,11 @@ IngestWorker poll timer fires
   → load sources row; kind='upload' → fail loudly (uploads are parsed at
     upload time in M3, never crawled)
   → sources.status = 'crawling'
+  → resolveEmbeddingProvider(db, org)    realtime/src/credentials/resolve.ts
+      the org's BYO embedding model, decrypted for this job; null → the
+      app-level embedder. Resolved ONCE per job: a rotation landing
+      mid-crawl would split one source across two vector spaces.
+      A decrypt failure throws → job 'failed' (never a silent wrong model)
   → for await (event of crawl(source))   realtime/src/ingest/crawler.ts
       · stop() requested?  → job back to 'queued', source 'pending', return
       · {plan, total}      → ingest_jobs.docs_total = total   (sitemaps)
@@ -216,11 +227,16 @@ crawl() yields a page                    realtime/src/ingest/crawler.ts
 #processPage                             realtime/src/ingest/worker.ts
   → content_hash = sha256(doc.text)
   → existing live document for (source_id, url)?
-      · same hash → refresh title/fetched_at. DONE — no chunking, no
+      · same hash AND its chunks already carry vectors under THIS job's
+        model → refresh title/fetched_at. DONE — no chunking, no
         embedding. (The recrawl short-circuit: embedding quota is the
         scarcest resource in the pipeline.)
+      · same hash, no vectors under this model → fall through and
+        re-embed: the tenant switched embedding providers, so identical
+        text still has to move into the new space (M3.6b)
   → chunkBlocks(doc.blocks)              shared/chunking/chunker.ts
-  → embedder.embed(batches of 32)        providers/embedding/*
+  → embedder.embed(batches of 32, {task:"document"})
+                                         providers/embedding/*
       input per chunk: heading_path + "\n" + text (trail gives the vector
       section context; STORED text stays trail-free)
   → padVector → toPgvector               shared/utils/vectors.ts
@@ -250,10 +266,14 @@ becomes the caller; today it is driven by `npm run search`
 
 ```
 caller (searchDev CLI | tests | the answer pipeline §5)
-  → embed the query                      providers/embedding/* .embed([q])
+  → embed the query                      providers/embedding/*
+                                         .embed([q], {task:"query"})
       (MUST be the same model that embedded the chunks — different models
-       are different vector spaces; searchDev warns when the org has no
-       embeddings under the chosen model)
+       are different vector spaces; the chat route gets that by resolving
+       the SAME credential row the ingest worker did (§5.3), and searchDev
+       warns when the org has no embeddings under the chosen model.
+       task:"query" is what an asymmetric model needs to place a question
+       in the same space as a passage; symmetric models ignore it)
   → hybridSearch(db, {orgId, queryText, queryVector, model, k})
                                          realtime/src/retrieval/search.ts
       both arms run CONCURRENTLY at poolSize (50) depth:
@@ -466,12 +486,16 @@ widget (M2.6) or curl-with-headers
       validate question (≤2000 chars) and conversationId shape
       → SSE headers flush              TTFB paid before retrieval starts
       → resolveGenerationProvider      realtime/src/credentials/resolve.ts
-                                       (M3.5): the org's saved BYO
-                                       credential — decrypted for this
-                                       request only — outranks the
-                                       app-level fallback llm; no cache,
-                                       so rotation bites on the very
-                                       next question
+        + resolveEmbeddingProvider     (M3.5 / M3.6b): the org's saved BYO
+                                       credentials — decrypted for this
+                                       request only — outrank the
+                                       app-level fallbacks; no cache, so
+                                       rotation bites on the very next
+                                       question. The embedding one is not
+                                       a preference but a REQUIREMENT: the
+                                       question has to be embedded by the
+                                       model that embedded the chunks, and
+                                       the ingest worker reads this same row
       → answerQuestion(§5.1)           visitorId = token.visitor — the
                                        binding that stops one visitor
                                        continuing another's thread
@@ -705,23 +729,45 @@ ProviderForm submit (Test or Test & save — intent from the pressed button)
           body: { role, provider, apiKey?, baseUrl?, model?, save }
       → requireSecret → requireOrg       realtime/src/routes/internal.ts
       → checkCredentialInput             realtime/src/credentials/validate.ts
-          shape per provider + SSRF vet: assertPublicUrl(base_url)
+          shape per provider AND per role (groq has no embeddings — refused
+          by name) + SSRF vet: assertPublicUrl(base_url)
           (resolves DNS, rejects private/loopback — fail closed)
-      → buildCredentialProvider → testGenerationRoundTrip
+      → role='generation':
+          buildGenerationProvider → testGenerationRoundTrip
           ONE real 16-token completion against the tenant's provider;
           latency measured to done; failure → 422 with a message that
           never contains the key (LLMHttpError strips by construction)
+        role='embedding'  (M3.6b):
+          buildEmbeddingProvider → testEmbeddingRoundTrip
+          ONE real embedding of one short text; reports the DIMENSION the
+          provider actually returned. > 1024 → 422 naming both numbers
+          (halfvec(1024) is the storage contract; truncating a
+          non-Matryoshka embedding would destroy it)
       → save:false → report + STOP (nothing written — the Test button)
       → save:true  → one transaction:
+            SELECT old (org, role) row      ← its model, for the compare
             DELETE old (org, role) row      ← superseded ciphertext
                                               ceases to exist
             INSERT { key_ciphertext: AES-GCM(key, master, aad=row id),
-                     key_suffix: last 4, last_validation: "model, Nms" }
+                     key_suffix: last 4, dim: measured (embedding only),
+                     last_validation: "model, [N-d,] Nms" }
                                          realtime/src/credentials/vault.ts
-    → success → revalidatePath(providers page) → status card re-renders
-      from web/src/lib/providers/queries.ts — which can never select
-      key_ciphertext; the suffix is all the dashboard will ever show
+            embedding role AND the model changed → enqueueReindex:
+              one queued ingest_jobs row per source (skipping sources with
+              work already queued, and uploads) — the corpus has to follow
+              the model or the dense arm goes blind, and the same
+              transaction that changed the credential is the only honest
+              place to decide that
+      → reindexed > 0 → onEnqueue() → worker.wake()   (production's
+                                       scheduler, §7.9)
+    → success → revalidatePath(providers + sources pages) → status card
+      re-renders from web/src/lib/providers/queries.ts — which can never
+      select key_ciphertext; the suffix is all the dashboard will ever show
 ```
+
+DELETE `/internal/orgs/<id>/credentials/embedding` runs the same re-index
+for the same reason: removing a credential reverts the org to the
+platform's built-in model, which is a model change like any other.
 
 ### §7.9 Source connect → crawl → visible progress (M3.6a)
 

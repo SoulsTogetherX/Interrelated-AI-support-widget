@@ -1,5 +1,5 @@
 //#region Why this shape
-// Session lifecycle against the sessions table from migration 001, ported
+// Session lifecycle against the sessions table from §3.3, ported
 // from OnlineWhiteboard's session.ts with its Express req/res halves
 // replaced by cookies.ts (Next's cookie jar lives in next/headers, which
 // only exists inside a request scope — keeping it OUT of this file is what

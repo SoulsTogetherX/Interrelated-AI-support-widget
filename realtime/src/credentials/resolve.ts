@@ -1,12 +1,13 @@
 //#region Why this file
-// The READ side of the vault: org → configured, ready-to-call LLMProvider.
+// The READ side of the vault: org → configured, ready-to-call provider.
 // This is where "per-org encrypted credentials replace the LLM_PROVIDER
 // env stopgap" (§3.15.4's promise) actually happens: the widget chat route
 // calls this per ANSWER, the key decrypts in memory for exactly the
 // lifetime of the request, and the constructed adapter is discarded with
-// it.
+// it. Since M3.6b the embedding role resolves the same way, for the ingest
+// worker (per job) and the query path (per answer).
 //
-// Per-answer on purpose, NO cache: a rotated or removed credential must
+// Per-call on purpose, NO cache: a rotated or removed credential must
 // take effect on the very next question (a cache would serve a revoked key
 // until eviction — the exact window rotation exists to close), and the
 // cost is one indexed row read plus an AES-GCM decrypt of <1 KB —
@@ -21,13 +22,54 @@
 //#endregion
 
 //#region Imports
-import { buildCredentialProvider } from "./validate"
+import { buildEmbeddingProvider, buildGenerationProvider } from "./validate"
 import { decryptProviderKey } from "./vault"
 
 import type { Kysely } from "kysely"
 import type { Database } from "@shared/db/schema"
 import type { LLMProvider } from "@providers/llm/types"
+import type { EmbeddingProvider } from "@providers/embedding/types"
 import type { CredentialInput } from "./validate"
+//#endregion
+
+//#region Row → input
+/** Fetches one role's credential and turns it into the shape the builders
+ *  take. Returns null when the org has none — the fallback path. */
+async function loadCredential(
+  db: Kysely<Database>,
+  orgId: string,
+  role: "generation" | "embedding",
+): Promise<{ input: CredentialInput; dim: number | null } | null> {
+  const row = await db
+    .selectFrom("org_provider_credentials")
+    .selectAll()
+    .where("org_id", "=", orgId)
+    .where("role", "=", role)
+    .executeTakeFirst()
+  if (!row) {
+    return null
+  }
+  // The schema's provider union is wider than the adapters that exist
+  // (anthropic is forward provision — §3.3.3); a row naming an
+  // unimplemented provider is unreachable through validate.ts, so hitting
+  // one here is corruption worth a loud stop.
+  if (row.provider === "anthropic") {
+    throw new Error("anthropic credentials have no adapter yet")
+  }
+  return {
+    input: {
+      role,
+      provider: row.provider,
+      apiKey:
+        row.key_ciphertext !== null
+          ? decryptProviderKey(row.key_ciphertext, row.id)
+          : undefined,
+      baseUrl: row.base_url ?? undefined,
+      model: row.model ?? undefined,
+    },
+    dim: row.dim,
+  }
+}
 //#endregion
 
 //#region Resolution
@@ -35,32 +77,33 @@ export async function resolveGenerationProvider(
   db: Kysely<Database>,
   orgId: string,
 ): Promise<LLMProvider | null> {
-  const row = await db
-    .selectFrom("org_provider_credentials")
-    .selectAll()
-    .where("org_id", "=", orgId)
-    .where("role", "=", "generation")
-    .executeTakeFirst()
-  if (!row) {
+  const loaded = await loadCredential(db, orgId, "generation")
+  return loaded === null ? null : buildGenerationProvider(loaded.input)
+}
+
+/**
+ * The org's embedding provider, or null to fall back to the app-level one.
+ *
+ * The stored dim is passed straight through: it was measured by the Test
+ * round-trip, so from here on every response is checked against it rather
+ * than trusted (providers/embedding/http.ts's assertBatch). A row without
+ * one is unrepresentable — §3.3.3's CHECK ties dim to the embedding
+ * role — so the fallback is defensive only, and lets the adapter
+ * rediscover rather than refuse.
+ *
+ * The load-bearing property this function buys: the ingest worker and the
+ * query path both call it, so a tenant's chunks and their visitors'
+ * questions land in the SAME vector space by construction. Nothing else in
+ * the system enforces that agreement.
+ */
+export async function resolveEmbeddingProvider(
+  db: Kysely<Database>,
+  orgId: string,
+): Promise<EmbeddingProvider | null> {
+  const loaded = await loadCredential(db, orgId, "embedding")
+  if (loaded === null) {
     return null
   }
-  // The schema's provider union is wider than the adapters that exist
-  // (anthropic is forward provision — migration 004); a row naming an
-  // unimplemented provider is unreachable through validate.ts, so hitting
-  // one here is corruption worth a loud stop.
-  if (row.provider === "anthropic") {
-    throw new Error("anthropic credentials have no adapter yet")
-  }
-  const input: CredentialInput = {
-    role: "generation",
-    provider: row.provider,
-    apiKey:
-      row.key_ciphertext !== null
-        ? decryptProviderKey(row.key_ciphertext, row.id)
-        : undefined,
-    baseUrl: row.base_url ?? undefined,
-    model: row.model ?? undefined,
-  }
-  return buildCredentialProvider(input)
+  return buildEmbeddingProvider(loaded.input, loaded.dim ?? undefined)
 }
 //#endregion

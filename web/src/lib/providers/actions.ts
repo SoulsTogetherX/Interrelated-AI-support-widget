@@ -45,6 +45,22 @@ function field(formData: FormData, name: string): string | undefined {
   const value = formData.get(name)
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined
 }
+
+/** Which credential the form is talking about. Unknown values collapse to
+ *  "generation" — the same stance as the intent field below: a tampered
+ *  form gets the conservative reading, and realtime validates the role
+ *  again anyway. */
+function role(formData: FormData): "generation" | "embedding" {
+  return field(formData, "role") === "embedding" ? "embedding" : "generation"
+}
+
+/** "…and 3 sources queued for re-indexing." — said out loud because a
+ *  changed embedding model re-crawls the org's sources, and a tenant who
+ *  sees crawls restart with no explanation reasonably assumes a bug. */
+function reindexNote(count: number): string {
+  if (count === 0) return ""
+  return ` ${count} source${count === 1 ? "" : "s"} queued for re-indexing under the new model.`
+}
 //#endregion
 
 //#region Actions
@@ -64,7 +80,7 @@ export async function submitProviderAction(
   const result = await submitCredential(
     orgId,
     {
-      role: "generation",
+      role: role(formData),
       provider: field(formData, "provider") ?? "",
       apiKey: field(formData, "apiKey"),
       baseUrl: field(formData, "baseUrl"),
@@ -76,18 +92,21 @@ export async function submitProviderAction(
     return { error: result.error, success: null }
   }
 
+  // An embedding round-trip reports the dimension it measured; a generation
+  // one has none. Both are what the provider ACTUALLY answered, not what
+  // was typed into the form.
+  const what = result.value.dim !== null
+    ? `${result.value.model} (${result.value.dim}-d) answered in ${result.value.latencyMs}ms`
+    : `${result.value.model} answered in ${result.value.latencyMs}ms`
+
   if (save) {
     // The status card is RSC-rendered from the database; a save changes it.
+    // The sources page shows the re-index this may have queued.
     revalidatePath(`/dashboard/${orgId}/providers`)
-    return {
-      error: null,
-      success: `Saved — ${result.value.model} answered in ${result.value.latencyMs}ms.`,
-    }
+    revalidatePath(`/dashboard/${orgId}/sources`)
+    return { error: null, success: `Saved — ${what}.${reindexNote(result.value.reindexed)}` }
   }
-  return {
-    error: null,
-    success: `Test passed — ${result.value.model} answered in ${result.value.latencyMs}ms. Nothing was saved.`,
-  }
+  return { error: null, success: `Test passed — ${what}. Nothing was saved.` }
 }
 
 export async function removeProviderAction(formData: FormData): Promise<void> {
@@ -96,7 +115,8 @@ export async function removeProviderAction(formData: FormData): Promise<void> {
   if (!gate.ok) {
     return
   }
-  await removeCredential(orgId, "generation")
+  await removeCredential(orgId, role(formData))
   revalidatePath(`/dashboard/${orgId}/providers`)
+  revalidatePath(`/dashboard/${orgId}/sources`)
 }
 //#endregion

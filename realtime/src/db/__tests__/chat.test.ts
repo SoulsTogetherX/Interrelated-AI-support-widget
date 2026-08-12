@@ -7,11 +7,11 @@ import { newId } from "@shared/utils/ids"
 //#endregion
 
 //#region Test Setup
-// Migration 003 integration suite — chat persistence constraints at their
+// Chat-schema integration suite — the persistence constraints at their
 // boundaries, same gating pattern as migrate.test.ts.
 const DB_CONFIGURED = Boolean(process.env.POSTGRES_PASSWORD)
 
-describe.skipIf(!DB_CONFIGURED)("chat persistence (migration 003)", () => {
+describe.skipIf(!DB_CONFIGURED)("chat persistence (conversations, messages, citations)", () => {
   let orgId: string
   let conversationId: string
 

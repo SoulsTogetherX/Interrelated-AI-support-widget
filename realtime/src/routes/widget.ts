@@ -9,7 +9,7 @@ import type { LLMProvider } from "@providers/llm/types"
 import type { AnswerEvent } from "@shared/grounding/events"
 import { isId } from "@shared/utils/ids"
 import { answerQuestion } from "@/answer/pipeline"
-import { resolveGenerationProvider } from "@/credentials/resolve"
+import { resolveEmbeddingProvider, resolveGenerationProvider } from "@/credentials/resolve"
 import { RateLimiter } from "@/widget/rateLimit"
 import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
 //#endregion
@@ -41,6 +41,9 @@ import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
  */
 interface WidgetRouteOptions {
   db: Kysely<Database>
+  /** The FALLBACK query embedder (env-selected; mock in every keyless
+   *  stack). Since M3.6b an org's saved BYO embedding credential outranks
+   *  it — and MUST, since it is what embedded their chunks. */
   embedder: EmbeddingProvider
   /** The FALLBACK generation provider (env-selected; mock in every keyless
    *  stack). Since M3.5 an org's saved BYO credential outranks it at answer
@@ -276,12 +279,21 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         // credential, which is what keeps the demo org and CI keyless. A
         // resolve failure lands in the catch below: one opaque error event,
         // the truth in the server log.
-        const orgLLM =
-          (await resolveGenerationProvider(options.db, session.org)) ?? options.llm
+        //
+        // The embedding credential resolves the same way and for a
+        // stricter reason (M3.6b): the question must be embedded by the
+        // model that embedded the org's CHUNKS, or the dense arm searches
+        // an empty space and the gate refuses everything. The ingest worker
+        // resolves the identical row, so that agreement holds by
+        // construction rather than by two settings matching.
+        const [orgLLM, orgEmbedder] = await Promise.all([
+          resolveGenerationProvider(options.db, session.org),
+          resolveEmbeddingProvider(options.db, session.org),
+        ])
         await answerQuestion({
           db: options.db,
-          embedder: options.embedder,
-          llm: orgLLM,
+          embedder: orgEmbedder ?? options.embedder,
+          llm: orgLLM ?? options.llm,
           orgId: session.org,
           visitorId: session.visitor,
           question,

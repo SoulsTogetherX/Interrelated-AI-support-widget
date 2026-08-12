@@ -21,6 +21,15 @@ import type { EmbeddingProvider } from "./types"
  *
  * ~30 MB model download on first use, cached under local_cache/ by
  * fastembed. The gated test (FASTEMBED_TEST=1) exercises the real thing.
+ *
+ * The EmbedOptions task hint is ignored here, and that is a decision rather
+ * than an omission: bge-small IS asymmetric (it ships a "Represent this
+ * sentence for searching relevant passages:" query prefix), but every
+ * number in eval/RESULTS.md — including the recall floor CI enforces and
+ * the refusal threshold in answer/gate.ts — was measured with the symmetric
+ * call. Turning the prefix on is a retrieval change that must land WITH a
+ * re-run of the golden set and a re-baselined floor, not as a side effect
+ * of the BYO-embedding increment.
  */
 /** The slice of fastembed's API this provider touches. Declared locally (and
  *  structurally satisfied by the real module) so this file typechecks in

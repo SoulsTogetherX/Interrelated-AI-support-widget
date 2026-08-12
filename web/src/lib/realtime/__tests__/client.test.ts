@@ -64,12 +64,32 @@ describe("realtime internal client", () => {
     )
     expect(result).toEqual({
       ok: true,
-      value: { saved: true, model: "m", latencyMs: 42, suffix: "a3f9" },
+      // A generation save reports no dimension and no re-index — both are
+      // embedding-role facts, and the client normalizes their absence
+      // rather than leaving the UI to check for undefined.
+      value: { saved: true, model: "m", latencyMs: 42, suffix: "a3f9", dim: null, reindexed: 0 },
     })
     expect(seen[0].method).toBe("POST")
     expect(seen[0].url).toBe("/internal/orgs/org_00000000000000000000000000000000/credentials")
     expect(seen[0].secret).toBe("web-client-test-secret-0123456789ab")
     expect(JSON.parse(seen[0].body)).toMatchObject({ save: true, apiKey: "gsk_something" })
+  })
+
+  it("carries the embedding role's dimension and re-index count through", async () => {
+    await listen(200, { ok: true, saved: true, model: "gemini-embedding-001", latencyMs: 300, dim: 768, reindexed: 2 })
+    const result = await submitCredential(
+      "org_00000000000000000000000000000000",
+      { role: "embedding", provider: "gemini", apiKey: "AIza-something" },
+      true,
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.dim).toBe(768)
+    // The number the UI turns into "2 sources queued for re-indexing" —
+    // dropping it silently is how a tenant ends up confused by crawls they
+    // did not start.
+    expect(result.value.reindexed).toBe(2)
+    expect(JSON.parse(seen[0].body)).toMatchObject({ role: "embedding" })
   })
 
   it("relays the server's validation error verbatim", async () => {

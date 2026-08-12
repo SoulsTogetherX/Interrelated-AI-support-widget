@@ -24,8 +24,13 @@ import { GeminiProvider } from "@providers/llm/gemini"
 import { OllamaProvider } from "@providers/llm/ollama"
 import { OpenAICompatibleProvider } from "@providers/llm/openaiCompatible"
 import { LLMHttpError } from "@providers/llm/http"
+import { GeminiEmbeddingProvider, GEMINI_EMBED_MODEL } from "@providers/embedding/gemini"
+import { OllamaEmbeddingProvider } from "@providers/embedding/ollama"
+import { OpenAICompatibleEmbeddingProvider } from "@providers/embedding/openaiCompatible"
+import { PADDED_DIM } from "@shared/utils/vectors"
 
 import type { LLMProvider } from "@providers/llm/types"
+import type { EmbeddingProvider } from "@providers/embedding/types"
 //#endregion
 
 //#region Types
@@ -42,7 +47,7 @@ export type CredentialCheck =
   | { ok: false; error: string }
 
 export type RoundTrip =
-  | { ok: true; model: string; latencyMs: number }
+  | { ok: true; model: string; latencyMs: number; dim?: number }
   | { ok: false; error: string }
 
 /** The URL vet, injectable for tests (which must reach loopback fakes that
@@ -68,17 +73,7 @@ export async function checkCredentialInput(
   if (b.role !== "generation" && b.role !== "embedding") {
     return { ok: false, error: "role must be 'generation' or 'embedding'." }
   }
-  // The schema accepts embedding rows, but no remote embedding adapters
-  // exist yet — saving a credential nothing can use would look like a
-  // finished feature. The whole embedding path (adapters + save + ingest
-  // under it + query under it) ships together with source indexing (M3.6),
-  // which deletes this branch.
-  if (b.role === "embedding") {
-    return {
-      ok: false,
-      error: "Embedding credentials arrive with M3.6 — generation only for now.",
-    }
-  }
+  const role = b.role
 
   if (typeof b.provider !== "string" || !PROVIDERS.has(b.provider)) {
     return {
@@ -87,6 +82,17 @@ export async function checkCredentialInput(
     }
   }
   const provider = b.provider as CredentialInput["provider"]
+
+  // Groq serves generation only — it has no embeddings endpoint at all
+  // (the plan's provider table says so, and its free tier is the reason it
+  // is the generation default). Naming the gap beats a confusing 404 from
+  // an endpoint that was never there.
+  if (role === "embedding" && provider === "groq") {
+    return {
+      ok: false,
+      error: "Groq does not serve embeddings — use Gemini, Ollama, or an OpenAI-compatible endpoint.",
+    }
+  }
 
   const apiKey = typeof b.apiKey === "string" && b.apiKey.trim() !== "" ? b.apiKey.trim() : undefined
   const baseUrl = typeof b.baseUrl === "string" && b.baseUrl.trim() !== "" ? b.baseUrl.trim() : undefined
@@ -138,12 +144,12 @@ export async function checkCredentialInput(
     }
   }
 
-  return { ok: true, value: { role: "generation", provider, apiKey, baseUrl, model } }
+  return { ok: true, value: { role, provider, apiKey, baseUrl, model } }
 }
 //#endregion
 
 //#region Provider construction + round-trip
-export function buildCredentialProvider(input: CredentialInput): LLMProvider {
+export function buildGenerationProvider(input: CredentialInput): LLMProvider {
   switch (input.provider) {
     case "groq":
       return new GroqProvider({ apiKey: input.apiKey!, model: input.model })
@@ -157,6 +163,59 @@ export function buildCredentialProvider(input: CredentialInput): LLMProvider {
         model: input.model!,
         apiKey: input.apiKey,
       })
+  }
+}
+
+/**
+ * The model id a stored embedding credential resolves to — the exact value
+ * that lands in chunk_embeddings.model, and therefore the thing retrieval
+ * filters on. Only gemini has a default worth having; the self-hosted
+ * shapes always carry an explicit model (checkCredentialInput requires it).
+ *
+ * Exists so the internal API can compare "what the corpus was embedded
+ * with" against "what it will be embedded with next" WITHOUT decrypting a
+ * key just to read a name.
+ */
+export function effectiveEmbeddingModel(
+  provider: CredentialInput["provider"],
+  model: string | null,
+): string {
+  if (model !== null && model !== "") return model
+  return provider === "gemini" ? GEMINI_EMBED_MODEL : ""
+}
+
+/** The embedding twin. `dim` comes from the stored credential row
+ *  (§3.3.3) on every construction AFTER the first Test, which is
+ *  what turns each response into an assertion instead of a discovery —
+ *  omit it exactly once, during validation, and the adapter learns it. */
+export function buildEmbeddingProvider(
+  input: CredentialInput,
+  dim?: number,
+): EmbeddingProvider {
+  switch (input.provider) {
+    case "gemini":
+      return new GeminiEmbeddingProvider({
+        apiKey: input.apiKey!,
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(dim !== undefined ? { dim } : {}),
+      })
+    case "ollama":
+      return new OllamaEmbeddingProvider({
+        model: input.model!,
+        baseUrl: input.baseUrl,
+        ...(dim !== undefined ? { dim } : {}),
+      })
+    case "openai_compatible":
+      return new OpenAICompatibleEmbeddingProvider({
+        baseUrl: input.baseUrl!,
+        model: input.model!,
+        apiKey: input.apiKey,
+        ...(dim !== undefined ? { dim } : {}),
+      })
+    case "groq":
+      // Unreachable through checkCredentialInput, which refuses the pairing
+      // by name; a row here would mean the schema was written around us.
+      throw new Error("groq has no embedding endpoint")
   }
 }
 
@@ -191,6 +250,72 @@ export async function testGenerationRoundTrip(
     }
     if (error instanceof LLMHttpError) {
       return { ok: false, error: `The provider rejected the request: ${error.message}` }
+    }
+    return { ok: false, error: "Could not reach the provider." }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * The embedding role's Test button: one real embedding of one short text.
+ * It answers three questions no shape check can, and each of them is a
+ * failure a visitor would otherwise discover mid-question:
+ *
+ *   - does the key authenticate against THIS endpoint (an embedding key
+ *     and a generation key are often scoped differently);
+ *   - what dimension does the model actually return — the number stored on
+ *     the credential row and asserted on every later call (§3.3.3);
+ *   - does that dimension FIT. halfvec(1024) is the storage contract
+ *     (PADDED_DIM), so a 1536-d or 3072-d model is refused here, with a
+ *     sentence naming the fix, rather than silently truncated: cutting an
+ *     embedding that was not Matryoshka-trained destroys exactly the
+ *     geometry that made it worth storing.
+ *
+ * The pair with testGenerationRoundTrip is deliberate — same shape, same
+ * error vocabulary, so the internal API tests and saves both roles through
+ * one branch.
+ */
+export async function testEmbeddingRoundTrip(
+  provider: EmbeddingProvider,
+  timeoutMs = 15_000,
+): Promise<RoundTrip> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const startedAt = Date.now()
+  try {
+    // Embedded as a DOCUMENT: it is the ingest path — the one that runs
+    // hundreds of times per crawl — that this credential mostly serves.
+    const vectors = await provider.embed(["Interrelated credential check."], {
+      task: "document",
+      signal: controller.signal,
+    })
+    const latencyMs = Date.now() - startedAt
+    const vector = vectors[0]
+    if (vectors.length !== 1 || vector === undefined || vector.length === 0) {
+      return { ok: false, error: "The provider returned no embedding." }
+    }
+    if (vector.length > PADDED_DIM) {
+      return {
+        ok: false,
+        error:
+          `That model returns ${vector.length} dimensions; this platform stores up to ${PADDED_DIM}. ` +
+          "Choose a smaller embedding model, or one that supports a reduced output dimension.",
+      }
+    }
+    return { ok: true, model: provider.model, latencyMs, dim: vector.length }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      return { ok: false, error: `The provider did not answer within ${timeoutMs / 1000}s.` }
+    }
+    if (error instanceof LLMHttpError) {
+      return { ok: false, error: `The provider rejected the request: ${error.message}` }
+    }
+    // The adapters' own contract violations (wrong count, non-numeric
+    // vectors, a changed dimension) arrive as plain Errors whose messages
+    // are already written for a human and contain no credential material.
+    if (error instanceof Error) {
+      return { ok: false, error: `The provider's response was unusable: ${error.message}` }
     }
     return { ok: false, error: "Could not reach the provider." }
   } finally {

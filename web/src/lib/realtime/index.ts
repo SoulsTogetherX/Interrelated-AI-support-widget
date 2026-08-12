@@ -31,6 +31,13 @@ export interface SaveOutcome {
   model: string
   latencyMs: number
   suffix: string | null
+  /** Embedding role only: the dimension the live round-trip observed. */
+  dim: number | null
+  /** Sources re-queued for crawling because the embedding model changed —
+   *  realtime does that in the same transaction as the save (§3.22), and
+   *  the number exists so the dashboard can say so out loud instead of
+   *  leaving a tenant to wonder why their crawls restarted. */
+  reindexed: number
 }
 //#endregion
 
@@ -115,6 +122,8 @@ export async function submitCredential(
       model: typeof v.model === "string" ? v.model : "unknown",
       latencyMs: typeof v.latencyMs === "number" ? v.latencyMs : 0,
       suffix: typeof v.suffix === "string" ? v.suffix : null,
+      dim: typeof v.dim === "number" ? v.dim : null,
+      reindexed: typeof v.reindexed === "number" ? v.reindexed : 0,
     },
   }
 }
@@ -122,11 +131,15 @@ export async function submitCredential(
 export async function removeCredential(
   orgId: string,
   role: "generation" | "embedding",
-): Promise<InternalResult<null>> {
+): Promise<InternalResult<{ reindexed: number }>> {
   const result = await call(`/internal/orgs/${orgId}/credentials/${role}`, {
     method: "DELETE",
   })
-  return result.ok ? { ok: true, value: null } : result
+  if (!result.ok) {
+    return result
+  }
+  const v = result.value
+  return { ok: true, value: { reindexed: typeof v.reindexed === "number" ? v.reindexed : 0 } }
 }
 
 /** Connect a source and enqueue its first crawl (M3.6). The realtime side

@@ -1,5 +1,5 @@
 // Conversation list — ordered by the (org_id, last_message_at DESC) index
-// that migration 003 shaped for exactly this page. Agents see this too:
+// that §3.3.2 shaped for exactly this page. Agents see this too:
 // reading conversations IS the agent job (writes elsewhere are owner-only).
 import Link from "next/link"
 

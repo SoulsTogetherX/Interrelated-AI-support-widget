@@ -22,27 +22,42 @@ import type { ProviderFormState } from "@/lib/providers/actions"
 //#endregion
 
 //#region Provider field matrix
-const PROVIDERS = [
-  { value: "groq", label: "Groq", needsKey: true, needsBase: false, modelHint: "llama-3.3-70b-versatile (default)" },
-  { value: "gemini", label: "Google Gemini", needsKey: true, needsBase: false, modelHint: "gemini-2.5-flash (default)" },
-  { value: "ollama", label: "Ollama (self-hosted)", needsKey: false, needsBase: true, modelHint: "required — a model you have pulled" },
-  { value: "openai_compatible", label: "OpenAI-compatible", needsKey: true, needsBase: true, modelHint: "required" },
-] as const
+// Per ROLE, because the two are genuinely different sets: Groq has no
+// embeddings endpoint at all, and the model defaults differ even where the
+// provider is the same (gemini-2.5-flash generates, gemini-embedding-001
+// embeds). Both facts are enforced server-side in checkCredentialInput —
+// listed here so the form does not offer a combination that cannot work.
+const PROVIDERS = {
+  generation: [
+    { value: "groq", label: "Groq", needsKey: true, needsBase: false, modelHint: "llama-3.3-70b-versatile (default)" },
+    { value: "gemini", label: "Google Gemini", needsKey: true, needsBase: false, modelHint: "gemini-2.5-flash (default)" },
+    { value: "ollama", label: "Ollama (self-hosted)", needsKey: false, needsBase: true, modelHint: "required — a model you have pulled" },
+    { value: "openai_compatible", label: "OpenAI-compatible", needsKey: true, needsBase: true, modelHint: "required" },
+  ],
+  embedding: [
+    { value: "gemini", label: "Google Gemini", needsKey: true, needsBase: false, modelHint: "gemini-embedding-001 (default)" },
+    { value: "ollama", label: "Ollama (self-hosted)", needsKey: false, needsBase: true, modelHint: "required — e.g. nomic-embed-text" },
+    { value: "openai_compatible", label: "OpenAI-compatible", needsKey: true, needsBase: true, modelHint: "required — up to 1024 dimensions" },
+  ],
+} as const
 
-type ProviderValue = (typeof PROVIDERS)[number]["value"]
+type Role = keyof typeof PROVIDERS
+type ProviderValue = (typeof PROVIDERS)[Role][number]["value"]
 //#endregion
 
 //#region Component
 const INITIAL: ProviderFormState = { error: null, success: null }
 
-export default function ProviderForm({ orgId }: { orgId: string }) {
+export default function ProviderForm({ orgId, role = "generation" }: { orgId: string; role?: Role }) {
   const [state, formAction, pending] = useActionState(submitProviderAction, INITIAL)
-  const [provider, setProvider] = useState<ProviderValue>("groq")
-  const meta = PROVIDERS.find((p) => p.value === provider)!
+  const choices = PROVIDERS[role]
+  const [provider, setProvider] = useState<ProviderValue>(choices[0].value)
+  const meta = choices.find((p) => p.value === provider) ?? choices[0]
 
   return (
     <form className="providerform" action={formAction}>
       <input type="hidden" name="orgId" value={orgId} />
+      <input type="hidden" name="role" value={role} />
 
       <label className="providerform-label">
         Provider
@@ -52,7 +67,7 @@ export default function ProviderForm({ orgId }: { orgId: string }) {
           value={provider}
           onChange={(e) => setProvider(e.target.value as ProviderValue)}
         >
-          {PROVIDERS.map((p) => (
+          {choices.map((p) => (
             <option key={p.value} value={p.value}>
               {p.label}
             </option>

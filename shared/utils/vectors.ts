@@ -1,5 +1,5 @@
 //#region Constants
-/** Every embedding is stored as halfvec(PADDED_DIM) — see migration 002.
+/** Every embedding is stored as halfvec(PADDED_DIM) — see §3.3.1.
  *  This constant is the single source of truth the schema's 1024 mirrors;
  *  changing it means a new migration and a re-embed, so it is deliberately
  *  a constant and not configuration. */

@@ -43,7 +43,7 @@ interface OrganizationsTable {
 /** A dashboard login. Email is encrypted at rest (AES-GCM) with a separate
  *  deterministic blind index for lookups — the same at-rest scheme as the
  *  provider keys, so one leaked backup discloses neither. Auth code arrives
- *  in M3; the columns exist from migration 001 because retrofitting
+ *  in M3; the columns exist from §3.3 because retrofitting
  *  encryption onto plaintext emails means a data migration under load. */
 interface UsersTable {
   id: string
@@ -105,7 +105,7 @@ interface ApiKeysTable {
  *  (AAD = row id); key_suffix is the ONLY plaintext fragment that exists
  *  outside it. Replacement hard-deletes the old row — retaining superseded
  *  ciphertexts of someone else's credential is liability, not audit trail
- *  (see migration 004 for the full argument + the shape CHECKs). */
+ *  (see §3.3.3 for the full argument + the shape CHECKs). */
 interface OrgProviderCredentialsTable {
   id: string
   org_id: string
@@ -115,6 +115,10 @@ interface OrgProviderCredentialsTable {
    *  model where no sane default exists (openai_compatible, ollama). */
   model: string | null
   base_url: string | null
+  /** The embedding model's true dimension, discovered by the Test
+   *  round-trip (§3.3.3). Present exactly on embedding rows
+   *  (CHECK-enforced) — a generation model has no dimension. */
+  dim: number | null
   key_ciphertext: string | null
   key_suffix: string | null
   last_validated_at: ColumnType<Date | null, string | Date | null, string | Date>
@@ -185,7 +189,7 @@ interface ChunksTable {
 }
 
 /** One embedding of one chunk under one model. org_id is denormalized here
- *  (see migration 002) so the tenant filter lives on the same relation as
+ *  (see §3.3.1) so the tenant filter lives on the same relation as
  *  the partial HNSW indexes. The pg driver represents vectors as strings
  *  ("[0.1,0.2,…]"); typed as string on all three arms — parsing to number[]
  *  happens in provider code, not in the driver types. */
@@ -238,7 +242,7 @@ interface ConversationsTable {
  *  the refusal fallback), never raw model output; the claim-level story
  *  lives in message_citations. org_id is denormalized (like
  *  chunk_embeddings) so the M5 pre-flight usage count needs no join.
- *  CHECKs in migration 003 pin model/refused/score/latency to the
+ *  CHECKs in §3.3.2 pin model/refused/score/latency to the
  *  assistant role — mismatches are unrepresentable, not just untyped. */
 interface MessagesTable {
   id: string

@@ -231,6 +231,49 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
       .executeTakeFirst()
     expect(tombstone?.title).toBe("Gone")
   })
+
+  it("re-embeds unchanged pages when the org's embedding model changes", async () => {
+    // The M3.6b hazard: a tenant connects their own embedding provider, the
+    // site is byte-identical, and the content_hash short-circuit would make
+    // the re-index a no-op — leaving every chunk in the OLD model's space,
+    // where the dense arm (which filters model = …) can never see it again.
+    const org = await makeOrg("Model Switch Co")
+    const { sourceId } = await enqueue(org, { location: `${base}/docs/a.html`, crawl_depth: 0 })
+    expect(await makeWorker().tick()).toBe(true)
+    const before = await db.selectFrom("chunk_embeddings").selectAll().where("org_id", "=", org).execute()
+    expect(before.length).toBeGreaterThan(0)
+    expect(before.every((e) => e.model === "mock-384")).toBe(true)
+
+    // The org now has a BYO embedding credential — a different model, and
+    // a different dimension with it.
+    const resolvedFor: string[] = []
+    const alt: EmbeddingProvider = {
+      model: "alt-embed-8",
+      dim: 8,
+      embed: async (texts) => texts.map((_, i) => Array.from({ length: 8 }, (_, j) => (j === i % 8 ? 1 : 0))),
+    }
+    await enqueue(org, { sourceId, location: "" })
+    embedCalls.length = 0
+
+    const worker = makeWorker({
+      resolveEmbedder: async (orgArg) => {
+        resolvedFor.push(orgArg)
+        return orgArg === org ? alt : null
+      },
+    })
+    expect(await worker.tick()).toBe(true)
+
+    // Resolved per job, for THIS job's org.
+    expect(resolvedFor).toEqual([org])
+    // Identical text, and yet the vectors moved: every chunk now lives in
+    // the tenant's space, and the superseded ones are gone rather than
+    // lingering as a second copy of the corpus.
+    const after = await db.selectFrom("chunk_embeddings").selectAll().where("org_id", "=", org).execute()
+    expect(after.length).toBeGreaterThan(0)
+    expect(after.every((e) => e.model === "alt-embed-8" && e.dim === 8)).toBe(true)
+    // The counting embedder (the app-level fallback) was NOT used.
+    expect(embedCalls).toHaveLength(0)
+  })
   //#endregion
 
   //#region Queue semantics

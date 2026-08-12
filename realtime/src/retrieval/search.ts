@@ -13,7 +13,7 @@ import { padVector, toPgvector } from "@shared/utils/vectors"
  *
  * Two arms over the same chunks, fused by rank:
  *   - DENSE: cosine nearest-neighbor over chunk_embeddings via the partial
- *     HNSW index for the query's model (migration 002).
+ *     HNSW index for the query's model (§3.3.1).
  *   - LEXICAL: full-text match over chunks.tsv (a GENERATED column — it
  *     cannot drift from the text) ranked by ts_rank_cd.
  *
@@ -145,7 +145,7 @@ function assertLimit(name: string, value: number, max: number): void {
  *
  * The WHERE clause matches the partial index predicate (model = …) and
  * filters org_id ON the indexed relation — org_id is denormalized onto
- * chunk_embeddings for exactly this query (migration 002). The documents
+ * chunk_embeddings for exactly this query (§3.3.1). The documents
  * join only EXCLUDES soft-deleted pages; under iterative scans the index
  * keeps yielding until k post-join rows survive.
  */

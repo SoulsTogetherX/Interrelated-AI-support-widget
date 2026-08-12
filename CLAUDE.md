@@ -75,7 +75,7 @@ the org-scoped dashboard at /dashboard/[orgId] behind requireOrgMember
 (non-members get a 404 that reveals nothing), and newPublishableKey in
 the shared id registry (§2.4.1) because the pk format is a cross-package
 contract with realtime's session route. M3.4 is done — the credential
-vault (migration 004 §3.3.3, vault + validate §3.21, internal API §3.22,
+vault (§3.3.3, vault + validate §3.21, internal API §3.22,
 web surface §9.8, DATAFLOW §7.8): tenant provider keys tested with a
 LIVE round-trip before save, AES-256-GCM encrypted under a realtime-only
 master key, displayed only as a suffix, guarded by a read-back denial
@@ -107,9 +107,17 @@ SELF-SUFFICIENT (§9.11, DATAFLOW §7.11): the origin allowlist —
 trust-model layer 1 — is managed from the UI, with pasted URLs
 normalized to the exact origin a browser will send, and the install page
 carries the snippet and the two CSP directives a locked-down host needs.
-Nothing about running the product now requires SQL by hand. Still open
-in M3.6b: the embedding half of BYO (remote adapters + save +
-ingest/query under the org's model). The one package in the plan but not
+Nothing about running the product now requires SQL by hand. M3.6b is
+done, and with it **BYO-provider is COMPLETE in both roles**: the remote
+embedding adapters exist (§2.4.5j–m — Gemini native with the
+Matryoshka-reduced dimension that fits halfvec(1024), the generic
+OpenAI-compatible batch endpoint, and Ollama's native /api/embed), the
+credential path validates them with a REAL embedding whose measured
+dimension it stores (§3.3.3, §3.21), and both ends of
+retrieval run under the org's model from that one row — the ingest
+worker per job (§3.10.5) and the chat route per question (§3.18) — with
+a model change re-queueing the org's sources inside the same transaction
+that changed the credential (§3.22). The one package in the plan but not
 here — loadtest/ — arrives with M4.
 
 ---
@@ -327,9 +335,21 @@ only the eval/CI path pays for onnxruntime.
 #### §2.4.5a `embedding/types.ts`
 `EmbeddingProvider`: `model` (the value stored in `chunk_embeddings.model`
 and the predicate of that model's partial HNSW index), `dim` (native
-dimension, pre-padding), and batch-first `embed(texts)` — batch-first
-because free tiers rate-limit per REQUEST, and a single-text convenience
-method is how N-requests-for-N-chunks code gets written.
+dimension, pre-padding), and batch-first `embed(texts, options?)` —
+batch-first because free tiers rate-limit per REQUEST, and a single-text
+convenience method is how N-requests-for-N-chunks code gets written.
+`EmbedOptions` arrived with the remote adapters (M3.6b) and carries two
+things the local implementations never needed: a `task` hint
+("document" | "query"), because asymmetric retrieval models place a
+QUESTION and a PASSAGE into the same space from different sides — Gemini
+exposes exactly that as taskType, and using the wrong one is free recall
+thrown away — and an AbortSignal, because Node's fetch has NO default
+timeout and a provider that accepts a connection then goes quiet would
+otherwise hang a request handler or a worker tick forever. `DIM_UNKNOWN`
+(0) is what a remote adapter reports before its first response: a
+self-hosted model's dimension is a machine fact, discovered once at Test
+time and then persisted (§3.3.3) so every later construction can DECLARE
+it and assert against it.
 
 #### §2.4.5b `embedding/mock.ts`
 Deterministic fake embeddings (`mock-384`): FNV-1a hash seeds an xorshift32
@@ -443,6 +463,71 @@ BEFORE a provider is constructed — the defense belongs where the URL
 enters the system. A down-server test pins that connection failure
 throws rather than hangs.
 
+#### §2.4.5j `embedding/http.ts`
+Shared plumbing for the remote embedding adapters (M3.6b), and only one
+verb: `postJson` — embedding APIs answer in one shot, so there is no
+streaming twin of §2.4.5f's postStream. It is implemented ON postStream
+rather than beside it, which keeps the non-2xx path (truncated body,
+Retry-After, and the rule that a message never carries headers or the
+URL) at exactly one implementation and one test. The error class is
+deliberately the SAME `LLMHttpError`: "a provider's HTTP endpoint
+refused" is one failure shape with one pair of fields callers act on, and
+§3.21's validator maps it to a human sentence once for both roles — a
+parallel EmbeddingHttpError would double that surface to say the same
+thing (the LLM prefix is historical; that side landed first). Two
+helpers carry the invariants every adapter shares: `toVector` rejects the
+two shapes that would otherwise reach Postgres as corruption (a
+base64-encoded embedding — some servers default to it — and a null entry
+inside an otherwise-2xx response), and `assertBatch` enforces one vector
+per input text in order, uniform length, and equality with the DECLARED
+dimension when there is one. That last check is what finally cashes
+§3.3.1's promise that `dim` exists "so code can detect a model
+whose dimension changed out from under stored vectors": a provider that
+starts answering 1536 where it answered 768 stops the ingest loudly
+instead of quietly filling one org's index with a second vector space.
+
+#### §2.4.5k `embedding/gemini.ts`
+The hosted embedding default — the only provider in the plan's table
+offering real embeddings on a free tier without a card. Two decisions
+carry the file. **outputDimensionality, always**: `gemini-embedding-001`
+is natively 3072-d and the storage column is halfvec(1024) (§3.3.1's
+free-tier arithmetic), so the native output simply does not fit; the
+model is Matryoshka-trained and 768 is one of the sizes Google documents
+for it, so we ask for a size the model was trained to produce rather than
+truncating one it wasn't. Widening the column instead would triple every
+row and index entry for the one provider that needs it. **Re-normalizing
+afterwards**: only the full 3072-d output comes back unit-length. Cosine
+ranking is scale-invariant so this is not correctness for THIS index, but
+the zero-padding proof (§2.4.2), halfvec's fp16 range, and any future L2
+or inner-product index all assume unit vectors. taskType is honored
+(§2.4.5a), auth rides the x-goog-api-key header (never `?key=`, asserted
+by a test), and the model name is repeated on every sub-request because
+batchEmbedContents requires it there as a full resource name.
+
+#### §2.4.5l `embedding/openaiCompatible.ts`
+The generic `POST /embeddings` adapter — the same one-implementation-
+covers-N-providers trade as §2.4.5g, reaching Together, OpenRouter, vLLM,
+LM Studio, text-embedding-inference, and Ollama's compat endpoint. Results
+are ordered by the response's `index` field rather than by arrival, since
+a silent reordering would misattribute every chunk's vector to its
+neighbour and look like retrieval simply being bad. Two deliberate
+omissions: it never sends `dimensions` (the parameter means something
+only for Matryoshka-trained models, and compat servers disagree about
+whether an unknown field is ignored or a 400 — so an oversized model is
+REFUSED at the Test button with a sentence naming the fix, §3.21, rather
+than silently truncated), and it ignores the task hint (the OpenAI
+embeddings API has no field for it; models wanting an asymmetric prefix
+expect it in the text, which is the tenant's choice of model to make).
+
+#### §2.4.5m `embedding/ollama.ts`
+The self-hosted, zero-cost path, speaking native `/api/embed` — chosen
+over the older `/api/embeddings` because it is the BATCH endpoint, and
+this interface is batch-first precisely because per-request cost is what
+kills an ingest run. No apiKey (Ollama is unauthenticated). The base URL
+is tenant-supplied and therefore an SSRF vector; it is vetted at the
+realtime boundary before the adapter is ever constructed — the seam
+§2.4.5i promised, now with a second caller.
+
 ### §2.5 `render.yaml`
 The Render deployment as code (a "Blueprint"): one free-tier Docker web
 service building `realtime/Dockerfile` with the repo root as context,
@@ -515,27 +600,48 @@ compute — a larger client pool would just queue server-side; keeping the
 queue client-side makes backpressure visible. The raw pool is exported for
 shutdown/teardown only; **all queries go through the typed `db`**.
 
-### §3.3 `src/db/migrations/001_initial_schema.ts`
+### §3.3 `src/db/migrations/001_initial_schema.ts` — the whole schema
 Raw SQL DDL via Kysely's `sql` tag (the builder is for application queries;
 DDL should read as the SQL it is). Typed `Kysely<unknown>` so migrations
-stay frozen while `schema.ts` evolves. Creates:
+stay frozen while `schema.ts` evolves.
+
+**FLATTENED at the end of M3** from the five migrations that built it up
+(tenancy/auth/keys, content pipeline, chat, provider credentials, embedding
+credentials). Their history is in git. The trade: a migration series exists
+to carry EXISTING databases forward, and this product has none worth
+carrying — pre-launch, the only deployed data a demo corpus `npm run
+seed-demo` recreates in seconds, and every integration suite already drops
+and re-migrates from scratch. Against that, five files whose deltas nobody
+will ever replay cost real legibility: `chunk_embeddings` was spread across
+three of them, so reading the current schema meant replaying its own history
+in your head.
+
+The consequence, which bites exactly once and is written at the top of the
+file: Kysely's migrator refuses a bookkeeping table containing names the
+registry no longer has ("corrupted migrations"), so any database that
+applied the old 001–005 — a dev box, the Neon instance behind the deployed
+demo — must be reset with `DROP SCHEMA public CASCADE; CREATE SCHEMA
+public;` before it boots again. From here the rule is the ordinary one:
+additive migrations only, 002 onward, never a rewrite of this file. The
+subsections below describe the schema by table GROUP (the same groupings
+the old migrations had, so the §3.3.x anchors code comments cite still
+resolve).
+
+`CREATE EXTENSION IF NOT EXISTS vector` runs first, before any table needs
+it, so a Postgres without pgvector fails at deploy time rather than at first
+ingest weeks later.
 
 | Table | Purpose | Notable constraint |
 |---|---|---|
 | `organizations` | tenants | `plan` CHECK; `char_length(id) = 36` |
-| `users` | dashboard logins | email stored encrypted + blind index (code in M3; columns now because retrofitting encryption is a data migration) |
+| `users` | dashboard logins | email stored encrypted + blind index (columns predate the code because retrofitting encryption is a data migration) |
 | `org_members` | user↔org + role | **partial unique index: one owner per org** |
 | `sessions` | dashboard sessions | id IS sha256(cookie token) — a DB leak can't be replayed as logins |
 | `api_keys` | widget pk/sk credentials | one CHECK makes kind/column mismatches unrepresentable; uniqueness among live keys only (`WHERE revoked_at IS NULL`) so rotation revokes instead of deletes |
 | `allowed_origins` | widget origin allowlist | regex CHECK rejects paths/trailing slashes — a stored `https://a.com/` would silently never match a browser `Origin` header |
 
-Also `CREATE EXTENSION IF NOT EXISTS vector` — in migration 001 even though
-no vector column exists until 002, so a Postgres without pgvector fails at
-deploy time, not at first ingest weeks later.
-
-### §3.3.1 `src/db/migrations/002_content_pipeline.ts`
-The content pipeline: what the ingest worker (next increments) reads and
-writes, and what retrieval queries.
+### §3.3.1 The content pipeline tables
+What the ingest worker reads and writes, and what retrieval queries.
 
 | Table | Purpose | Notable decision |
 |---|---|---|
@@ -553,9 +659,15 @@ The three load-bearing decisions on `chunk_embeddings`:
 2. **Partial HNSW index per model** (`WHERE model = '…'`), never IVFFlat:
    different models' vectors live in different spaces, so one shared index
    wastes traversal on foreign rows; and IVFFlat degrades silently under
-   continuous ingest while HNSW builds incrementally. Registered today:
-   `bge-small-en-v1.5` (local/eval) and `mock-384` (deterministic tests).
-   A new provider model ships its index in a new migration.
+   continuous ingest while HNSW builds incrementally. Registered:
+   `bge-small-en-v1.5` (local/eval), `mock-384` (deterministic tests), and
+   `gemini-embedding-001` (the hosted BYO default) — the three whose names
+   the schema can know. A tenant's self-hosted or OpenAI-compatible model
+   carries a name no migration can enumerate; those still WORK (exact
+   sequential scan), they are just slower, and a future migration registers
+   one when a model earns it. Creating indexes at runtime from application
+   code was rejected outright: DDL on a shared table, from a request
+   handler, to save a scan over a corpus that fits in Neon's free tier.
 3. **`org_id` denormalized onto the table**: HNSW searches then filters, so
    the tenant filter must live on the indexed relation or small tenants can
    get fewer than k results. Pairs with pgvector iterative scans at query
@@ -570,9 +682,9 @@ Rejected alternative for the queue: Redis/BullMQ — a second stateful service
 to run and secure, when the queue's real throughput ceiling is embedding-API
 rate limits, not Postgres.
 
-### §3.3.2 `src/db/migrations/003_chat.ts`
-Chat persistence: what the answer pipeline (M2.3) writes and the M3
-dashboard reads.
+### §3.3.2 The chat tables
+Chat persistence: what the answer pipeline (§3.15.3) writes and the
+dashboard (§9.10) reads.
 
 | Table | Purpose | Notable decision |
 |---|---|---|
@@ -597,19 +709,30 @@ the visitor actually SAW (verified claims after stripping, or the refusal
 fallback), never raw model output. Composite `(message_id, ord)` key, like
 chunk_embeddings — nothing references a citation row individually.
 
-### §3.3.3 `src/db/migrations/004_provider_credentials.ts`
-BYO-provider storage: `org_provider_credentials`, one row per (org, role),
-the key as AES-GCM ciphertext (vault §3.21, AAD = row id) with `key_suffix`
-the only plaintext fragment. Deliberate deviation from the plan's
-partial-unique sketch: **UNIQUE(org_id, role) with HARD DELETE on
-replace** — a widget pk is OUR credential (rotation audit trail = asset);
-a provider key is SOMEONE ELSE'S (retained superseded ciphertexts =
-liability, one more thing a master-key compromise unlocks). Shape CHECKs
-in the api_keys style: ollama must NOT carry a key (unauthenticated),
-hosted providers must, openai_compatible goes either way (self-hosted
-vLLM/LM Studio run keyless); self-hosted shapes require base_url, hosted
-ones forbid it (a writable endpoint on a hosted provider is a
-request-forgery lever, not a feature).
+### §3.3.3 The BYO-provider credential table
+`org_provider_credentials`, one row per (org, role), the key as AES-GCM
+ciphertext (vault §3.21, AAD = row id) with `key_suffix` the only
+plaintext fragment. Deliberate deviation from the plan's partial-unique
+sketch: **UNIQUE(org_id, role) with HARD DELETE on replace** — a widget pk
+is OUR credential (rotation audit trail = asset); a provider key is
+SOMEONE ELSE'S (retained superseded ciphertexts = liability, one more
+thing a master-key compromise unlocks). Shape CHECKs in the api_keys
+style: ollama must NOT carry a key (unauthenticated), hosted providers
+must, openai_compatible goes either way (self-hosted vLLM/LM Studio run
+keyless); self-hosted shapes require base_url, hosted ones forbid it (a
+writable endpoint on a hosted provider is a request-forgery lever, not a
+feature).
+
+`dim` is the embedding model's true dimension, measured by the Test
+round-trip (M3.6b) and stored beside the credential. Without it an adapter
+built from a stored row would not know its own dimension until its first
+response, which is precisely when the worker needs it
+(`chunk_embeddings.dim` is written in the same transaction as the
+vectors). Storing it also turns every later call into an ASSERTION rather
+than a discovery (§2.4.5j's assertBatch) — the detection §3.3.1 said its
+own `dim` column existed for. A CHECK ties the pairing exactly in the
+api_keys style: `role = 'embedding'` ⇔ `dim IS NOT NULL`, with the 1..1024
+range mirroring `chunk_embeddings.dim` and PADDED_DIM.
 
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
@@ -693,7 +816,7 @@ force-exits.
   reject invalid rows **at their boundaries** (second owner rejected while
   second agent accepted; mismatched api_key kind; origin with a trailing
   slash).
-- `db/__tests__/chat.test.ts` — migration 003 integration suite, same
+- `db/__tests__/chat.test.ts` — the chat-schema integration suite, same
   gating. Role-consistency CHECKs probed from both sides (visitor with a
   model rejected, full assistant row accepted); the span/verdict equality
   CHECK at all three boundaries (verified without span, unverified with
@@ -702,7 +825,7 @@ force-exits.
   ABSENCE of a chunk FK (a citation naming a never-existing chunk inserts
   cleanly — that test failing means someone re-coupled transcripts to
   pipeline state).
-- `db/__tests__/contentPipeline.test.ts` — migration 002 integration suite,
+- `db/__tests__/contentPipeline.test.ts` — the content-pipeline integration suite,
   same gating. The first end-to-end vector proof lives here: hand-picked
   3-d vectors, zero-padded to 1024, must come back in exact cosine order
   through `halfvec`; an EXPLAIN assertion pins that the planner actually
@@ -786,7 +909,13 @@ force-exits.
   becomes an observation instead of an assumption. A 429 is reported as
   the free-tier rate limit it is, with the retry delay. With no keys the
   cases skip AND a guard test asserts the keyless default, so "gated off"
-  can never be mistaken for "passed". CI sets no keys, by design.
+  can never be mistaken for "passed". CI sets no keys, by design. Since
+  M3.6b Gemini — the only free tier serving both roles — also runs the
+  EMBEDDING credential path: that the reduced output dimension we request
+  is honored and storable (the whole basis for halfvec(1024)), that a
+  batch comes back in order, and that a query embedding really is nearer
+  its own passage than an unrelated one — which is both a semantic check
+  the mock cannot make and the proof that taskType is doing something.
 - `routes/__tests__/internal.test.ts` — DB-gated, real HTTP listener, a
   loopback OpenAI-compatible fake as the tenant's provider (recording
   every request so tests assert what left the process). Pinned: uniform
@@ -794,12 +923,19 @@ force-exits.
   storing nothing while the round-trip really hit the upstream;
   encrypted-at-rest proof (ciphertext decrypts only under the row id);
   replace-destroys-the-old-ciphertext; the READ-BACK DENIAL (no key
-  substring, no ciphertext in the status response); embedding-role
-  refusal naming M3.5; shape violations rejected with zero upstream
-  calls; a failing upstream storing nothing and never echoing the key;
-  the PRODUCTION url vet rejecting loopback (the SSRF default, asserted
-  by NOT injecting the test seam); and the unconfigured app 404ing the
-  whole surface.
+  substring, no ciphertext in the status response); Groq refused for the
+  embedding role with zero upstream calls; shape violations rejected with
+  zero upstream calls; a failing upstream storing nothing and never
+  echoing the key; the PRODUCTION url vet rejecting loopback (the SSRF
+  default, asserted by NOT injecting the test seam); and the unconfigured
+  app 404ing the whole surface. The M3.6b block adds the embedding role
+  end to end against a loopback embeddings endpoint: the dimension is
+  MEASURED not declared (the form never asks for one) and stored on the
+  row; a 1536-d model is refused with both numbers in the sentence while
+  the previous valid credential stays untouched; and the re-index
+  contract from all three sides — a changed model queues one job per
+  source, a rotated key for the SAME model queues nothing, and removal
+  queues a re-index exactly when a row was actually deleted.
 - `routes/__tests__/widgetByo.test.ts` — DB-gated. Per-org BYO generation
   in the LIVE chat path: a loopback OpenAI-compatible upstream wrapping
   the context-quoting responder, reached through the REAL adapter with
@@ -851,6 +987,12 @@ force-exits.
   chunks with heading paths, embeddings, statuses), identical recrawl
   (zero embed calls — the content_hash short-circuit observed, not
   assumed), changed recrawl (chunks replaced, vanished page soft-deleted).
+  A fourth crawl is the M3.6b case and the one that would silently rot
+  without it: the same page, byte-identical, re-crawled while the org's
+  resolveEmbedder returns a DIFFERENT model — every chunk must come back
+  under the new model and dimension, the app-level embedder must not be
+  touched, and the resolver must have been called once with this job's
+  org id.
   Queue semantics get their own tests: two workers claiming concurrently
   under SKIP LOCKED (held open by gated fake crawlers), stale-lease
   reclaim on both sides of the attempts cap, stop() requeuing between
@@ -1004,6 +1146,21 @@ just leaves the previous document version standing. Pages live last crawl
 but absent now are soft-deleted, so retrieval stops seeing them while
 history survives.
 
+Since M3.6b the embedder is per-ORG, not per-process: `resolveEmbedder`
+(injected, so the worker stays testable without the vault; server.ts
+wires it to §3.21's resolve.ts) is called ONCE per job — a rotation
+landing mid-crawl would otherwise split one source's pages across two
+vector spaces, half of them invisible. A decrypt failure fails the job
+loudly rather than falling back, because ingesting under the wrong model
+is the outcome worth avoiding. That change also gave the recrawl
+short-circuit a SECOND condition: unchanged text is only enough if the
+document's chunks already carry vectors under THIS job's model. Without
+that, a tenant switching embedding providers would re-crawl a
+byte-identical site, skip every page, and be left with a corpus the dense
+arm can never see again — the re-index (§3.22) would be a no-op. The cost
+is one indexed EXISTS per unchanged page; the alternative is a widget
+that silently stops answering.
+
 ### §3.11 `realtime/scripts/enqueueSource.ts`
 Dev-only CLI (`npm run enqueue -- <url> [--depth N] [--sitemap]`):
 registers a source and queues a job so the worker can be watched end to end
@@ -1056,10 +1213,12 @@ Dev-only CLI (`npm run search -- "<question>" [--org N] [--k N]
 [--dense-only]`): hybrid retrieval against ingested content, so the whole
 M1 loop — enqueue → crawl → embed → retrieve — is drivable by hand before
 M2's chat surface exists. Same glue-only rule as §3.11. Picks its embedder
-from EMBEDDING_PROVIDER exactly as the worker does, and warns when the org
-has no embeddings under that model — the routine dev mistake is ingesting
-under one provider and querying under another, which otherwise looks like
-retrieval returning nothing.
+the way production does — the org's saved BYO credential first (§3.21's
+resolve.ts, announced on stdout so the model in play is never a guess),
+EMBEDDING_PROVIDER as the fallback — and warns when the org has no
+embeddings under that model: the routine dev mistake is ingesting under
+one provider and querying under another, which otherwise looks like
+retrieval returning nothing. `npm run ask` (§3.16) resolves identically.
 
 ### §3.14 `realtime/scripts/runEval.ts`
 The evaluation harness runner (`npm run eval`) — lives in realtime/ because
@@ -1234,7 +1393,11 @@ then the daily ceiling counted from messages via the (org_id,
 created_at) index — model spend, not conversation length, refusals
 included — then SSE. Since M3.5 the answer's LLM is resolved per request
 from the org's BYO credential (credentials/resolve.ts) with the
-app-level provider as fallback. Headers flush before retrieval so TTFB
+app-level provider as fallback, and since M3.6b the query EMBEDDER is
+resolved the same way — not as a preference but as a requirement, since
+the question must be embedded by whatever model embedded the org's
+chunks; the ingest worker reads that same row, so the two cannot drift.
+Headers flush before retrieval so TTFB
 precedes the slow work; a closed tab aborts the pipeline mid-generation via
 AbortController; every failure past the SSE boundary is one opaque
 {type:"error"} event (failure detail on a public stream is
@@ -1278,7 +1441,7 @@ through an attribute escape though it is server config, and a test feeds
 a hostile key to prove it. The bundle is read per request, no cache: 8 KB,
 immutable in prod, and a cache would go stale under the dev bind mount.
 
-### §3.21 `src/credentials/` — the vault and the validator (M3.4)
+### §3.21 `src/credentials/` — the vault and the validator (M3.4, M3.6b)
 
 - **vault.ts** — AES-256-GCM under CREDENTIAL_MASTER_KEY (32B base64,
   realtime-only env: web handles plaintext for the seconds between paste
@@ -1289,7 +1452,7 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   NO blind index (nothing looks credentials up by key; a searchable
   digest would be pure attack surface).
 - **validate.ts** — everything between "payload arrived" and "worth
-  encrypting": shape checks per provider (mirroring migration 004's
+  encrypting": shape checks per provider (mirroring §3.3.3's
   CHECKs), the SSRF vet on tenant base URLs (safeFetch's assertPublicUrl,
   injectable for tests via the same seam shape as hostGuard — honest
   limitation recorded for M6: the vet runs at save time, and the
@@ -1298,18 +1461,38 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   LIVE round-trip: one real 16-token completion, latency measured to
   done, because a key that "looks right" but is revoked or out of quota
   must fail at the Test button, not at a visitor's first question.
-  Embedding-role payloads are rejected by name until the remote embedding
-  adapters ship with source indexing (M3.6) — the schema is ready; the
-  API refuses to fake the feature.
-- **resolve.ts** (M3.5) — the vault's READ side: org → ready-to-call
-  LLMProvider, decrypted per ANSWER with deliberately NO cache (a cache
-  would serve a revoked key until eviction — the exact window rotation
-  exists to close; the cost is one indexed read plus a sub-microsecond
-  AES-GCM decrypt). Absence is normal (demo org, fresh org → caller falls
-  back to the app-level provider); decrypt failure throws LOUDLY rather
-  than degrading to the mock, which would look like the product working
-  while serving nonsense. An 'anthropic' row (schema forward-provision,
-  unreachable through validate.ts) also throws by name.
+  Since M3.6b it is role-aware and symmetric: `buildGenerationProvider`
+  (renamed from buildCredentialProvider when it stopped being the only
+  one) and `buildEmbeddingProvider` over §2.4.5k–m, with
+  `testEmbeddingRoundTrip` as testGenerationRoundTrip's twin — one real
+  embedding of one short text, answering three things no shape check can:
+  does the key authenticate against THIS endpoint (embedding and
+  generation keys are often scoped differently), what dimension does the
+  model actually return, and does that dimension FIT. Over PADDED_DIM it
+  is refused with a sentence naming both numbers and the fix — silently
+  truncating an embedding that was not Matryoshka-trained would destroy
+  exactly the geometry that made it worth storing. Groq + embedding is
+  refused by name (it has no such endpoint at all — a gap worth stating
+  rather than turning into a confusing 404). `effectiveEmbeddingModel`
+  computes the model id a stored row resolves to WITHOUT decrypting its
+  key, which is what lets §3.22 compare "what the corpus was embedded
+  with" against "what it will be embedded with next".
+- **resolve.ts** (M3.5, M3.6b) — the vault's READ side: org →
+  ready-to-call provider, decrypted per call with deliberately NO cache (a
+  cache would serve a revoked key until eviction — the exact window
+  rotation exists to close; the cost is one indexed read plus a
+  sub-microsecond AES-GCM decrypt). Absence is normal (demo org, fresh
+  org → caller falls back to the app-level provider); decrypt failure
+  throws LOUDLY rather than degrading to the mock, which would look like
+  the product working while serving nonsense. An 'anthropic' row (schema
+  forward-provision, unreachable through validate.ts) also throws by
+  name. `resolveEmbeddingProvider` is the twin, and it buys the property
+  nothing else in the system enforces: the ingest worker and the query
+  path call the same function on the same row, so a tenant's chunks and
+  their visitors' questions land in the SAME vector space by
+  construction rather than by two settings happening to match. It passes
+  the stored `dim` straight through, which is what turns each response
+  into an assertion instead of a discovery.
 
 ### §3.22 `src/routes/internal.ts` — the dashboard's server-to-server API
 
@@ -1339,6 +1522,27 @@ sentence instead of a constraint violation, writes source + queued job
 in one transaction, and then calls onEnqueue — which server.ts wires to
 the worker's wake(). In production that callback is the entire
 scheduler (§3.10.5).
+
+Since M3.6b the credential route serves both ROLES through that same
+one-path rule: the role picks which builder and which round-trip runs,
+and an embedding save additionally stores the dimension its round-trip
+measured. It also owns the consequence a naive implementation would
+leave to the tenant to discover — **an embedding model change orphans
+the corpus.** Chunk vectors are stored per (chunk, model) and the dense
+arm filters on model, so a new model does not make existing content
+wrong, it makes it INVISIBLE, and the gate then refuses every question
+(it fails closed on lexical-only retrievals by design, §3.15.1). That
+reads to a tenant as "the widget broke". So a save whose effective model
+differs from the previous one — including the first-ever save, where the
+corpus sits under the platform's built-in model — queues a fresh crawl
+of every source IN THE SAME TRANSACTION as the credential write, then
+wakes the worker; §3.10.5's short-circuit fix is what makes those
+re-crawls actually re-embed. Removal does the same, for the same reason
+(reverting to the built-in model is a model change). Sources with work
+already queued are skipped, uploads are skipped (the worker fails them
+by design), and re-pasting a rotated key for the SAME model queues
+nothing — the vector space did not move. The count comes back in the
+response so the dashboard can say so out loud (§9.8).
 
 ---
 
@@ -1718,7 +1922,7 @@ original WHY header plus what changed in translation:
   address space cheaply). Two separate secrets on purpose; dev falls back
   to published constants with a warning; production REFUSES to boot
   without real ones. The users table has carried these columns since
-  migration 001 precisely so this port would be code-only.
+  the schema (§3.3) precisely so this port would be code-only.
 - **breachedPassword.ts** — HIBP k-anonymity screen at signup (the
   23andMe lesson: correct-but-reused passwords are the attack). Only the
   5-char SHA-1 prefix ever leaves the server; fails OPEN by design (a
@@ -1833,7 +2037,7 @@ Verified live at M3.3: sign-in → onboarding form (org-less user) →
 create → /dashboard/org_… overview with the minted pk and owner badge;
 fetch of a fabricated org id under a live session → 404.
 
-### §9.8 `src/lib/realtime/`, `src/lib/providers/`, the providers page (M3.4)
+### §9.8 `src/lib/realtime/`, `src/lib/providers/`, the providers page (M3.4, M3.6b)
 
 The web half of the credential path. The plaintext key exists web-side in
 exactly one flow — FormData → action → lib/realtime request body — and is
@@ -1858,14 +2062,23 @@ never assigned, logged, or stored anywhere else.
   billing-adjacent; agents answer conversations, they don't rewire the
   org). Test and Save are one action distinguished by the pressed
   button's intent value; unexpected intent degrades to the safe option
-  (test).
+  (test). The role comes from a hidden field with the same stance — an
+  unrecognized value reads as "generation", and realtime validates the
+  role again regardless. A successful save reports what the provider
+  ACTUALLY answered (model, dimension, latency) plus the re-index count,
+  and revalidates the sources page as well as this one, because a model
+  change just queued crawls there.
 - **components/ProviderForm/** + **dashboard/[orgId]/providers/** — the
   provider picker drives field VISIBILITY only (requirements are
   enforced server-side in checkCredentialInput; the form never
   duplicates that logic). The page states the key's lifecycle on the
   page — pasted over TLS, tested live, encrypted, suffix-only forever —
   and shows the current credential from queries.ts with an owner-only
-  remove. Embedding card is an honest placeholder until M3.6.
+  remove. Since M3.6b the form is per-ROLE (one component, two provider
+  matrices: no Groq under embedding, and different model defaults for
+  the same vendor) and the embedding card is real — current model,
+  measured dimension, and the sentence a tenant needs BEFORE pressing
+  save: changing this re-indexes your sources.
 
 Verified live at M3.4 (realtime dev + web dev, both secrets set): a
 private base URL rejected through the whole chain with "must resolve to
@@ -1875,6 +2088,21 @@ nothing persisted on either failure. A successful save is covered by the
 loopback-fake integration tests; the SUCCESS path against a real
 provider is covered by the key-gated live suite (§3.8) the moment a free
 tier key is pasted into .env — no code change, no test-only variable.
+
+**What M3.6b was and was NOT verified against.** Verified: the full
+suites (realtime against real Postgres, including the embedding save,
+the dimension refusal, the re-index contract from all three sides, and
+the worker's model-switch re-embed), `next build`, and a prod compose
+boot with the smoke probe green — first with the increment's own
+migration applying to a database that already held the previous four
+(the ALTER-on-existing-rows path, before the flatten), then again on the
+flattened baseline (§3.3). NOT verified: the embedding path
+against a real hosted provider, which needs a free-tier
+`GEMINI_API_KEY`; the moment one is in .env the gated live cases (§3.8)
+cover it with no code change, and the dashboard's own Test button covers
+it in the browser. There is deliberately no keyless substitute for that
+last step: a loopback fake would have to defeat the SSRF vet, which is
+the one thing about this surface that must never be made easy.
 
 ### §9.9 `src/lib/sources/`, AddSourceForm, AutoRefresh, the sources page (M3.6a)
 
@@ -1912,7 +2140,7 @@ Where the verification thesis faces the TENANT. Everything else in the
 dashboard is administration; this is the product explaining itself.
 
 - **queries.ts** — `listConversations` rides the (org_id,
-  last_message_at DESC) index migration 003 shaped for exactly this
+  last_message_at DESC) index §3.3.2 shaped for exactly this
   page. `getConversation` is org-scoped in the WHERE, so another
   tenant's conversation id and a fabricated one are INDISTINGUISHABLE
   (both null → the page's 404); malformed ids fail isId() before any
@@ -1965,7 +2193,7 @@ to install the widget.
   — the browser's OWN definition of the string the `Origin` header will
   carry — because every one of those variants stored raw is a row that
   can never match, which reads as "the allowlist mysteriously doesn't
-  work" (migration 001's CHECK comment says exactly that). Two refusals
+  work" (§3.3's CHECK comment says exactly that). Two refusals
   worth their code: a bare host (guessing https for someone's allowlist
   would be us deciding their security posture) and the literal `null`
   (what file:// and sandboxed iframes send — allowlisting it would open

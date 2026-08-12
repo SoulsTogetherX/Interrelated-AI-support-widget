@@ -27,6 +27,8 @@ interface ApiBody {
   saved?: boolean
   model?: string
   latencyMs?: number
+  dim?: number
+  reindexed?: number
   suffix?: string | null
   error?: string
   credentials?: Array<Record<string, unknown>>
@@ -58,16 +60,39 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     orgId = newId("org")
     await db.insertInto("organizations").values({ id: orgId, name: "Internal Test Org" }).execute()
 
-    // A minimal OpenAI-compatible upstream: SSE deltas then [DONE]. Records
-    // every request so tests can assert what left the process.
+    // A minimal OpenAI-compatible upstream: SSE deltas then [DONE] for
+    // chat, JSON vectors for embeddings. Records every request so tests can
+    // assert what left the process. The "huge-embed" model returns 1536
+    // dimensions — more than the storage column takes — so the refusal has
+    // something real to refuse.
     requestsSeen = []
     fakeProvider = createServer((req, res) => {
-      requestsSeen.push({ url: req.url ?? "", auth: req.headers.authorization })
-      res.writeHead(200, { "content-type": "text/event-stream" })
-      res.write('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n')
-      res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
-      res.write("data: [DONE]\n\n")
-      res.end()
+      const chunks: Buffer[] = []
+      req.on("data", (c: Buffer) => chunks.push(c))
+      req.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf8")
+        const body = (raw.length > 0 ? JSON.parse(raw) : {}) as { model?: string; input?: string[] }
+        requestsSeen.push({ url: req.url ?? "", auth: req.headers.authorization })
+
+        if ((req.url ?? "").endsWith("/embeddings")) {
+          const dim = body.model === "huge-embed" ? 1536 : 8
+          const input = body.input ?? []
+          res.writeHead(200, { "content-type": "application/json" })
+          res.end(JSON.stringify({
+            data: input.map((_, i) => ({
+              index: i,
+              embedding: Array.from({ length: dim }, (_, j) => (j === i % dim ? 1 : 0)),
+            })),
+          }))
+          return
+        }
+
+        res.writeHead(200, { "content-type": "text/event-stream" })
+        res.write('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n')
+        res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
+        res.write("data: [DONE]\n\n")
+        res.end()
+      })
     })
     await new Promise<void>((r) => fakeProvider.listen(0, "127.0.0.1", r))
     const fp = fakeProvider.address() as { port: number }
@@ -210,14 +235,16 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     expect("key_ciphertext" in body.credentials[0]).toBe(false)
   })
 
-  it("rejects embedding-role credentials until M3.6, naming the reason", async () => {
+  it("refuses Groq for the embedding role by name — it has no such endpoint", async () => {
+    const before = requestsSeen.length
     const res = await post(
       `/internal/orgs/${orgId}/credentials`,
-      { role: "embedding", provider: "gemini", apiKey: "AIza-embedding-key" },
+      { role: "embedding", provider: "groq", apiKey: "gsk-embedding-key" },
       SECRET,
     )
     expect(res.status).toBe(422)
-    expect(((await res.json()) as ApiBody).error).toContain("M3.6")
+    expect(((await res.json()) as ApiBody).error).toContain("does not serve embeddings")
+    expect(requestsSeen.length).toBe(before)
   })
 
   it("rejects shape violations without any upstream call", async () => {
@@ -285,6 +312,128 @@ describe.skipIf(!hasDb)("internal credential API", () => {
       .execute()
     expect(rows).toHaveLength(0)
   })
+
+  //#region Embedding credentials (M3.6b)
+  it("saves an embedding credential with the dimension the provider actually returned", async () => {
+    const res = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      {
+        role: "embedding",
+        provider: "openai_compatible",
+        apiKey: "sk-embed-tenant-key-5678",
+        baseUrl: fakeBase,
+        model: "test-embed",
+      },
+      SECRET,
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as ApiBody
+    expect(body.saved).toBe(true)
+    // Measured, not declared: the form never asked for a dimension.
+    expect(body.dim).toBe(8)
+
+    const row = await db
+      .selectFrom("org_provider_credentials")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .where("role", "=", "embedding")
+      .executeTakeFirstOrThrow()
+    expect(row.dim).toBe(8)
+    expect(row.key_ciphertext).not.toContain("sk-embed")
+    expect(decryptProviderKey(row.key_ciphertext!, row.id)).toBe("sk-embed-tenant-key-5678")
+    expect(row.last_validation).toContain("8-d")
+    // The embedding endpoint was really called, with the tenant's key.
+    expect(requestsSeen.at(-1)?.url).toBe("/v1/embeddings")
+    expect(requestsSeen.at(-1)?.auth).toBe("Bearer sk-embed-tenant-key-5678")
+  })
+
+  it("refuses a model whose vectors do not fit the storage column, storing nothing", async () => {
+    const res = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      {
+        role: "embedding",
+        provider: "openai_compatible",
+        apiKey: "sk-embed-too-big-0000",
+        baseUrl: fakeBase,
+        model: "huge-embed",
+      },
+      SECRET,
+    )
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as ApiBody
+    // The sentence has to name both numbers and the fix — this is the one
+    // rejection a tenant cannot diagnose from their provider's docs.
+    expect(body.error).toContain("1536")
+    expect(body.error).toContain("1024")
+    // The previous, valid credential is untouched.
+    const row = await db
+      .selectFrom("org_provider_credentials")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .where("role", "=", "embedding")
+      .executeTakeFirstOrThrow()
+    expect(row.model).toBe("test-embed")
+  })
+
+  it("queues a re-index when the embedding model changes, and not when it doesn't", async () => {
+    // A source to re-index. (No job yet: enqueueReindex skips sources with
+    // work already queued, which is the behavior the second half asserts.)
+    const sourceId = newId("src")
+    await db.insertInto("sources").values({
+      id: sourceId, org_id: orgId, kind: "url", location: "https://docs.example.com/", crawl_depth: 0,
+    }).execute()
+
+    const changed = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      {
+        role: "embedding", provider: "openai_compatible", apiKey: "sk-embed-tenant-key-5678",
+        baseUrl: fakeBase, model: "second-embed",
+      },
+      SECRET,
+    )
+    expect(((await changed.json()) as ApiBody).reindexed).toBe(1)
+    const queued = await db
+      .selectFrom("ingest_jobs").selectAll()
+      .where("source_id", "=", sourceId).where("state", "=", "queued").execute()
+    expect(queued).toHaveLength(1)
+
+    // Re-pasting a rotated key for the SAME model changes nothing about the
+    // vector space, so it must not re-crawl the tenant's site.
+    const same = await post(
+      `/internal/orgs/${orgId}/credentials`,
+      {
+        role: "embedding", provider: "openai_compatible", apiKey: "sk-embed-rotated-key-4321",
+        baseUrl: fakeBase, model: "second-embed",
+      },
+      SECRET,
+    )
+    expect(((await same.json()) as ApiBody).reindexed).toBe(0)
+    expect(await db.selectFrom("ingest_jobs").selectAll().where("source_id", "=", sourceId).execute())
+      .toHaveLength(1)
+  })
+
+  it("re-indexes on removal too — the org reverts to the platform model", async () => {
+    // Clear the queued job first, or the skip-already-queued rule (rightly)
+    // suppresses the new one.
+    await db.deleteFrom("ingest_jobs").where("org_id", "=", orgId).execute()
+    const res = await fetch(`${base}/internal/orgs/${orgId}/credentials/embedding`, {
+      method: "DELETE",
+      headers: { "x-internal-secret": SECRET },
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as ApiBody).reindexed).toBe(1)
+    expect(await db.selectFrom("ingest_jobs").selectAll().where("org_id", "=", orgId).execute()).toHaveLength(1)
+
+    // A second DELETE removes nothing, so it must queue nothing.
+    await db.deleteFrom("ingest_jobs").where("org_id", "=", orgId).execute()
+    const again = await fetch(`${base}/internal/orgs/${orgId}/credentials/embedding`, {
+      method: "DELETE",
+      headers: { "x-internal-secret": SECRET },
+    })
+    expect(((await again.json()) as ApiBody).reindexed).toBe(0)
+    expect(await db.selectFrom("ingest_jobs").selectAll().where("org_id", "=", orgId).execute()).toHaveLength(0)
+  })
+  //#endregion
 
   it("the PRODUCTION url vet rejects private/loopback base URLs", async () => {
     // A second app WITHOUT the injected vet: the default must refuse our

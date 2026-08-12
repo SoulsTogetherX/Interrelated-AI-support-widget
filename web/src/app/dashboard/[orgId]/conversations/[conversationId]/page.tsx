@@ -1,7 +1,7 @@
 // The transcript — where the verification thesis faces the tenant. Every
 // claim's verdict renders, VERIFIED AND STRIPPED ALIKE: `content` is what
 // the visitor actually saw, and the stripped rows underneath are what the
-// verifier refused to show them (with the reason split migration 003
+// verifier refused to show them (with the reason split the schema
 // stores: fabricated chunk id vs real chunk, quote not found). Assistant
 // rows also carry the model and latency — per-answer observability the
 // metrics milestone (M5) aggregates later.

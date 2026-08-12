@@ -1,7 +1,7 @@
 //#region Why this file
 // The dashboard's read side for conversations — the surface where the
 // verification thesis becomes VISIBLE to the tenant: every claim's verdict
-// is stored (migration 003 keeps verified and stripped alike), so the
+// is stored (§3.3.2 keeps verified and stripped alike), so the
 // transcript view can show exactly what the visitor saw AND what the
 // verifier refused to show them. Straight-from-Postgres like every
 // dashboard read; every query is org-scoped in the WHERE, so a
@@ -59,7 +59,7 @@ export async function listConversations(
   orgId: string,
   limit = 50,
 ): Promise<ConversationSummary[]> {
-  // The (org_id, last_message_at DESC) index from migration 003 IS this
+  // The (org_id, last_message_at DESC) index from §3.3.2 IS this
   // list — the schema was shaped for exactly this query.
   const conversations = await db
     .selectFrom("conversations")

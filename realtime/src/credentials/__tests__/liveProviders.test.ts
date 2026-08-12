@@ -36,12 +36,15 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  buildCredentialProvider,
+  buildEmbeddingProvider,
+  buildGenerationProvider,
   checkCredentialInput,
+  testEmbeddingRoundTrip,
   testGenerationRoundTrip,
 } from "../validate"
 import { decryptProviderKey, encryptProviderKey, keySuffix } from "../vault"
 import { ANSWER_JSON_SCHEMA, parseAnswerText } from "@shared/grounding/claims"
+import { PADDED_DIM } from "@shared/utils/vectors"
 import { LLMHttpError } from "@providers/llm/http"
 import { newId } from "@shared/utils/ids"
 //#endregion
@@ -103,7 +106,7 @@ for (const provider of PROVIDERS) {
       expect(checked.ok, checked.ok ? "" : `validation rejected the payload: ${checked.error}`).toBe(true)
       if (!checked.ok) return
 
-      const llm = buildCredentialProvider(checked.value)
+      const llm = buildGenerationProvider(checked.value)
       const trip = await testGenerationRoundTrip(llm, 30_000)
       expect(trip.ok, trip.ok ? "" : `round-trip failed: ${trip.error}`).toBe(true)
       if (!trip.ok) return
@@ -132,7 +135,7 @@ for (const provider of PROVIDERS) {
         expect(checked.ok).toBe(true)
         if (!checked.ok) return
 
-        const trip = await testGenerationRoundTrip(buildCredentialProvider(checked.value), 30_000)
+        const trip = await testGenerationRoundTrip(buildGenerationProvider(checked.value), 30_000)
         expect(trip.ok, trip.ok ? "" : `decrypted key failed: ${trip.error}`).toBe(true)
       } finally {
         if (hadMasterKey === undefined) delete process.env.CREDENTIAL_MASTER_KEY
@@ -149,7 +152,7 @@ for (const provider of PROVIDERS) {
       const checked = await checkCredentialInput(payload)
       expect(checked.ok).toBe(true)
       if (!checked.ok) return
-      const llm = buildCredentialProvider(checked.value)
+      const llm = buildGenerationProvider(checked.value)
 
       let text = ""
       let finishReason = ""
@@ -198,6 +201,65 @@ for (const provider of PROVIDERS) {
     }, 90_000)
   })
 }
+//#endregion
+
+//#region Live embedding (M3.6b)
+// Gemini is the only provider in the table that serves BOTH roles on a free
+// tier, so the embedding credential path gets the same treatment: the exact
+// payload the dashboard sends, through the exact validator, against the
+// real API. What only a live run can answer here is whether the reduced
+// output dimension we request is actually honored — the whole reason the
+// adapter can store its vectors in halfvec(1024) at all.
+describe.skipIf(!GEMINI_KEY)("live gemini embedding credential path", () => {
+  it("accepts a real key and returns vectors at a storable dimension", async () => {
+    const checked = await checkCredentialInput({
+      role: "embedding" as const,
+      provider: "gemini",
+      apiKey: GEMINI_KEY,
+      ...(process.env.GEMINI_EMBED_MODEL !== undefined ? { model: process.env.GEMINI_EMBED_MODEL } : {}),
+    })
+    expect(checked.ok, checked.ok ? "" : `validation rejected the payload: ${checked.error}`).toBe(true)
+    if (!checked.ok) return
+
+    const trip = await testEmbeddingRoundTrip(buildEmbeddingProvider(checked.value), 30_000)
+    expect(trip.ok, trip.ok ? "" : `round-trip failed: ${trip.error}`).toBe(true)
+    if (!trip.ok) return
+
+    expect(trip.dim).toBeGreaterThan(0)
+    expect(trip.dim!).toBeLessThanOrEqual(PADDED_DIM)
+    console.log(`[live] gemini embeddings: ${trip.model} returned ${trip.dim}-d in ${trip.latencyMs}ms`)
+  }, 60_000)
+
+  it("embeds a batch in order, and a query differently from a document", async () => {
+    // Order is the property the ingest worker bets every chunk on, and the
+    // task hint is the reason the adapter bothers with taskType at all: if
+    // RETRIEVAL_QUERY and RETRIEVAL_DOCUMENT produced identical vectors,
+    // passing them would be theatre.
+    const provider = buildEmbeddingProvider({
+      role: "embedding", provider: "gemini", apiKey: GEMINI_KEY as string,
+    })
+    const texts = ["Refunds are processed within five business days.", "Bananas ripen faster in a paper bag."]
+    let asDocuments: number[][]
+    let asQuery: number[][]
+    try {
+      asDocuments = await provider.embed(texts, { task: "document" })
+      asQuery = await provider.embed([texts[0] as string], { task: "query" })
+    } catch (error) {
+      throw new Error(`gemini: ${describeFailure(error)}`)
+    }
+
+    expect(asDocuments).toHaveLength(2)
+    const dot = (a: number[], b: number[]) => a.reduce((acc, v, i) => acc + v * (b[i] as number), 0)
+    // Unit-normalized, as the adapter promises after Matryoshka reduction.
+    expect(Math.sqrt(dot(asDocuments[0] as number[], asDocuments[0] as number[]))).toBeCloseTo(1, 4)
+    // Real semantics, unlike the mock: the refund sentence is nearer to its
+    // own query embedding than the banana sentence is.
+    const own = dot(asQuery[0] as number[], asDocuments[0] as number[])
+    const other = dot(asQuery[0] as number[], asDocuments[1] as number[])
+    expect(own).toBeGreaterThan(other)
+    console.log(`[live] gemini task types: same-text ${own.toFixed(3)} vs unrelated ${other.toFixed(3)}`)
+  }, 60_000)
+})
 //#endregion
 
 //#region Gated-off guard

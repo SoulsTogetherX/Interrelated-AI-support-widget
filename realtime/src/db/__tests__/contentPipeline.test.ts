@@ -8,7 +8,7 @@ import { newId } from "@shared/utils/ids"
 //#endregion
 
 //#region Test Setup
-// Integration tests for migration 002 — same gating and same schema-reset
+// Integration tests for the content-pipeline tables — same gating and reset
 // convention as migrate.test.ts (see that file's comments). fileParallelism
 // is off in vitest.config.ts, so the two files never race the shared DB.
 const DB_CONFIGURED = Boolean(process.env.POSTGRES_PASSWORD)
@@ -21,7 +21,7 @@ function vec(values: number[], pad = 1024): string {
   return `[${padded.join(",")}]`
 }
 
-describe.skipIf(!DB_CONFIGURED)("migration 002 — content pipeline", () => {
+describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
   let orgId: string
   let sourceId: string
   let documentId: string
@@ -215,7 +215,7 @@ describe.skipIf(!DB_CONFIGURED)("migration 002 — content pipeline", () => {
 
 // Placeholder so the file is never empty when the DB is absent (vitest
 // treats a zero-test file as an error) — same convention as migrate.test.ts.
-describe.skipIf(DB_CONFIGURED)("migration 002 (no database)", () => {
+describe.skipIf(DB_CONFIGURED)("content pipeline schema (no database)", () => {
   it("is skipped because POSTGRES_PASSWORD is not set", () => {
     expect(DB_CONFIGURED).toBe(false)
   })

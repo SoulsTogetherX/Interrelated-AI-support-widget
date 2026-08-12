@@ -46,7 +46,7 @@ function xorshift32(seed: number): () => number {
  * in milliseconds with zero downloads. Using the mock in a quality eval is
  * a bug, and the eval harness refuses it by name.
  *
- * model "mock-384" has its own partial HNSW index in migration 002, so even
+ * model "mock-384" has its own partial HNSW index in §3.3.1, so even
  * index-usage EXPLAIN tests can run against mock vectors.
  */
 class MockEmbeddingProvider implements EmbeddingProvider {

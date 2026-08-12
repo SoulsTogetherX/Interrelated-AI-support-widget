@@ -41,7 +41,15 @@ import type { EmbeddingProvider } from "@providers/embedding/types"
  */
 interface IngestWorkerOptions {
   db: Kysely<Database>
+  /** The app-level embedder — the fallback for orgs with no BYO embedding
+   *  credential, and what keeps every keyless stack (dev compose, CI, the
+   *  demo org) ingesting without an API key. */
   embedder: EmbeddingProvider
+  /** Per-org embedder lookup (M3.6b), injected rather than imported so the
+   *  worker stays testable without the credential vault. server.ts wires it
+   *  to credentials/resolve.ts. Resolved once per JOB: a rotation mid-crawl
+   *  would otherwise split one document set across two vector spaces. */
+  resolveEmbedder?: (orgId: string) => Promise<EmbeddingProvider | null>
   /** Poll interval when the queue is empty. */
   pollMs?: number
   workerId?: string
@@ -80,6 +88,7 @@ const INSERT_BATCH = 100
 class IngestWorker {
   readonly #db: Kysely<Database>
   readonly #embedder: EmbeddingProvider
+  readonly #resolveEmbedder: ((orgId: string) => Promise<EmbeddingProvider | null>) | undefined
   readonly #pollMs: number
   readonly #workerId: string
   readonly #crawler: (source: CrawlSource) => AsyncGenerator<CrawlEvent>
@@ -95,6 +104,7 @@ class IngestWorker {
   constructor(options: IngestWorkerOptions) {
     this.#db = options.db
     this.#embedder = options.embedder
+    this.#resolveEmbedder = options.resolveEmbedder
     this.#pollMs = options.pollMs ?? DEFAULT_POLL_MS
     this.#workerId = options.workerId ?? `worker-${process.pid}-${newId("job").slice(-6)}`
     this.#crawler = options.crawler ?? ((source) => crawl(source))
@@ -237,6 +247,14 @@ class IngestWorker {
     let docsDone = 0
 
     try {
+      // The org's own embedding model, resolved ONCE for the whole job
+      // (M3.6b): a rotation landing mid-crawl would otherwise leave one
+      // source's pages split across two vector spaces, half of them
+      // invisible to retrieval. A decrypt failure throws into the catch
+      // below and fails the job visibly — silently ingesting under the
+      // wrong model is the outcome worth avoiding.
+      const embedder = (await this.#resolveEmbedder?.(job.org_id)) ?? this.#embedder
+
       const events = this.#crawler({
         kind: source.kind,
         location: source.location,
@@ -264,7 +282,7 @@ class IngestWorker {
           // them per-page in the dashboard is M3's ingest-progress UI.
           console.warn(`[ingest] ${job.id} page error: ${event.url}: ${event.message}`)
         } else {
-          const docId = await this.#processPage(job, event.url, event.doc)
+          const docId = await this.#processPage(job, embedder, event.url, event.doc)
           seenDocIds.push(docId)
           docsDone++
           await this.#db.updateTable("ingest_jobs").set({ docs_done: docsDone }).where("id", "=", job.id).execute()
@@ -304,7 +322,7 @@ class IngestWorker {
    * One page through parse-hash-chunk-embed-store. Returns the document id
    * (existing or new) so the caller can compute the vanished set.
    */
-  async #processPage(job: ClaimedJob, url: string, doc: { title: string | null; text: string; blocks: Parameters<typeof chunkBlocks>[0] }): Promise<string> {
+  async #processPage(job: ClaimedJob, embedder: EmbeddingProvider, url: string, doc: { title: string | null; text: string; blocks: Parameters<typeof chunkBlocks>[0] }): Promise<string> {
     const contentHash = createHash("sha256").update(doc.text, "utf8").digest("hex")
     const existing = await this.#db
       .selectFrom("documents")
@@ -318,25 +336,45 @@ class IngestWorker {
     // embeddings are already right — refresh the bookkeeping and spend
     // nothing. This single branch is what makes recrawls nearly free on
     // embedding quota (the scarcest resource in the pipeline).
+    //
+    // "Already right" gained a second half in M3.6b: unchanged text is only
+    // enough if the chunks also carry vectors under the model THIS job is
+    // embedding with. When a tenant switches embedding providers, every
+    // page's text is identical and every page's vectors are in the wrong
+    // space — short-circuiting on the hash alone would make a re-index a
+    // no-op and leave the corpus permanently invisible to the dense arm.
+    // One indexed EXISTS per unchanged page is what that costs.
     if (existing && existing.content_hash === contentHash) {
-      await this.#db
-        .updateTable("documents")
-        .set({ title: doc.title, fetched_at: new Date() })
-        .where("id", "=", existing.id)
-        .execute()
-      return existing.id
+      const embedded = await this.#db
+        .selectFrom("chunk_embeddings")
+        .innerJoin("chunks", "chunks.id", "chunk_embeddings.chunk_id")
+        .select("chunk_embeddings.chunk_id")
+        .where("chunks.document_id", "=", existing.id)
+        .where("chunk_embeddings.model", "=", embedder.model)
+        .limit(1)
+        .executeTakeFirst()
+      if (embedded) {
+        await this.#db
+          .updateTable("documents")
+          .set({ title: doc.title, fetched_at: new Date() })
+          .where("id", "=", existing.id)
+          .execute()
+        return existing.id
+      }
     }
 
     const chunks = chunkBlocks(doc.blocks)
 
     // Embed with the heading trail prepended: "Billing > Refunds" carries
-    // the section context the chunk text alone lacks (migration 002's
+    // the section context the chunk text alone lacks (§3.3.1's
     // heading_path rationale). The STORED text stays trail-free — the trail
     // is retrieval context, not quotable content.
     const embedTexts = chunks.map((c) => (c.headingPath ? `${c.headingPath}\n${c.text}` : c.text))
     const vectors: string[] = []
     for (let i = 0; i < embedTexts.length; i += this.#embedBatchSize) {
-      const batch = await this.#embedder.embed(embedTexts.slice(i, i + this.#embedBatchSize))
+      // task "document" — the asymmetric-model half that matters here; the
+      // query path passes "query" (providers/embedding/types.ts).
+      const batch = await embedder.embed(embedTexts.slice(i, i + this.#embedBatchSize), { task: "document" })
       for (const vector of batch) vectors.push(toPgvector(padVector(vector)))
     }
 
@@ -377,8 +415,10 @@ class IngestWorker {
       const embeddingRows = chunkRows.map((row, i) => ({
         chunk_id: row.id,
         org_id: job.org_id,
-        model: this.#embedder.model,
-        dim: this.#embedder.dim,
+        model: embedder.model,
+        // Post-embed, so this is the dimension the provider actually
+        // returned (a remote adapter discovers its own on first response).
+        dim: embedder.dim,
         embedding: vectors[i] as string,
       }))
       for (let i = 0; i < chunkRows.length; i += INSERT_BATCH) {

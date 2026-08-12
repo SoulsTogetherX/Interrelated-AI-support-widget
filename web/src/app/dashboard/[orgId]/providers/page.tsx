@@ -23,6 +23,7 @@ export default async function ProvidersPage({
   const { org } = await requireOrgMember(orgId)
   const credentials = await listCredentialDisplay(org.id)
   const generation = credentials.find((c) => c.role === "generation") ?? null
+  const embedding = credentials.find((c) => c.role === "embedding") ?? null
   const isOwner = org.role === "owner"
 
   return (
@@ -55,6 +56,7 @@ export default async function ProvidersPage({
             {isOwner ? (
               <form action={removeProviderAction}>
                 <input type="hidden" name="orgId" value={org.id} />
+                <input type="hidden" name="role" value="generation" />
                 <button className="providers-remove" type="submit">
                   Remove credential
                 </button>
@@ -66,7 +68,7 @@ export default async function ProvidersPage({
         )}
 
         {isOwner ? (
-          <ProviderForm orgId={org.id} />
+          <ProviderForm orgId={org.id} role="generation" />
         ) : (
           <p className="providers-agentnote">
             Only the organization owner can change provider settings.
@@ -76,11 +78,47 @@ export default async function ProvidersPage({
 
       <section className="providers-card">
         <h2 className="providers-cardtitle">Embedding</h2>
-        <p className="providers-empty">
-          Embedding credentials arrive together with source indexing (M3.6) —
-          until then, indexing runs on the platform&apos;s built-in embedding
-          model.
+        <p className="providers-cardintro">
+          Embeddings turn your pages — and every visitor question — into
+          vectors. Both sides must come from the same model, so changing this
+          re-indexes your sources automatically; until that finishes, answers
+          come from the pages already indexed under the new model. Connect
+          nothing and indexing runs on the platform&apos;s built-in model.
         </p>
+        {embedding ? (
+          <div className="providers-current">
+            <p className="providers-currentline">
+              <strong>{embedding.provider}</strong>
+              {embedding.model ? ` · ${embedding.model}` : " · provider default model"}
+              {embedding.dim ? ` · ${embedding.dim} dimensions` : ""}
+              {embedding.suffix ? ` · key …${embedding.suffix}` : " · no key (unauthenticated)"}
+            </p>
+            <p className="providers-validated">
+              {embedding.lastValidation
+                ? `Last validated: ${embedding.lastValidation}`
+                : "Not validated yet"}
+            </p>
+            {isOwner ? (
+              <form action={removeProviderAction}>
+                <input type="hidden" name="orgId" value={org.id} />
+                <input type="hidden" name="role" value="embedding" />
+                <button className="providers-remove" type="submit">
+                  Remove credential
+                </button>
+              </form>
+            ) : null}
+          </div>
+        ) : (
+          <p className="providers-empty">No embedding provider connected yet.</p>
+        )}
+
+        {isOwner ? (
+          <ProviderForm orgId={org.id} role="embedding" />
+        ) : (
+          <p className="providers-agentnote">
+            Only the organization owner can change provider settings.
+          </p>
+        )}
       </section>
     </div>
   )

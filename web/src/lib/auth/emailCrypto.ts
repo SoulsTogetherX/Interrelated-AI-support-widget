@@ -1,6 +1,6 @@
 //#region Why this exists
 // Ported from OnlineWhiteboard (backend/src/auth/emailCrypto.ts); the users
-// table has carried the two columns this file fills since migration 001,
+// table has carried the two columns this file fills since §3.3,
 // precisely so this port would be code-only, never a data migration.
 //
 // Email addresses are the single most commonly breached field in the

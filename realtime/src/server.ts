@@ -9,6 +9,7 @@ import { IngestWorker } from "@/ingest/worker"
 import { buildLLMProvider } from "@/answer/buildLLM"
 import { resolveTokenSecret } from "@/widget/sessionToken"
 import { hasMasterKey } from "@/credentials/vault"
+import { resolveEmbeddingProvider } from "@/credentials/resolve"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import type { EmbeddingProvider } from "@providers/embedding/types"
 import type { InternalRouteOptions } from "@/routes/internal"
@@ -84,6 +85,8 @@ async function start(): Promise<void> {
 
   // The widget surface. One embedder serves both the worker and retrieval —
   // they MUST agree on the model or queries search an empty vector space.
+  // Since M3.6b that is the FALLBACK pair: an org with a saved embedding
+  // credential gets its own model on both sides, resolved from the same row.
   // LLM_PROVIDER defaults to the context-quoting mock so every stack (dev
   // compose, prod compose, CI e2e) serves real grounded answers keylessly;
   // env-configured real providers are a dev convenience that M3 replaces
@@ -107,7 +110,16 @@ async function start(): Promise<void> {
     const pollMs = pollRaw !== undefined && Number.isFinite(Number(pollRaw))
       ? Number(pollRaw)
       : undefined
-    worker = new IngestWorker({ db, embedder, ...(pollMs !== undefined ? { pollMs } : {}) })
+    worker = new IngestWorker({
+      db,
+      embedder,
+      // Per-org BYO embedding (M3.6b): a tenant's saved credential embeds
+      // their corpus, and the SAME resolver runs on the query side, so
+      // ingest and retrieval cannot drift apart. `embedder` above stays the
+      // fallback for orgs without one.
+      resolveEmbedder: (orgId) => resolveEmbeddingProvider(db, orgId),
+      ...(pollMs !== undefined ? { pollMs } : {}),
+    })
   }
 
   const internal = resolveInternalOptions()

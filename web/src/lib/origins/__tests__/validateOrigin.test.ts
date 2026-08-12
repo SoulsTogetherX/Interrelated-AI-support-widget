@@ -1,7 +1,7 @@
 // Keyless. The allowlist is trust-model layer 1, and every case here is a
 // way a stored entry could silently never match the browser's Origin
 // header — which reads as "the allowlist mysteriously doesn't work"
-// (migration 001's CHECK comment says exactly this).
+// (§3.3's CHECK comment says exactly this).
 import { describe, expect, it } from "vitest"
 
 import { validateOrigin } from "../index"

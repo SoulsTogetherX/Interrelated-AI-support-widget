@@ -44,9 +44,9 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
   })
 
   it("installs the pgvector extension", async () => {
-    // The reason the extension lives in migration 001: this assertion failing
-    // means the Postgres image is wrong, and we want to learn that here, not
-    // at first ingest in M1.
+    // The reason the extension is created before any table needs it: this
+    // assertion failing means the Postgres image is wrong, and we want to
+    // learn that at deploy time, not at first ingest.
     const { rows } = await sql<{ extname: string }>`
       SELECT extname FROM pg_extension WHERE extname = 'vector'
     `.execute(db)

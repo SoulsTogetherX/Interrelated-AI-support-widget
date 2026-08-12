@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   const { buildLLMProvider } = await import("@/answer/buildLLM")
   const { groundedMockResponder } = await import("@/answer/mockResponder")
 
-  const embedder = process.env.EMBEDDING_PROVIDER === "local"
+  const fallbackEmbedder = process.env.EMBEDDING_PROVIDER === "local"
     ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
     : new MockEmbeddingProvider()
 
@@ -75,6 +75,16 @@ async function main(): Promise<void> {
   if (!org) {
     console.error(`no organization named "${orgName}" — run npm run enqueue first, or pass --org`)
     process.exit(1)
+  }
+
+  // Same resolution the chat route does (§3.18): if this org has a BYO
+  // embedding credential, the question MUST be embedded by that model or
+  // the dense arm searches a space its chunks are not in — and the CLI
+  // would report a refusal that looks like a retrieval bug.
+  const { resolveEmbeddingProvider } = await import("@/credentials/resolve")
+  const embedder = (await resolveEmbeddingProvider(db, org.id)) ?? fallbackEmbedder
+  if (embedder !== fallbackEmbedder) {
+    console.log(`using the org's saved embedding model: ${embedder.model}`)
   }
 
   const result = await answerQuestion({

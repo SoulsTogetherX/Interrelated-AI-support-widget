@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   const { denseSearch, hybridSearch } = await import("@/retrieval/search")
   const { MockEmbeddingProvider } = await import("@providers/embedding/mock")
 
-  const embedder = process.env.EMBEDDING_PROVIDER === "local"
+  const fallbackEmbedder = process.env.EMBEDDING_PROVIDER === "local"
     ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
     : new MockEmbeddingProvider()
 
@@ -59,6 +59,16 @@ async function main(): Promise<void> {
   if (!org) {
     console.error(`no organization named "${orgName}" — run npm run enqueue first, or pass --org`)
     process.exit(1)
+  }
+
+  // An org with a BYO embedding credential is queried under ITS model —
+  // the same resolution the chat route and the ingest worker do (§3.21),
+  // because a CLI that quietly used a different model would report the
+  // one failure this whole path exists to prevent.
+  const { resolveEmbeddingProvider } = await import("@/credentials/resolve")
+  const embedder = (await resolveEmbeddingProvider(db, org.id)) ?? fallbackEmbedder
+  if (embedder !== fallbackEmbedder) {
+    console.log(`using the org's saved embedding model: ${embedder.model}`)
   }
 
   // The most common dev-loop mistake: ingesting under one EMBEDDING_PROVIDER
@@ -73,7 +83,7 @@ async function main(): Promise<void> {
     console.warn(`warning: org has no embeddings under model "${embedder.model}" — was the content ingested with a different EMBEDDING_PROVIDER?`)
   }
 
-  const [queryVector] = await embedder.embed([query])
+  const [queryVector] = await embedder.embed([query], { task: "query" })
   const started = Date.now()
 
   if (denseOnly) {

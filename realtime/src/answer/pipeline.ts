@@ -162,7 +162,11 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   emit({ type: "meta", conversationId, messageId })
 
   // ── Retrieve and gate ────────────────────────────────────────────────────
-  const [queryVector] = await embedder.embed([question])
+  // task "query": an asymmetric embedding model puts a QUESTION into the
+  // same space from a different side than a passage, and asking it to treat
+  // the question as a document is free recall thrown away. The symmetric
+  // models (mock, local) ignore the hint entirely.
+  const [queryVector] = await embedder.embed([question], { task: "query" })
   const retrieved = await hybridSearch(db, {
     orgId,
     queryText: question,

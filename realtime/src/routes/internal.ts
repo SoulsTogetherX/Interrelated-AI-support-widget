@@ -26,16 +26,23 @@ import { timingSafeEqual } from "node:crypto"
 
 import { newId, isId } from "@shared/utils/ids"
 
+import { sql } from "kysely"
+
 import { db } from "@/db/pool"
 import { assertPublicUrl } from "@/ingest/safeFetch"
 import {
-  buildCredentialProvider,
+  buildEmbeddingProvider,
+  buildGenerationProvider,
   checkCredentialInput,
+  effectiveEmbeddingModel,
+  testEmbeddingRoundTrip,
   testGenerationRoundTrip,
 } from "@/credentials/validate"
 import { encryptProviderKey, keySuffix } from "@/credentials/vault"
 
+import type { Transaction } from "kysely"
 import type { Express, Request, Response, NextFunction } from "express"
+import type { Database } from "@/db/schema"
 import type { UrlVet } from "@/credentials/validate"
 //#endregion
 
@@ -64,6 +71,50 @@ function constantTimeEquals(a: string, b: string): boolean {
   // Length inequality returns early, which leaks only the LENGTH of the
   // secret — 32+ random chars make that worthless.
   return bufA.length === bufB.length && timingSafeEqual(bufA, bufB)
+}
+//#endregion
+
+//#region Re-indexing
+/**
+ * Queues a fresh crawl of every source an org has, and returns how many.
+ *
+ * Why an embedding-credential change MUST do this: chunk vectors are stored
+ * per (chunk, model), and retrieval's dense arm filters `model = …`. Change
+ * the embedding model and the existing corpus does not become wrong — it
+ * becomes INVISIBLE, and the groundedness gate then refuses every question
+ * because no dense evidence exists (answer/gate.ts fails closed on
+ * lexical-only retrievals, by design). That reads to a tenant as "the
+ * widget stopped working", which is the worst way to learn about a
+ * consequence the product could simply handle.
+ *
+ * The re-crawl is what pays for it, together with the worker's short-circuit
+ * fix (§3.10.5): unchanged pages are re-embedded — and ONLY re-embedded —
+ * when their chunks have no vectors under the current model.
+ *
+ * Sources that already have work queued are skipped (a second job would
+ * crawl the same site twice for one outcome), and uploads are skipped
+ * because the worker fails them by design — manufacturing a job that is
+ * guaranteed to fail is not progress.
+ */
+async function enqueueReindex(
+  trx: Transaction<Database>,
+  orgId: string,
+): Promise<number> {
+  const { rows } = await sql<{ id: string }>`
+    SELECT s.id FROM sources s
+    WHERE s.org_id = ${orgId}
+      AND s.kind <> 'upload'
+      AND NOT EXISTS (
+        SELECT 1 FROM ingest_jobs j
+        WHERE j.source_id = s.id AND j.state IN ('queued', 'running')
+      )
+  `.execute(trx)
+  if (rows.length === 0) return 0
+  await trx
+    .insertInto("ingest_jobs")
+    .values(rows.map((row) => ({ id: newId("job"), org_id: orgId, source_id: row.id })))
+    .execute()
+  return rows.length
 }
 //#endregion
 
@@ -118,25 +169,45 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         return
       }
 
-      const provider = buildCredentialProvider(checked.value)
-      const trip = await testGenerationRoundTrip(provider, options.testTimeoutMs)
+      const input = checked.value
+      // One branch, two roles: both build an adapter from the same checked
+      // input and both spend one real call on the tenant's provider before
+      // anything is stored. The embedding trip additionally reports the
+      // dimension it observed — see testEmbeddingRoundTrip for why that
+      // number is worth a column.
+      const trip =
+        input.role === "generation"
+          ? await testGenerationRoundTrip(buildGenerationProvider(input), options.testTimeoutMs)
+          : await testEmbeddingRoundTrip(buildEmbeddingProvider(input), options.testTimeoutMs)
       if (!trip.ok) {
         res.status(422).json({ ok: false, error: trip.error })
         return
       }
 
-      const summary = `${trip.model}, ${trip.latencyMs}ms`
+      const summary =
+        trip.dim !== undefined
+          ? `${trip.model}, ${trip.dim}-d, ${trip.latencyMs}ms`
+          : `${trip.model}, ${trip.latencyMs}ms`
       if (body.save === false) {
-        res.json({ ok: true, saved: false, model: trip.model, latencyMs: trip.latencyMs })
+        res.json({
+          ok: true, saved: false, model: trip.model, latencyMs: trip.latencyMs,
+          ...(trip.dim !== undefined ? { dim: trip.dim } : {}),
+        })
         return
       }
 
       const id = newId("prv")
-      const input = checked.value
+      let reindexed = 0
       // Replace-by-delete inside one transaction: the UNIQUE(org_id, role)
-      // row simply ceases to exist for the old key (migration 004 explains
+      // row simply ceases to exist for the old key (§3.3.3 explains
       // why superseded ciphertexts are not retained).
       await db.transaction().execute(async (trx) => {
+        const previous = await trx
+          .selectFrom("org_provider_credentials")
+          .select(["provider", "model"])
+          .where("org_id", "=", res.locals.orgId as string)
+          .where("role", "=", input.role)
+          .executeTakeFirst()
         await trx
           .deleteFrom("org_provider_credentials")
           .where("org_id", "=", res.locals.orgId as string)
@@ -151,19 +222,38 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
             provider: input.provider,
             model: input.model ?? null,
             base_url: input.baseUrl ?? null,
+            dim: trip.dim ?? null,
             key_ciphertext: input.apiKey !== undefined ? encryptProviderKey(input.apiKey, id) : null,
             key_suffix: input.apiKey !== undefined ? keySuffix(input.apiKey) : null,
             last_validated_at: new Date(),
             last_validation: summary,
           })
           .execute()
+
+        // A new embedding MODEL orphans everything already indexed (the
+        // dense arm filters on model), so the corpus is re-queued in the
+        // same transaction that changed the credential — never one without
+        // the other. An unchanged model (re-pasting a rotated key for the
+        // same model) costs nothing.
+        if (input.role === "embedding") {
+          const previousModel =
+            previous !== undefined && previous.provider !== "anthropic"
+              ? effectiveEmbeddingModel(previous.provider, previous.model)
+              : null
+          if (previousModel !== trip.model) {
+            reindexed = await enqueueReindex(trx, res.locals.orgId as string)
+          }
+        }
       })
+      if (reindexed > 0) options.onEnqueue?.()
 
       res.json({
         ok: true,
         saved: true,
         model: trip.model,
         latencyMs: trip.latencyMs,
+        ...(trip.dim !== undefined ? { dim: trip.dim } : {}),
+        reindexed,
         suffix: input.apiKey !== undefined ? keySuffix(input.apiKey) : null,
       })
     },
@@ -184,6 +274,7 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
           "provider",
           "model",
           "base_url",
+          "dim",
           "key_suffix",
           "last_validated_at",
           "last_validation",
@@ -268,7 +359,7 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
     },
   )
 
-  /** Remove a role's credential. Hard delete — see migration 004. */
+  /** Remove a role's credential. Hard delete — see §3.3.3. */
   app.delete(
     "/internal/orgs/:orgId/credentials/:role",
     requireSecret,
@@ -279,12 +370,23 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         res.status(404).end()
         return
       }
-      await db
-        .deleteFrom("org_provider_credentials")
-        .where("org_id", "=", res.locals.orgId as string)
-        .where("role", "=", role)
-        .execute()
-      res.json({ ok: true })
+      let reindexed = 0
+      await db.transaction().execute(async (trx) => {
+        const removed = await trx
+          .deleteFrom("org_provider_credentials")
+          .where("org_id", "=", res.locals.orgId as string)
+          .where("role", "=", role)
+          .executeTakeFirst()
+        // Removing an embedding credential reverts the org to the
+        // app-level model, which is a model CHANGE like any other — the
+        // corpus has to follow it or the widget goes quiet. Only when a row
+        // was actually deleted: a no-op delete must not queue crawls.
+        if (role === "embedding" && Number(removed.numDeletedRows) > 0) {
+          reindexed = await enqueueReindex(trx, res.locals.orgId as string)
+        }
+      })
+      if (reindexed > 0) options.onEnqueue?.()
+      res.json({ ok: true, reindexed })
     },
   )
 }

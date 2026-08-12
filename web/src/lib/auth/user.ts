@@ -1,6 +1,6 @@
 //#region Registration and authentication
 // The two flows that tie the auth primitives together, against the users
-// table from migration 001. Everything here returns a Result rather than
+// table from §3.3. Everything here returns a Result rather than
 // throwing on user error — the Server Actions turn `error` strings straight
 // into form feedback.
 //#endregion

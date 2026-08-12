@@ -70,6 +70,10 @@
   align-self: flex-start;
 }
 
+/* The per-card explanation the embedding card needs and the generation
+   card does not: changing an embedding model has a consequence (a
+   re-index) that a tenant should read BEFORE pressing save. */
+.providers-cardintro,
 .providers-empty,
 .providers-agentnote {
   margin: 0;

@@ -19,6 +19,10 @@ export interface CredentialDisplay {
   provider: string
   model: string | null
   baseUrl: string | null
+  /** Embedding rows only — the dimension the Test round-trip measured
+   *  (§3.3.3). Worth showing: it is the number that decides whether
+   *  a model fits the platform's storage at all. */
+  dim: number | null
   suffix: string | null
   lastValidatedAt: Date | null
   lastValidation: string | null
@@ -29,7 +33,7 @@ export interface CredentialDisplay {
 export async function listCredentialDisplay(orgId: string): Promise<CredentialDisplay[]> {
   const rows = await db
     .selectFrom("org_provider_credentials")
-    .select(["role", "provider", "model", "base_url", "key_suffix", "last_validated_at", "last_validation"])
+    .select(["role", "provider", "model", "base_url", "dim", "key_suffix", "last_validated_at", "last_validation"])
     .where("org_id", "=", orgId)
     .orderBy("role")
     .execute()
@@ -38,6 +42,7 @@ export async function listCredentialDisplay(orgId: string): Promise<CredentialDi
     provider: r.provider,
     model: r.model,
     baseUrl: r.base_url,
+    dim: r.dim,
     suffix: r.key_suffix,
     lastValidatedAt: r.last_validated_at,
     lastValidation: r.last_validation,
