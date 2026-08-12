@@ -1,5 +1,6 @@
 //#region Imports
 import { createServer } from "node:http"
+import { resolve as resolvePath } from "node:path"
 
 import { createApp } from "@/app"
 import pool, { db } from "@/db/pool"
@@ -72,6 +73,14 @@ async function start(): Promise<void> {
       tokenSecret: resolveTokenSecret(),
       ...(Number.isFinite(maxDistance) ? { maxDistance } : {}),
       ...(Number.isFinite(dailyCap) ? { dailyAnswerCap: dailyCap } : {}),
+    },
+    demo: {
+      // Null until DEMO_PUBLISHABLE_KEY is set — /demo then serves setup
+      // instructions instead of a broken widget (routes/demo.ts).
+      publishableKey: process.env.DEMO_PUBLISHABLE_KEY || null,
+      // ../widget/dist resolves identically from the prod image's
+      // /app/realtime workdir and a host-side `npm run dev` in realtime/.
+      widgetBundlePath: resolvePath(process.cwd(), "../widget/dist/widget.js"),
     },
   })
   const server = createServer(app)

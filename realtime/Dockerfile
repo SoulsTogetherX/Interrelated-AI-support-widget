@@ -28,6 +28,20 @@ COPY shared /app/shared
 COPY providers /app/providers
 CMD ["npx", "tsx", "watch", "src/server.ts"]
 
+# ── widget ───────────────────────────────────────────────────────────────────
+# The widget bundle builds INSIDE the image (M2.7) because the realtime
+# service is its origin fallback: it serves /widget.js for the demo page and
+# for customers who prefer our origin over jsDelivr. Own stage so a
+# widget-only change doesn't bust the realtime deps cache and vice versa.
+FROM node:22-alpine AS widget
+WORKDIR /app/widget
+COPY widget/package.json widget/package-lock.json ./
+RUN npm ci
+COPY widget/tsconfig.json widget/vitest.config.ts ./
+COPY widget/src ./src
+COPY shared /app/shared
+RUN npm run build
+
 # ── build ────────────────────────────────────────────────────────────────────
 FROM deps AS build
 WORKDIR /app/realtime
@@ -53,6 +67,8 @@ WORKDIR /app/realtime
 COPY realtime/package.json realtime/package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/realtime/dist ./dist
+# The widget bundle, where routes/demo.ts expects it (/app/widget/dist).
+COPY --from=widget /app/widget/dist /app/widget/dist
 
 # Run as the unprivileged user the base image ships. A container escape from
 # root is a much worse day than one from node.

@@ -82,6 +82,24 @@ await check("POST /v1/widget/chat without a session returns 401", async () => {
   if (res.status !== 401) throw new Error(`status ${res.status}`)
 })
 
+// ── Demo surface (M2.7) ─────────────────────────────────────────────────────
+// /demo must answer 200 in BOTH states (configured → the widget page;
+// unconfigured → setup instructions) — a recruiter must never see a 500.
+// /widget.js proves the bundle actually shipped inside the image.
+await check("GET /demo returns 200 html", async () => {
+  const res = await get("/demo")
+  if (res.status !== 200) throw new Error(`status ${res.status}`)
+  const body = await res.text()
+  if (!body.includes("Interrelated")) throw new Error("unexpected body")
+})
+
+await check("GET /widget.js serves the bundle", async () => {
+  const res = await get("/widget.js")
+  if (res.status !== 200) throw new Error(`status ${res.status}`)
+  const type = res.headers.get("content-type") ?? ""
+  if (!type.includes("javascript")) throw new Error(`content-type ${type}`)
+})
+
 if (failures > 0) {
   console.error(`\n${failures} smoke check(s) failed`)
   process.exit(1)

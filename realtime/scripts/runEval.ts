@@ -8,6 +8,10 @@
 //   npm run eval -- --sweep-ef 10,20,40,80,120,200   recall-vs-ef curve (CSV)
 //   npm run eval -- --target-tokens 800   chunk-size ablation (forces re-ingest)
 //   npm run eval -- --no-floor            measure without gating (experiments)
+//   npm run eval -- --sweep-threshold     refusal-threshold curve (M2.7): the
+//                                         gate signal measured on the golden
+//                                         set vs eval/noanswer.jsonl, swept
+//                                         over candidate thresholds (CSV)
 //
 // What it does, in order:
 //   1. Ingests eval/corpus/ (committed snapshot, PROVENANCE.md) into a
@@ -56,6 +60,7 @@ const EVAL_ORG_NAME = "EVAL HARNESS (do not use)"
 const EVAL_SOURCE_URL = "eval://corpus"
 const CORPUS_DIR = resolve(__dirname, "../../eval/corpus")
 const GOLDEN_PATH = resolve(__dirname, "../../eval/golden.jsonl")
+const NOANSWER_PATH = resolve(__dirname, "../../eval/noanswer.jsonl")
 const FLOOR_PATH = resolve(__dirname, "../../eval/floor.json")
 const RESULTS_DIR = resolve(__dirname, "../../eval/results")
 /** Maps a corpus file to the real public docs URL it snapshots, so eval
@@ -72,6 +77,18 @@ interface GoldenEntry {
   style: "paraphrase" | "verbatim"
   question: string
   anchors: Array<{ url: string; mustContain: string }>
+}
+
+interface NoAnswerEntry {
+  id: string
+  /** Where refusal difficulty comes from: off_topic questions land far
+   *  from the corpus in embedding space; adjacent ones are web-dev
+   *  questions the corpus does NOT answer but retrieves plausibly for;
+   *  absent_detail ones are Fastify-flavored facts these 31 pages simply
+   *  don't contain. The threshold's failures cluster by category, and
+   *  RESULTS.md needs to say WHICH kind fails. */
+  category: "off_topic" | "adjacent" | "absent_detail"
+  question: string
 }
 
 interface StrategyResult {
@@ -92,6 +109,7 @@ function parseArgs(argv: readonly string[]): {
   efSearch: number
   targetTokens: number
   sweepEf: number[] | null
+  sweepThreshold: boolean
   enforceFloor: boolean
 } {
   const num = (flag: string, dflt: number): number => {
@@ -106,6 +124,7 @@ function parseArgs(argv: readonly string[]): {
     efSearch: num("--ef-search", 40),
     targetTokens: num("--target-tokens", 400),
     sweepEf: sweepIdx === -1 ? null : String(argv[sweepIdx + 1]).split(",").map(Number),
+    sweepThreshold: argv.includes("--sweep-threshold"),
     enforceFloor: !argv.includes("--no-floor"),
   }
 }
@@ -279,6 +298,96 @@ async function main(): Promise<void> {
     const batch = golden.slice(i, i + EMBED_BATCH)
     const vecs = await embedder.embed(batch.map((g) => g.question))
     batch.forEach((g, j) => queryVectors.set(g.id, vecs[j] as number[]))
+  }
+  //#endregion
+
+  //#region Threshold sweep mode (M2.7)
+  // The groundedness gate's operating point, chosen by measurement instead
+  // of feel: for every candidate threshold t, the FALSE-refusal rate is the
+  // share of golden questions (all answerable by construction) whose gate
+  // signal exceeds t, and the CORRECT-refusal rate is the share of
+  // eval/noanswer.jsonl questions refused at t. The signal is computed by
+  // the REAL gate function on REAL hybrid retrievals — a sweep over a
+  // reimplementation would calibrate a copy, not the production code path.
+  if (args.sweepThreshold) {
+    const { evaluateGroundedness } = await import("@/answer/gate")
+    const noanswer: NoAnswerEntry[] = readFileSync(NOANSWER_PATH, "utf8")
+      .split("\n").filter((l) => l.trim().length > 0).map((l) => JSON.parse(l) as NoAnswerEntry)
+
+    async function gateSignal(question: string, vector: number[]): Promise<number> {
+      const retrieved = await hybridSearch(db, {
+        orgId, queryText: question, queryVector: vector,
+        model: embedder.model, k: RETRIEVE_K, efSearch: args.efSearch,
+      })
+      // Infinity threshold: never refuse on distance, so .signal is the raw
+      // min dense distance. A null signal (no dense evidence at all) is
+      // refused at EVERY threshold — Infinity models that exactly.
+      return evaluateGroundedness(retrieved, Infinity).signal ?? Infinity
+    }
+
+    const goldenSignals: number[] = []
+    for (const entry of golden) {
+      goldenSignals.push(await gateSignal(entry.question, queryVectors.get(entry.id) as number[]))
+    }
+    const noanswerSignals: Array<{ category: NoAnswerEntry["category"]; signal: number }> = []
+    for (let i = 0; i < noanswer.length; i += EMBED_BATCH) {
+      const batch = noanswer.slice(i, i + EMBED_BATCH)
+      const vecs = await embedder.embed(batch.map((n) => n.question))
+      for (const [j, entry] of batch.entries()) {
+        noanswerSignals.push({ category: entry.category, signal: await gateSignal(entry.question, vecs[j] as number[]) })
+      }
+    }
+
+    const stats = (values: readonly number[]): string => {
+      const sorted = [...values].sort((a, b) => a - b)
+      const pick = (p: number) => (percentile(sorted, p)).toFixed(3)
+      return `min ${pick(0)}  p25 ${pick(25)}  median ${pick(50)}  p75 ${pick(75)}  max ${pick(100)}`
+    }
+    console.log(`\ngate signal (min dense cosine distance), model ${embedder.model}:`)
+    console.log(`  golden   (${goldenSignals.length}, answerable)   ${stats(goldenSignals)}`)
+    for (const category of ["off_topic", "adjacent", "absent_detail"] as const) {
+      const subset = noanswerSignals.filter((n) => n.category === category).map((n) => n.signal)
+      console.log(`  ${category.padEnd(13)} (${subset.length}, refuse)  ${stats(subset)}`)
+    }
+
+    const rate = (values: readonly number[], t: number): number =>
+      values.filter((v) => v > t).length / values.length
+    const lines = ["threshold,false_refusal,correct_refusal,cr_off_topic,cr_adjacent,cr_absent_detail"]
+    for (let t = 0.30; t <= 1.0001; t += 0.01) {
+      const th = Number(t.toFixed(2))
+      const by = (category: NoAnswerEntry["category"]) =>
+        rate(noanswerSignals.filter((n) => n.category === category).map((n) => n.signal), th)
+      lines.push([
+        th.toFixed(2),
+        rate(goldenSignals, th).toFixed(4),
+        rate(noanswerSignals.map((n) => n.signal), th).toFixed(4),
+        by("off_topic").toFixed(4), by("adjacent").toFixed(4), by("absent_detail").toFixed(4),
+      ].join(","))
+    }
+    mkdirSync(RESULTS_DIR, { recursive: true })
+    const csvPath = join(RESULTS_DIR, "threshold-sweep.csv")
+    writeFileSync(csvPath, lines.join("\n") + "\n")
+    console.log(`\nsweep written to ${csvPath}`)
+
+    // The two candidate operating points, printed with their trade: the
+    // conservative point refuses NO answerable question; the aggressive one
+    // spends one false refusal (1/80) to catch more unanswerables. The
+    // CHOICE between them is a product judgment recorded in gate.ts and
+    // RESULTS.md — this tool only surfaces the frontier.
+    const sortedGolden = [...goldenSignals].sort((a, b) => a - b)
+    const maxGolden = sortedGolden.at(-1) as number
+    const secondMaxGolden = sortedGolden.at(-2) as number
+    for (const [label, t] of [["FR=0 (conservative)", maxGolden + 0.005], ["FR=1/80 (aggressive)", secondMaxGolden + 0.005]] as const) {
+      const all = rate(noanswerSignals.map((n) => n.signal), t)
+      console.log(
+        `${label}: threshold ${t.toFixed(3)} → correct-refusal ${(all * 100).toFixed(1)}% ` +
+        `(off_topic ${(rate(noanswerSignals.filter((n) => n.category === "off_topic").map((n) => n.signal), t) * 100).toFixed(0)}%, ` +
+        `adjacent ${(rate(noanswerSignals.filter((n) => n.category === "adjacent").map((n) => n.signal), t) * 100).toFixed(0)}%, ` +
+        `absent_detail ${(rate(noanswerSignals.filter((n) => n.category === "absent_detail").map((n) => n.signal), t) * 100).toFixed(0)}%)`,
+      )
+    }
+    await db.destroy()
+    return
   }
   //#endregion
 

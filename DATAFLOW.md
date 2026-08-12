@@ -5,7 +5,7 @@ function at each hop. `CLAUDE.md` describes what each file *is*; this
 document describes what *happens*, in order, when something occurs. Updated
 as part of every step's definition of done.
 
-**Current milestone: M2 — IN PROGRESS.** Six paths exist: boot (§2), the
+**Current milestone: M2 — COMPLETE.** Six paths exist: boot (§2), the
 health probes (§1), the full ingest pipeline (§3): source → crawl → parse
 → chunk → embed → store, retrieval (§4): query → dense + lexical arms →
 RRF fusion → ranked chunks, the evaluation harness (§4.4) that scores §4
@@ -16,8 +16,11 @@ pipeline HAS its HTTP surface (§5.3): the widget session mint (origin
 allowlist → HMAC token) and the token-authenticated SSE chat route that
 serializes §5's events verbatim. As of M2.6 the surface has its CLIENT
 (§5.4): the embeddable widget — script-tag config, shadow-DOM UI,
-SSE consumption — verified live on the three fixture host pages. Coming
-after: dashboard auth (M3), handoff (M4).
+SSE consumption — verified live on the three fixture host pages. M2.7
+closed the milestone: the gate's threshold is eval-derived (§4.4's
+--sweep-threshold mode; analysis in eval/RESULTS.md), and GET /demo +
+GET /widget.js (realtime/src/routes/demo.ts) put the whole loop on one
+public URL. Coming after: dashboard auth (M3), handoff (M4).
 
 ---
 
@@ -320,6 +323,18 @@ npm run eval                             realtime/scripts/runEval.ts
                                          published, human-argued version)
   → floor check                          eval/floor.json
       hybrid recall@5 < floor → exit 1 → CI red
+
+npm run eval -- --sweep-threshold        (M2.7 — the gate's calibration)
+  → same ingest + golden load, then:
+      gate signal per question           evaluateGroundedness on REAL
+                                         hybrid retrievals (the production
+                                         code path, not a copy)
+      golden vs eval/noanswer.jsonl      answerable vs off_topic/adjacent/
+                                         absent_detail
+  → correct-refusal vs false-refusal     per threshold 0.30…1.00 → CSV
+  → frontier points printed              FR=0 and FR=1/80, with category
+                                         breakdowns; the CHOICE lives in
+                                         answer/gate.ts + RESULTS.md
 ```
 
 ## §5 Grounded answers — question → verified claims

@@ -5,6 +5,8 @@ import type { Express } from "express"
 import { configureHealthRoutes } from "@/routes/health"
 import { configureWidgetRoutes } from "@/routes/widget"
 import type { WidgetRouteOptions } from "@/routes/widget"
+import { configureDemoRoutes } from "@/routes/demo"
+import type { DemoRouteOptions } from "@/routes/demo"
 //#endregion
 
 //#region App Def
@@ -20,6 +22,7 @@ import type { WidgetRouteOptions } from "@/routes/widget"
  */
 interface CreateAppOptions {
   widget?: WidgetRouteOptions
+  demo?: DemoRouteOptions
 }
 
 function createApp(options: CreateAppOptions = {}): Express {
@@ -38,6 +41,7 @@ function createApp(options: CreateAppOptions = {}): Express {
 
   configureHealthRoutes(app)
   if (options.widget !== undefined) configureWidgetRoutes(app, options.widget)
+  if (options.demo !== undefined) configureDemoRoutes(app, options.demo)
 
   return app
 }

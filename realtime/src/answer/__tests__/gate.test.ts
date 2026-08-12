@@ -33,8 +33,8 @@ describe("evaluateGroundedness", () => {
   })
 
   it("answers when close dense evidence exists", () => {
-    const decision = evaluateGroundedness([hit(0.4), hit(0.9)])
-    expect(decision).toEqual({ refuse: false, signal: 0.4, reason: null })
+    const decision = evaluateGroundedness([hit(0.25), hit(0.9)])
+    expect(decision).toEqual({ refuse: false, signal: 0.25, reason: null })
   })
 
   it("answers at EXACTLY the threshold — the boundary belongs to the answer side", () => {

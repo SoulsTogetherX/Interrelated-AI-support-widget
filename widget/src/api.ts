@@ -61,6 +61,7 @@ class ApiClient implements WidgetClient {
   readonly #fetch: typeof fetch
   #token: string | null = null
   #visitorId: string | null = loadVisitor()
+  #minting: Promise<void> | null = null
 
   constructor(options: ApiClientOptions) {
     this.#apiBase = options.apiBase.replace(/\/$/, "")
@@ -68,12 +69,22 @@ class ApiClient implements WidgetClient {
     this.#fetch = options.fetchImpl
   }
 
-  /** Mints (or re-mints) the session. Called at bubble-open — which is
-   *  also the handshake that warms the backend's database while the
-   *  visitor types their first question (the free-tier design). */
-  async ensureSession(): Promise<void> {
-    if (this.#token !== null) return
-    await this.#mint()
+  /**
+   * Mints the session, SINGLE-FLIGHT. Called fire-and-forget at
+   * bubble-open (the DB-warming handshake) and awaited by ask() — and
+   * those two race whenever a visitor submits within one mint round-trip
+   * (fast typist, slow network; a scripted browser reliably). Without the
+   * in-flight memo each caller mints its own session, the server
+   * generates a DIFFERENT visitor id per mint (nothing was stored yet),
+   * and whichever response lands last clobbers the token — after which
+   * every conversation created under the other token's visitor is
+   * unreachable ("conversation not found"). Found live in the M2.7
+   * browser check, not by the unit tests, which is why one now pins it.
+   */
+  ensureSession(): Promise<void> {
+    if (this.#token !== null) return Promise.resolve()
+    this.#minting ??= this.#mint().finally(() => { this.#minting = null })
+    return this.#minting
   }
 
   async #mint(): Promise<void> {

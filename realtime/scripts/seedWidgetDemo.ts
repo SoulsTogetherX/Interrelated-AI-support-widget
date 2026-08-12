@@ -1,10 +1,17 @@
 //#region Imports
 // Dev-only CLI: seeds the fixture/demo organization the widget's host
-// pages talk to — org, publishable key, allowlisted fixture origins, and a
-// small documentation corpus, embedded under EMBEDDING_PROVIDER exactly
-// like the worker would (mock by default; local for a semantic demo).
+// pages talk to — org, publishable key, allowlisted origins, and content,
+// embedded under EMBEDDING_PROVIDER exactly like the worker would (mock by
+// default; local for a semantic demo).
 //
-//   npm run seed-demo
+//   npm run seed-demo                          six-chunk toy corpus (fixtures)
+//   npm run seed-demo -- --corpus fastify      the REAL demo: eval/corpus/
+//                                              (31 Fastify pages; pair with
+//                                              EMBEDDING_PROVIDER=local or
+//                                              paraphrase retrieval is dead)
+//   npm run seed-demo -- --origin https://x.onrender.com   allowlist an
+//                                              extra origin (the deployed
+//                                              demo page's own origin)
 //
 // Idempotent by REPLACEMENT: the demo source is deleted and re-seeded on
 // every run (cascades wipe old documents/chunks/embeddings), so the seed
@@ -12,8 +19,8 @@
 // a previous version of the corpus. Same glue-only rule as the sibling
 // CLIs.
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { readFileSync, readdirSync } from "node:fs"
+import { resolve, join } from "node:path"
 //#endregion
 
 //#region Env fallback
@@ -74,6 +81,14 @@ const PAGES: ReadonlyArray<{ url: string; title: string; chunks: ReadonlyArray<{
 
 //#region Main
 async function main(): Promise<void> {
+  const args = process.argv.slice(2)
+  const corpus = args.includes("--corpus") ? args[args.indexOf("--corpus") + 1] : "toy"
+  const extraOrigin = args.includes("--origin") ? args[args.indexOf("--origin") + 1] : undefined
+  if (corpus !== "toy" && corpus !== "fastify") {
+    console.error(`unknown --corpus "${corpus}" (toy | fastify)`)
+    process.exit(1)
+  }
+
   const { db } = await import("@/db/pool")
   const { newId } = await import("@shared/utils/ids")
   const { padVector, toPgvector } = await import("@shared/utils/vectors")
@@ -82,6 +97,12 @@ async function main(): Promise<void> {
   const embedder = process.env.EMBEDDING_PROVIDER === "local"
     ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
     : new MockEmbeddingProvider()
+
+  if (corpus === "fastify" && embedder.model === "mock-384") {
+    // Not refused (unlike the eval — this seeds a dev loop, not a
+    // measurement), but said loudly: paraphrase retrieval needs semantics.
+    console.warn("warning: --corpus fastify with MOCK embeddings — only questions that exactly match chunk text will retrieve. Use EMBEDDING_PROVIDER=local.")
+  }
 
   // ── Org ──────────────────────────────────────────────────────────────────
   let org = await db.selectFrom("organizations").select(["id"]).where("name", "=", ORG_NAME).executeTakeFirst()
@@ -107,8 +128,9 @@ async function main(): Promise<void> {
     console.log(`created publishable key ${PUBLISHABLE_KEY}`)
   }
 
-  // ── Fixture origins ──────────────────────────────────────────────────────
-  for (const origin of FIXTURE_ORIGINS) {
+  // ── Fixture origins (+ optional deployment origin) ──────────────────────
+  const origins = extraOrigin !== undefined ? [...FIXTURE_ORIGINS, extraOrigin] : FIXTURE_ORIGINS
+  for (const origin of origins) {
     const existing = await db.selectFrom("allowed_origins").select("origin")
       .where("org_id", "=", org.id).where("origin", "=", origin).executeTakeFirst()
     if (!existing) {
@@ -122,8 +144,66 @@ async function main(): Promise<void> {
   const sourceId = newId("src")
   await db.insertInto("sources").values({
     id: sourceId, org_id: org.id, kind: "url",
-    location: "https://demo.interrelated.example", status: "ready",
+    location: corpus === "fastify" ? "https://fastify.dev/docs/latest" : "https://demo.interrelated.example",
+    status: "ready",
   }).execute()
+
+  //#region Fastify corpus mode
+  // The real demo content: eval/corpus/ through parse → chunk → embed, the
+  // same stage-1 shape as the eval harness (runEval.ts §3.14) with real
+  // fastify.dev URLs, so demo citations deep-link to live pages. Duplicated
+  // glue rather than a shared module: both callers are dev CLIs, and the
+  // ~30 lines beat a third place for the ingest shape to live.
+  if (corpus === "fastify") {
+    const { parseMarkdown } = await import("@/ingest/parsers/markdown")
+    const { chunkBlocks } = await import("@shared/chunking/chunker")
+    const corpusDir = resolve(__dirname, "../../eval/corpus")
+    const urlBase = "https://fastify.dev/docs/latest"
+
+    let totalChunks = 0
+    for (const section of ["Reference", "Guides"]) {
+      for (const name of readdirSync(join(corpusDir, section)).sort()) {
+        if (!name.endsWith(".md")) continue
+        const raw = readFileSync(join(corpusDir, section, name), "utf8")
+        const text = raw.replace(/^﻿/, "").replace(/\r\n/g, "\n")
+        const doc = parseMarkdown(text)
+        const chunks = chunkBlocks(doc.blocks)
+        const documentId = newId("doc")
+        await db.insertInto("documents").values({
+          id: documentId, org_id: org.id, source_id: sourceId,
+          url: `${urlBase}/${section}/${name.replace(/\.md$/, "")}/`,
+          title: doc.title, content_hash: createHash("sha256").update(text, "utf8").digest("hex"),
+        }).execute()
+
+        // Real embedders get the production representation (trail
+        // prepended); the mock stays trail-free for the reason in the toy
+        // path below.
+        const embedTexts = chunks.map((c) =>
+          embedder.model === "mock-384" || !c.headingPath ? c.text : `${c.headingPath}\n${c.text}`)
+        for (let i = 0; i < chunks.length; i += 32) {
+          const vectors = await embedder.embed(embedTexts.slice(i, i + 32))
+          for (const [j, chunk] of chunks.slice(i, i + 32).entries()) {
+            const chunkId = newId("chk")
+            await db.insertInto("chunks").values({
+              id: chunkId, org_id: org.id, document_id: documentId, ord: chunk.ord,
+              heading_path: chunk.headingPath, text: chunk.text, token_count: chunk.tokenCount,
+              char_start: chunk.charStart, char_end: chunk.charEnd,
+            }).execute()
+            await db.insertInto("chunk_embeddings").values({
+              chunk_id: chunkId, org_id: org.id, model: embedder.model, dim: embedder.dim,
+              embedding: toPgvector(padVector(vectors[j] as number[])),
+            }).execute()
+            totalChunks++
+          }
+        }
+      }
+    }
+    console.log(`seeded the Fastify corpus: ${totalChunks} chunks under model ${embedder.model}`)
+    console.log(`\ndemo page: set DEMO_PUBLISHABLE_KEY=${PUBLISHABLE_KEY} and open /demo`)
+    await db.destroy()
+    return
+  }
+  //#endregion
 
   for (const page of PAGES) {
     const documentId = newId("doc")

@@ -100,3 +100,65 @@ points of headroom for cross-machine ONNX and HNSW-construction noise).
 A broken tenant filter, fusion bug, or chunker regression lands far below
 this; embedding-library jitter does not. Raise the floor when the baseline
 durably improves.
+
+## The refusal threshold (M2.7)
+
+Measured 2026-08-11 with `npm run eval -- --sweep-threshold`: the
+groundedness gate's signal (minimum dense cosine distance across the
+retrieved set, computed by the production `evaluateGroundedness`) on the
+80 answerable golden questions versus the 40 hand-written questions in
+`noanswer.jsonl` the corpus can NOT answer, in three categories. Full
+curve: `results/threshold-sweep.csv`.
+
+**Signal distributions:**
+
+| Set | n | min | p25 | median | p75 | max |
+|---|---|---|---|---|---|---|
+| golden (answerable) | 80 | 0.084 | 0.155 | 0.201 | 0.240 | **0.304** |
+| off_topic (refuse) | 12 | **0.386** | 0.403 | 0.462 | 0.521 | 0.562 |
+| adjacent (refuse) | 14 | 0.260 | 0.269 | 0.303 | 0.323 | 0.406 |
+| absent_detail (refuse) | 14 | 0.217 | 0.259 | 0.267 | 0.300 | 0.342 |
+
+**The chosen operating point is 0.34** (correct-refusal vs false-refusal
+at selected thresholds):
+
+| threshold | false refusal | correct refusal | off_topic | adjacent | absent_detail |
+|---|---|---|---|---|---|
+| 0.30 | 1.3% | 57.5% | 100% | 57% | 21% |
+| 0.31 | 0% | 50.0% | 100% | 43% | 14% |
+| **0.34** | **0%** | **40.0%** | **100%** | 21% | 7% |
+| 0.39 | 0% | 30.0% | 92% | 7% | 0% |
+
+Three findings, stated in the order they matter:
+
+**1. Off-topic separates PERFECTLY.** The furthest answerable question
+(0.304) and the nearest off-topic one (0.386) leave a clean window, so
+the gate refuses every "banana bread recipe" and "reset my Gmail
+password" at zero cost to answerable questions. This is the gate's
+primary product job — never let the model improvise off-corpus — and it
+is fully achieved. 0.34 sits mid-window with margin on BOTH sides, the
+same headroom logic as the recall floor: a threshold hugging the golden
+max (0.309 would maximize the metric) flips on cross-machine ONNX noise,
+and an eval-overfit constant is worse than an honest one.
+
+**2. On-topic-but-unanswerable is NOT distance-separable, and no
+threshold fixes that.** `absent_detail` questions ("who created Fastify
+and when?", "what's on the v6 roadmap?") retrieve genuinely close,
+genuinely relevant text — the corpus just doesn't contain the answers —
+so their signals sit inside the answerable range and the gate catches
+only 7% at FR=0. This is a property of the problem, not a tuning
+failure: retrieval distance measures TOPICALITY, and these questions are
+on topic. Coverage failures are the CLAIM VERIFIER's job — an answer
+that isn't in the context cannot be quoted verbatim from it, so these
+questions produce empty-claims refusals or fully-stripped answers
+downstream. The system's two gates split the no-answer problem: distance
+catches off-topic before any tokens are spent; verification catches
+missing-coverage after, at the cost of one model call. What this table
+really documents is that boundary.
+
+**3. The threshold is a per-model constant, and the sweep is its
+calibration procedure.** 0.34 is a fact about `bge-small-en-v1.5`'s
+distance scale, nothing more. When BYO embedding providers land (M3), an
+org on a different model needs its own sweep — which is why the tool is
+a repeatable command, not a one-off notebook, and why
+`ANSWER_MAX_DISTANCE` exists as the per-deployment override.

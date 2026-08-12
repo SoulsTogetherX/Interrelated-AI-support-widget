@@ -58,6 +58,17 @@ beforeEach(() => {
 //#endregion
 
 describe("ApiClient", () => {
+  it("single-flights concurrent mints — open racing an ask must not fork the visitor", async () => {
+    // The bug the live browser check caught: bubble-open's fire-and-forget
+    // mint racing ask()'s awaited mint produced TWO sessions with TWO
+    // different server-generated visitors, and the late response clobbered
+    // the token that owned the conversation.
+    script = [MINT_OK(), MINT_OK()] // a second mint WOULD succeed — the assertion is that it's never sent
+    const client = makeClient()
+    await Promise.all([client.ensureSession(), client.ensureSession(), client.ensureSession()])
+    expect(calls).toHaveLength(1)
+  })
+
   it("mints once at open, sends the pk, and persists the visitor id", async () => {
     script = [MINT_OK()]
     const client = makeClient()

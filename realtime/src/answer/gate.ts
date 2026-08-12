@@ -35,13 +35,31 @@ interface GateDecision {
 //#endregion
 
 //#region Constants
-/** Provisional operating point (overridable via ANSWER_MAX_DISTANCE until
- *  the dashboard exists). bge-small cosine distances run roughly 0.3–0.5
- *  for related text and 0.7–1.0 for unrelated; 0.75 is deliberately
- *  permissive — a false refusal is a worse product failure than a hedged
- *  answer whose claims verification will strip anyway. M2.7 replaces this
- *  guess with the eval-derived value and publishes the curve. */
-const DEFAULT_MAX_DISTANCE = 0.75
+/**
+ * The eval-derived operating point (M2.7; `npm run eval -- --sweep-threshold`,
+ * curve in eval/results/threshold-sweep.csv, analysis in eval/RESULTS.md).
+ * Measured on bge-small-en-v1.5 over the 80-question golden set vs the
+ * 40-question adversarial no-answer set:
+ *
+ *   answerable questions   min 0.084 … max 0.304
+ *   off-topic questions    min 0.386 … max 0.562
+ *
+ * — a CLEAN separation window (0.304, 0.386). 0.34 sits inside it with
+ * margin on both sides (same headroom logic as the recall floor: an exact
+ * boundary would flip on cross-machine ONNX noise), giving 0% false
+ * refusals and 100% off-topic refusal. What the number honestly does NOT
+ * do: catch on-topic questions the corpus can't answer (absent-detail CR
+ * is 7% here) — those retrieve genuinely close text, so no distance can
+ * separate them, and they are the CLAIM VERIFIER's job: an answer that
+ * isn't in the context can't be quoted from it. The gate is a topicality
+ * filter; verification is the coverage filter. Both measured, neither
+ * pretending to be the other.
+ *
+ * Model-specific by nature: distances live on each embedding model's own
+ * scale, so a BYO embedding model (M3) needs its own sweep — the tool is
+ * the calibration procedure. Overridable via ANSWER_MAX_DISTANCE.
+ */
+const DEFAULT_MAX_DISTANCE = 0.34
 //#endregion
 
 //#region Gate

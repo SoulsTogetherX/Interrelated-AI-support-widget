@@ -12,7 +12,7 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M2 — IN PROGRESS.** M0 and M1 are complete: the full
+**Current milestone: M2 — COMPLETE.** M0 and M1 are complete: the full
 content pipeline in (source → crawl → parse → chunk → embed → store), back
 out (query → dense + lexical arms → RRF fusion → ranked chunks), and
 retrieval quality MEASURED — an 80-question hand-written golden set scored
@@ -46,8 +46,18 @@ M2.6 is done — the widget itself (§8): vanilla TS, Shadow DOM with
 `:host { all: initial }` armor, zero runtime dependencies, 3.8 KB gzipped
 against the CI-enforced 15 KB budget (§6.2), verified live in a real
 browser on all three fixture host pages (Tailwind, Bootstrap, and the
-hostile `* { all: unset }` + strict-CSP page — §8.4). Still to come in
-M2: the eval-derived refusal threshold + public demo (M2.7). Packages that appear in
+hostile `* { all: unset }` + strict-CSP page — §8.4). M2.7 is done, and
+with it **M2 IS COMPLETE**: the refusal threshold is now MEASURED
+(§3.15.1 — 0.34 for bge-small, derived from the golden set vs the
+40-question adversarial no-answer set via `npm run eval --
+--sweep-threshold`, full analysis in eval/RESULTS.md), and the demo
+surface exists (§3.20): GET /demo wears the widget over the Fastify
+corpus and GET /widget.js makes this service the bundle's origin
+fallback, both shipped in the prod image and smoke-probed. The live
+browser check of the demo also caught and fixed a real widget race
+(§8.1 — concurrent session mints forking the visitor identity). The
+DEPLOYED demo needs only Xavier's free-tier keys: the runbook is in
+render.yaml's comments. Packages that appear in
 the plan but not here (web/, widget/, loadtest/) do not exist yet — they
 arrive across M2–M4.
 
@@ -661,6 +671,12 @@ force-exits.
   hijack probe (opaque error event, nothing to learn), malformed
   conversation ids, the daily cap 429 BEFORE the model call, and a
   rate-limit 429 that still carries CORS.
+- `routes/__tests__/demo.test.ts` — keyless and DB-free (the demo surface
+  is static config → static responses). The configured page carries the
+  snippet with same-origin data-api; the unconfigured page is honest
+  setup instructions; a hostile publishable key renders escaped; the
+  bundle serves with a JS content type and short cache; a missing bundle
+  404s with the build hint.
 - `answer/__tests__/gate.test.ts` + `prompt.test.ts` — keyless. The gate
   at its boundaries (exactly-at-threshold answers, just-past refuses; min
   over mixed dense/lexical hits; lexical-only fails closed) and the prompt
@@ -696,7 +712,11 @@ force-exits.
 
 ### §3.9 `realtime/Dockerfile`
 Multi-stage on node:22-alpine, **build context = repo root** (shared/ must
-exist inside the image). `deps → dev → build → prod`. Prod runs
+exist inside the image). `deps → dev → build → prod`, plus a `widget`
+stage since M2.7: the widget bundle builds inside the image and lands at
+/app/widget/dist, because this service is the bundle's origin fallback
+(§3.20) — its own stage so widget changes and realtime deps don't bust
+each other's layer caches. Prod runs
 `npm ci --omit=dev` + the bundle, as `USER node`, with a busybox-wget
 healthcheck on `/api/health`, and `CMD ["node", "dist/server.js"]` — plain
 node, not `npm start`, because npm swallows SIGTERM and would turn graceful
@@ -916,6 +936,14 @@ by name with an explanation — the promise made in §2.4.5b: quality
 measured over semantics-free vectors is noise, and refusing beats
 producing an impressive-looking nonsense table.
 
+A fifth mode since M2.7: `--sweep-threshold` measures the groundedness
+gate's signal (via the PRODUCTION evaluateGroundedness, not a copy) on
+the golden set vs eval/noanswer.jsonl (§7.6), emits the correct-refusal
+vs false-refusal curve as CSV, and prints the conservative (FR=0) and
+aggressive (FR=1/80) frontier points with per-category breakdowns. This
+is the calibration procedure for §3.15.1's threshold — re-run per
+embedding model.
+
 ### §3.15 `src/answer/` — the grounded answer pipeline (M2.3)
 
 Question → verified claims, traced in DATAFLOW.md §5. The SSE route is
@@ -934,10 +962,15 @@ MINIMUM dense cosine distance across the retrieved set (min, not the top
 fused hit's: fusion may rank a lexical-only hit first, and the question is
 whether ANY close dense evidence exists in what the model will see). All
 lexical-only retrievals fail closed — "unknown similarity" must refuse.
-The 0.75 default is provisional and env-overridable; M2.7 replaces it with
-the eval-derived operating point and publishes the correct-refusal vs
-false-refusal curve. The signal is persisted per-answer in
-messages.retrieval_score so production accumulates tuning data.
+The default (0.34 for bge-small-en-v1.5) is MEASURED, not guessed —
+M2.7's sweep over the golden set vs the adversarial no-answer set (§7.6),
+chosen mid-way inside the clean answerable/off-topic separation window
+with margin on both sides; the derivation, the curve, and the honest
+finding (distance gates TOPICALITY; coverage gaps are the verifier's
+job) are in eval/RESULTS.md. Per-embedding-model by nature;
+ANSWER_MAX_DISTANCE overrides per deployment. The signal is persisted
+per-answer in messages.retrieval_score so production accumulates tuning
+data.
 
 #### §3.15.2 `src/answer/prompt.ts`
 Prompt assembly with the injection boundary as its organizing principle:
@@ -1051,10 +1084,15 @@ conversation id, which learn nothing but "error"). CORS is hand-rolled
 rides on the actual request's response headers.
 
 ### §3.19 `realtime/scripts/seedWidgetDemo.ts`
-Dev-only CLI (`npm run seed-demo`): the fixture/demo organization —
-org, the fixed publishable key the fixture pages hardcode (pk values are
-public by design), the :4400 fixture origins, and a six-chunk support
-corpus. Idempotent by REPLACEMENT (the demo source is deleted and
+Dev-only CLI (`npm run seed-demo [-- --corpus fastify] [--origin url]`):
+the fixture/demo organization — org, the fixed publishable key the
+fixture pages hardcode (pk values are public by design), the :4400
+fixture origins plus any `--origin` (the deployed demo page's own), and
+content: the six-chunk toy corpus by default, or with `--corpus fastify`
+the REAL demo — eval/corpus through parse → chunk → embed with real
+fastify.dev URLs, so demo citations deep-link to live pages (pair with
+EMBEDDING_PROVIDER=local; under mock it warns that only exact-text
+retrieval works). Idempotent by REPLACEMENT (the demo source is deleted and
 re-seeded, so the seed is always exactly what the file says), and it
 refuses to reassign the pk if it somehow exists under another org. One
 subtle decision, learned live: embedding input is trail-free under the
@@ -1063,6 +1101,22 @@ representation) under local — the mock hashes its input, so prepending
 the heading trail doesn't shift the vector, it REPLACES it, silently
 killing exact-text retrieval (the mock's only mode) and making the gate
 refuse everything, which looks like a widget bug and is not.
+
+### §3.20 `src/routes/demo.ts`
+The public demo surface: GET /demo, a page wearing the widget exactly the
+way a customer's site would (same snippet, same public routes), and GET
+/widget.js — this service as the bundle's ORIGIN FALLBACK (the plan's
+distribution is GitHub Release → jsDelivr with us as origin; the demo
+page is the fallback's first consumer; the Dockerfile's widget stage is
+what puts the bundle in the image). data-api="" makes the widget fetch
+same-origin, so the page works on localhost and Render without
+configuration. A null DEMO_PUBLISHABLE_KEY is a LEGAL state: /demo then
+serves setup instructions — a recruiter hitting a half-configured
+deployment must see a page that says what it needs, never a silently
+broken bubble (the plan's "demo looks broken" risk). The key passes
+through an attribute escape though it is server config, and a test feeds
+a hostile key to prove it. The bundle is read per request, no cache: 8 KB,
+immutable in prod, and a cache would go stale under the dev bind mount.
 
 ---
 
@@ -1137,7 +1191,11 @@ that unknown routes 404, and — since M2.5 — the widget surface's POSTURE:
 a fresh stack has no seeded org, so what a probe can verify is that the
 session route is mounted AND closed (no Origin → 403; a 404 would mean
 the routes fell off the app, a 200 that the origin gate fell off the
-route) and that chat without a session is 401. Failures are counted
+route) and that chat without a session is 401. Since M2.7 it also probes
+the demo surface: /demo must be 200 in BOTH states (widget page or setup
+instructions — a recruiter must never see a 500) and /widget.js must
+serve with a JS content type, proving the bundle actually shipped inside
+the image. Failures are counted
 rather than thrown so one broken endpoint doesn't mask the state of the
 rest; every fetch carries a timeout because a probe that can hang turns a
 dead service into a stuck CI job.
@@ -1216,6 +1274,19 @@ corpus size, the 400-vs-800 chunk ablation behind the 400 default, and a
 failure analysis that categorizes all 12 misses and commits to not padding
 the golden set to bless near-misses.
 
+### §7.6 `eval/noanswer.jsonl`
+The adversarial no-answer set (M2.7): 40 hand-written questions the
+corpus can NOT answer, in three categories that fail differently —
+off_topic (banana bread; lands far away in embedding space), adjacent
+(Express/webpack/npm questions that retrieve plausible Fastify text),
+and absent_detail (Fastify-flavored facts these 31 pages don't contain:
+roadmap, history, pricing). Written AGAINST the corpus: a question only
+belongs here if the corpus genuinely can't answer it, which is why there
+are no nginx/Lambda/database questions — the Guides cover those. The
+per-category split is the backbone of RESULTS.md's finding that the
+distance gate separates off-topic perfectly and absent_detail barely at
+all.
+
 ---
 
 ## §8 `widget/` — the embeddable chat widget (M2.6)
@@ -1243,7 +1314,14 @@ the 30-minute token expiry is invisible mid-conversation, and the two
 a bucket limit is "one moment"). sse.ts is the browser twin of
 realtime's SSE parser — reimplemented rather than imported because the
 widget imports RUNTIME code from nowhere; streaming TextDecoder, frame
-buffering, trailing-partial-frame discard.
+buffering, trailing-partial-frame discard. ensureSession is SINGLE-FLIGHT
+(one in-flight mint promise shared by every caller) — the M2.7 live demo
+check caught the race the unit tests missed: bubble-open's fire-and-forget
+mint racing ask()'s awaited mint produced two sessions with two
+server-generated visitor ids, and whichever response landed last clobbered
+the token that owned the just-created conversation, making every
+follow-up ask die "conversation not found". A test now pins
+three concurrent ensureSession calls to exactly one mint request.
 
 ### §8.2 `src/ui.ts` + `src/styles.ts`
 The rendering half, built on a three-line element factory with one iron
