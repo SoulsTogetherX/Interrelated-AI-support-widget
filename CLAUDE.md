@@ -12,7 +12,8 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M2 — COMPLETE.** M0 and M1 are complete: the full
+**Current milestone: M3 — dashboard, auth, provider onboarding —
+UNDERWAY.** M0–M2 are complete: the full
 content pipeline in (source → crawl → parse → chunk → embed → store), back
 out (query → dense + lexical arms → RRF fusion → ranked chunks), and
 retrieval quality MEASURED — an 80-question hand-written golden set scored
@@ -57,9 +58,19 @@ fallback, both shipped in the prod image and smoke-probed. The live
 browser check of the demo also caught and fixed a real widget race
 (§8.1 — concurrent session mints forking the visitor identity). The
 DEPLOYED demo needs only Xavier's free-tier keys: the runbook is in
-render.yaml's comments. Packages that appear in
-the plan but not here (web/, widget/, loadtest/) do not exist yet — they
-arrive across M2–M4.
+render.yaml's comments. M3 is underway. M3.1 is done — the web/ dashboard
+package exists (§9): a hand-rolled Next.js App Router skeleton (Next 16,
+not the plan's Next 15 — §9 records why), strict TS, plain CSS, wired
+into CI (typecheck, tests, `next build`). M3.2 is done — session auth
+ported from the whiteboard (§9.4–§9.6, DATAFLOW §7): scrypt passwords,
+HIBP breached-password screening, AES-GCM email-at-rest with a slow-KDF
+blind index, sha256-hashed session tokens in an httpOnly SameSite=Lax
+cookie, signup/login/logout as Server Actions, and requireUser() gating
+the dashboard — the schema types moved to shared/db (§2.4.6) so web
+types its queries against the same contract realtime does. The whole
+loop is verified by a DB-gated integration suite AND live in a real
+browser. Org onboarding (M3.3) is next. The one package in the plan but
+not here — loadtest/ — arrives with M4.
 
 ---
 
@@ -246,6 +257,19 @@ WITHOUT changing this protocol — that future-proofing is the reason the
 protocol is claim-granular rather than delta-granular. The M2.5 SSE route
 serializes these verbatim; the widget consumes them.
 
+#### §2.4.6 `shared/db/schema.ts`
+The hand-written Kysely types for every table — MOVED here from
+realtime/src/db/ in M3.2, when the dashboard started querying the same
+database and the table shapes became a cross-package contract like the
+wire protocol. The lockstep rule is unchanged (any migration touching a
+table updates this file in the same change), and so is ownership:
+realtime's migrations remain the only thing that changes the database —
+web never migrates. kysely is a TYPE-ONLY import, erased at compile time,
+so shared/ stays dependency-free at runtime; each consumer resolves the
+types from its own node_modules, and the root package carries kysely as a
+devDependency purely so `typecheck:shared` can see it — the exact
+arrangement fastembed has for providers/local.ts (§2.4.5c).
+
 ### §2.4.5 `providers/`
 The model-provider abstraction — the BYO-provider feature's foundation.
 Same no-package-json pattern as shared/ (consumers compile it through the
@@ -415,14 +439,17 @@ caller. It returns with uploads; §3.10.3 records how PDFs are skipped
 meanwhile.
 
 ### §3.1 `src/db/schema.ts`
-Hand-written Kysely types for every table. **kysely-codegen was rejected**
-while the schema is young: regenerating churns diffs and can't carry the WHY
-comments. The contract: any migration touching a table updates this file in
-the same change. Notable typing choices: timestamps are
-`ColumnType<Date, string | Date, …>` (pg returns Date; JSON callers insert
-ISO strings); `plan` and `role` are string-literal unions so a typo is a
-compile error rather than a runtime constraint violation; `created_at`
-insert type includes `undefined` because the DB default owns it.
+Since M3.2 a thin re-export of `shared/db/schema.ts` (§2.4.6), which is
+where the hand-written Kysely types live now that web/ queries the same
+tables — every realtime-internal `@/db/schema` import reads unchanged.
+The original design notes travel with the types: **kysely-codegen was
+rejected** while the schema is young (regenerating churns diffs and can't
+carry the WHY comments); any migration touching a table updates the shared
+file in the same change; timestamps are `ColumnType<Date, string | Date,
+…>` (pg returns Date; JSON callers insert ISO strings); `plan` and `role`
+are string-literal unions so a typo is a compile error rather than a
+runtime constraint violation; `created_at` insert type includes
+`undefined` because the DB default owns it.
 
 ### §3.2 `src/db/pool.ts`
 One process-wide `pg.Pool` wrapped in one Kysely instance. Config read from
@@ -1366,3 +1393,197 @@ live in a real browser at M2.6: grounded answers with citations on all
 three pages, refusal on off-corpus questions, 56px styled bubble under
 the hostile reset. Prerequisite: `npm run seed-demo` (§3.19), `npm run
 build`, `npm run fixtures`.
+
+---
+
+## §9 `web/` — the control-plane dashboard (M3)
+
+Next.js App Router on Vercel: auth, org onboarding, provider setup,
+conversation and document lists — every surface that is short
+request/response and form-shaped. Long-lived streams (SSE chat, the M4
+handoff WebSocket) and background work stay in realtime/ by design: Vercel
+functions cannot hold them open, and the split confines the newer
+framework to a CRUD surface where a bug is a bad page while the novel
+work runs on the proven stack (the plan's control-plane/data-plane
+argument). Hand-rolled, not `create-next-app` — the generated silhouette
+is the anti-tutorial rule's first tell, and every config line here is one
+we can explain.
+
+**On Next 16, not the plan's Next 15 — a recorded deviation.** At
+scaffold time (Aug 2026) the newest Next 15 patch still depended on
+postcss and sharp versions carrying high-severity npm advisories
+(postcss XSS via unescaped `</style>` in stringified output; sharp's
+inherited libvips CVEs), and the fix exists only in Next 16. For a fresh
+skeleton the migration cost was zero, the App Router architecture the
+plan actually names is unchanged, and a security-thesis project shipping
+a dashboard that `npm audit` flags on install would be the wrong trade.
+Consequences worth knowing: Turbopack is the default bundler, the JSX
+transform is `react-jsx` (Next rewrites tsconfig to say so), and
+`next-env.d.ts` is generated per-build with imports into `.next/` — which
+is why it is gitignored, not committed (§9.1).
+
+### §9.1 `package.json`, `next.config.ts`, `tsconfig.json`, `vitest.config.ts`
+
+- **package.json** — web owns its dependencies (app-package rule, §2.1):
+  next, react, react-dom, and dev tooling only. No UI library, no CSS
+  framework, no data-fetching layer: RSC + Server Actions are the
+  data-fetching layer, and plain CSS is the styling (anti-tutorial rules).
+- **next.config.ts** — two jobs. (1) The repo-root .env loader: the repo
+  keeps ONE .env (§2.6 is the registry) but Next only reads env files
+  inside web/, so the config — evaluated before any worker forks —
+  hand-parses the root file into process.env, already-set values always
+  winning (Vercel env untouched; missing file a no-op). (2)
+  `outputFileTracingRoot` points at the REPO root, because shared/ lives
+  one directory up and is imported through `@shared/*` with no build step
+  of its own (§2.4); Next's standalone tracing must see it or drop it.
+  Also silences the multi-lockfile root-inference warning this flat
+  layout triggers by construction.
+- **tsconfig.json** — strict like every package, but Next-MANAGED:
+  `next build` rewrites the options it mandates (jsx, allowJs,
+  incremental, the language-service plugin) and reformats the file, so
+  those are accepted rather than fought; our strictness extras
+  (noUnusedLocals/Parameters, noFallthroughCasesInSwitch) survive the
+  rewrite. `tsc --noEmit` passes on a fresh clone (the generated include
+  globs legally match nothing); the generated route types are checked by
+  `next build`'s own TypeScript pass, which is why CI runs both.
+- **vitest.config.ts** — node environment (Server Components are plain
+  functions rendered with react-dom/server; the one client component so
+  far is exercised by `next build` and the live-browser check rather
+  than jsdom). fileParallelism off for the same reason as realtime's
+  config: DB-gated suites share one real Postgres. One trap worth its
+  comment: Vite's esbuild default is the CLASSIC JSX transform, and
+  Next's components rightly never import React — tests must set
+  `esbuild: { jsx: "automatic" }` or every render throws
+  "React is not defined".
+- **Vercel runbook**: import the GitHub repo in Vercel → set Root
+  Directory to `web/` → framework auto-detects as Next.js → deploy the
+  `dev` branch. Project env as of M3.2: the POSTGRES_* variables
+  (pointing at Neon's POOLED `-pooler` host — serverless instances
+  multiply client pools) plus EMAIL_INDEX_PEPPER and
+  EMAIL_ENCRYPTION_KEY, which production REFUSES to boot without
+  (§9.6's instrumentation note). M3.4 adds the realtime internal-API
+  secret. Zero config files needed: `vercel.json` earns a place only
+  when a default needs overriding.
+
+### §9.2 `src/app/` — layout, landing page, global CSS
+
+- **layout.tsx** — the `<html>`/`<body>` shell, the site metadata, and
+  the ONE place global CSS enters. Server Component; the shell ships no
+  client JS.
+- **globals.css** — resets and the palette variables only. The accent
+  matches the widget's default `--ir-accent` family so dashboard and
+  bubble read as one product. Component styling convention: App Router
+  CSS imports are GLOBAL, so every page/component ships its own css file
+  with class names prefixed by component name ("landing-…") — the prefix
+  is the scoping mechanism, same convention as OnlineWhiteboard.
+- **page.tsx + page.css** — the landing page: product name, the
+  verification thesis in one paragraph, and the two auth links (M3.2
+  replaced the M3.1 under-construction note, flipping the test that
+  pinned it). Plain `<a>` over next/link ON PURPOSE: the page test
+  renders the component outside the Next runtime where Link does not
+  render, and prefetch on a two-route site buys nothing.
+
+### §9.3 Tests (`src/app/__tests__/` and `src/lib/auth/__tests__/`)
+
+The landing page renders via `react-dom/server` with no DOM — an RSC is
+a plain function, so `renderToStaticMarkup` is the whole harness; pinned:
+it renders at all (a thrown render is a blank site) and links to /login
+and /signup. The auth suites are §9.5's last bullet.
+
+### §9.4 `src/lib/db/index.ts`
+
+One pg Pool in one Kysely instance — realtime's §3.2 shape, tuned for
+serverless: `max` 3 (a Vercel "process" is a warm function instance, and
+several × max is the real Neon ceiling — production points at the
+`-pooler` host), constructed eagerly at module load (safe: pg defers
+connections until the first query, so `next build` evaluating the module
+costs nothing), never explicitly ended (the platform freezes instances;
+idle timeouts reap connections). Typed against @shared/db/schema
+(§2.4.6) — the same contract realtime queries, which is the point of the
+move. web NEVER migrates; a missing table means realtime hasn't run.
+
+### §9.5 `src/lib/auth/` — the whiteboard port
+
+The auth layer the plan says to port, file by file — each carries its
+original WHY header plus what changed in translation:
+
+- **password.ts** — scrypt via node:crypto (memory-hard, stdlib so zero
+  native-build risk), self-describing `scrypt$N$salt$hash` format so cost
+  raises never invalidate old hashes. Verbatim port.
+- **emailCrypto.ts** — the at-rest scheme: AES-256-GCM ciphertext with
+  AAD = userId (a ciphertext moved to another row fails to decrypt — the
+  swap attack), plus a SLOW-KDF blind index for lookups (emails are
+  low-entropy; a fast HMAC would let a pepper+DB holder enumerate the
+  address space cheaply). Two separate secrets on purpose; dev falls back
+  to published constants with a warning; production REFUSES to boot
+  without real ones. The users table has carried these columns since
+  migration 001 precisely so this port would be code-only.
+- **breachedPassword.ts** — HIBP k-anonymity screen at signup (the
+  23andMe lesson: correct-but-reused passwords are the attack). Only the
+  5-char SHA-1 prefix ever leaves the server; fails OPEN by design (a
+  third-party outage must not become a sign-up outage); range URL is
+  injectable so tests drive it against a loopback server.
+- **validation.ts** — email normalization (trim+lowercase, which the
+  blind index then depends on) and password bounds (8–200; the cap
+  matters because scrypt hashes the whole input). Common-password
+  blocklist kept as a FLOOR under the fail-open HIBP check.
+- **session.ts** — token lifecycle against the sessions table: cookie
+  carries 256 random bits, the DB stores only sha256(token) as the row
+  id, expiry is checked in SQL against the DATABASE clock. Decrypts the
+  email at resolve — the one read-path place ciphertext becomes
+  plaintext. Deliberately imports nothing from next/headers so it tests
+  under plain vitest.
+- **cookies.ts** — the Next half session.ts abstains from: httpOnly +
+  SameSite=Lax + Secure-in-prod, `__Host-` prefix in production (browser
+  refuses the cookie from any subdomain or non-HTTPS setter).
+- **user.ts** — registration (validate → HIBP → id-before-row because
+  the id is the AAD → encrypt+index → insert, with the UNIQUE index as
+  the authority on duplicates so there is no check-then-insert race) and
+  authentication (ONE uniform failure string, plus a scrypt decoy burn
+  on unknown emails so timing cannot distinguish "no account" from
+  "wrong password"). Registration's "already registered" is knowingly
+  enumerable — fixing that needs a verification mailer, recorded as
+  future work rather than half-done.
+- **requireUser.ts** — the RSC gate: `currentUser()` or redirect to
+  /login. Deliberately NO middleware.ts: middleware can't reach the
+  database cheaply, and a cookie-presence check there would be theater
+  next to the page-level DB-backed check.
+- **actions.ts** — signup/login/logout as Server Actions in
+  useActionState shape (user errors return as form state; success sets
+  the cookie then redirects). CSRF: Next's own action origin check plus
+  SameSite=Lax. Logout revokes server-side FIRST, then clears the
+  cookie.
+- **Tests** — keyless: password round-trip/salting/malformed-stored,
+  email crypto round-trip/tamper/AAD-swap/IV-randomization, blind-index
+  determinism, validation at its exact boundaries (254/255, 7/8,
+  200/201), breach check against a loopback HIBP (asserting only the
+  5-char prefix leaves). DB-gated (self-skip without POSTGRES_PASSWORD;
+  schema must already be migrated — realtime's suite does that in CI's
+  verify job BEFORE the web steps, and ci.yml says so): register →
+  at-rest row proof (no plaintext in any column) → duplicate rejection →
+  uniform-error authentication → session round-trip with hashed-id proof
+  → expiry via the database clock.
+
+### §9.6 `src/app/` auth routes + `src/instrumentation.ts`
+
+- **login/ + signup/** — thin Server Component pages around the ONE
+  client component, `components/AuthForm/` (useActionState needs the
+  client; the two pages differ only in action, labels, and password
+  autocomplete hint). Both redirect an already-signed-in visitor to
+  /dashboard. signup imports login's page.css — one authpage shell, no
+  duplicate.
+- **dashboard/** — the authenticated shell: requireUser() opening line,
+  decrypted email in the header, sign-out as a form action. Placeholder
+  body until org onboarding (M3.3).
+- **instrumentation.ts** — Next's one server-start hook, gated to the
+  nodejs runtime: production asserts the email secrets exist at BOOT
+  (the lazy readers are only reached from register/login, so without
+  this a misdeployed dashboard 500s on the first signup instead of
+  refusing to start — the whiteboard shipped that bug; the fix ports
+  with it).
+
+The whole loop was verified live in a real browser at M3.2 (dev server +
+compose database): signup → dashboard with decrypted email,
+document.cookie empty (httpOnly), sign-out → /login, wrong password →
+the uniform inline error, anonymous /dashboard → redirect, mixed-case
+email sign-in → same account.

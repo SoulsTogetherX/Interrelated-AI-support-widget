@@ -1,0 +1,73 @@
+/* AuthForm. "authform-" prefix is the scoping (CSS imports are global in the
+ * App Router — CLAUDE.md §9.2). */
+
+.authform {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2rem;
+  width: 100%;
+  max-width: 24rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.authform-title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.authform-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.authform-input {
+  font: inherit;
+  color: var(--ink);
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.authform-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.authform-error {
+  margin: 0;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+}
+
+.authform-submit {
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  padding: 0.625rem;
+  cursor: pointer;
+}
+
+.authform-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.authform-footer {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}

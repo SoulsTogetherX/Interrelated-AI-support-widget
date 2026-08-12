@@ -64,6 +64,7 @@ jobs:
             package-lock.json
             realtime/package-lock.json
             widget/package-lock.json
+            web/package-lock.json
 
       # ── root: shared/ + providers/ + eval/ tests + typechecks ────────────
       - name: root deps
@@ -111,6 +112,35 @@ jobs:
       # dependency creeping in, a framework-shaped rewrite) fails the merge.
       - name: widget size budget
         run: node scripts/widget-size.mjs
+
+      # ── web (dashboard) ──────────────────────────────────────────────────
+      - name: web deps
+        working-directory: web
+        run: npm ci
+      - name: web typecheck
+        working-directory: web
+        run: npm run typecheck
+      # ORDER MATTERS: web's DB-gated auth suite assumes a migrated schema,
+      # and web never migrates (realtime owns that) — the realtime test step
+      # above already migrated this job's service container. Moving the web
+      # block before realtime's would fail these tests with a missing-table
+      # error that names this dependency.
+      - name: web tests
+        working-directory: web
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        run: npm test
+      # `next build` is the real gate: it runs Next's own TypeScript pass over
+      # the GENERATED route types (which `tsc --noEmit` cannot see on a fresh
+      # checkout — web/tsconfig.json explains) and proves the production
+      # artifact actually builds. Vercel deploys are this same command.
+      - name: web build
+        working-directory: web
+        run: npm run build
 
   eval:
     runs-on: ubuntu-latest

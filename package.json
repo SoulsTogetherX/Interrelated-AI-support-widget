@@ -13,6 +13,7 @@
   "devDependencies": {
     "@types/node": "^24.10.1",
     "fastembed": "^1.14.4",
+    "kysely": "^0.28.17",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

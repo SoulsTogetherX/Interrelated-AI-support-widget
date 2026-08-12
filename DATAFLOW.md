@@ -20,7 +20,10 @@ SSE consumption — verified live on the three fixture host pages. M2.7
 closed the milestone: the gate's threshold is eval-derived (§4.4's
 --sweep-threshold mode; analysis in eval/RESULTS.md), and GET /demo +
 GET /widget.js (realtime/src/routes/demo.ts) put the whole loop on one
-public URL. Coming after: dashboard auth (M3), handoff (M4).
+public URL. M3 (the dashboard) is underway: the web/ package exists
+(§7.1), and as of M3.2 it authenticates — sign-up, sign-in, sign-out,
+and the gated page are traced in §7.2–§7.5. Coming after: org
+onboarding (M3.3), handoff (M4).
 
 ---
 
@@ -508,7 +511,14 @@ local, with DB   docker compose up -d database   ← DATABASE ONLY, not the
                      (20-tenant iterative-scan regression, cross-tenant
                      isolation, soft-delete filtering, fusion ranks)
 
-CI verify job    pgvector service container → same full suite, keyless
+CI verify job    pgvector service container → same full suite, keyless;
+                   plus web/: typecheck, tests, and `next build` (which
+                   runs Next's own TypeScript pass over the generated
+                   route types tsc cannot see on a fresh checkout —
+                   web/tsconfig.json explains). ORDER MATTERS: web's
+                   DB-gated auth suite assumes the schema realtime's
+                   test step already migrated into the same container —
+                   web never migrates (ci.yml carries the warning)
 
 CI eval job      pgvector service container + cached fastembed model
                    → npm run eval walks §4.4 for real: corpus ingest,
@@ -522,3 +532,92 @@ CI e2e job       docker compose -f docker-compose.prod.yaml up --wait
                    → scripts/smoke-test.mjs walks §1.1, §1.2, and a 404
                    → logs dumped on failure; stack torn down always
 ```
+
+---
+
+## §7 Dashboard — `web/` (M3, underway)
+
+The control plane (CLAUDE.md §9). One path exists so far.
+
+### §7.1 Landing — `GET /`
+
+```
+Vercel edge (or `next start` locally)
+  → serves the STATIC prerender of web/src/app/page.tsx
+    (layout.tsx shell + globals.css + page.css, inlined at build time)
+```
+
+`next build` prerenders `/` at build time — the page is a Server
+Component with no dynamic input — so serving it executes no server code
+and touches no database: the deployed dashboard's front door cannot 500
+and costs nothing.
+
+### §7.2 Sign-up — POST (Server Action) from `/signup`
+
+```
+AuthForm submit (components/AuthForm, useActionState)
+  → signupAction                         web/src/lib/auth/actions.ts
+    → registerUser                       web/src/lib/auth/user.ts
+      → validateEmail / validatePassword     (trim+lowercase; 8–200)
+      → checkPasswordBreached            breachedPassword.ts
+          5-char SHA-1 prefix → HIBP range API; fails OPEN on trouble
+      → newId("usr")                     shared/utils/ids.ts
+          id BEFORE row: it is the AAD binding the email ciphertext
+      → emailBlindIndex + hashPassword       (concurrently)
+      → encryptEmail(email, userId)      emailCrypto.ts
+      → INSERT INTO users                — UNIQUE(email_index) is the
+          duplicate authority; 23505 → "already registered" (no
+          check-then-insert race)
+    → createSessionForUser               web/src/lib/auth/session.ts
+        random 256-bit token; INSERT sessions(id = sha256(token))
+    → setSessionCookie                   web/src/lib/auth/cookies.ts
+        httpOnly, SameSite=Lax, Secure+__Host- in prod
+    → redirect("/dashboard")                 (throws NEXT_REDIRECT — last)
+  validation/breach/duplicate errors return as form state instead;
+  the form shows them inline and keeps the visitor's input
+```
+
+### §7.3 Sign-in — POST (Server Action) from `/login`
+
+```
+AuthForm submit
+  → loginAction                          web/src/lib/auth/actions.ts
+    → authenticateUser                   web/src/lib/auth/user.ts
+      → validateEmail (malformed → decoy path, not a different error)
+      → SELECT users WHERE email_index = emailBlindIndex(email)
+      → found:  verifyPassword against the stored scrypt hash
+        absent: verifyPassword against a DECOY hash — burns the same
+                scrypt work, so timing can't reveal account existence
+      → every failure is ONE string: "Incorrect email or password."
+    → createSessionForUser → setSessionCookie → redirect("/dashboard")
+```
+
+### §7.4 Sign-out — POST (Server Action) from the dashboard header
+
+```
+form action
+  → logoutAction                         web/src/lib/auth/actions.ts
+    → destroySession(readSessionToken())     server-side revocation FIRST
+    → clearSessionCookie                     cookie second (worst case on
+                                             a crash: dead-session cookie,
+                                             never a live orphan session)
+    → redirect("/login")
+```
+
+### §7.5 Any authenticated page — e.g. GET `/dashboard`
+
+```
+page RSC render
+  → requireUser                          web/src/lib/auth/requireUser.ts
+    → readSessionToken                   cookies.ts (next/headers jar)
+    → resolveSessionUser                 session.ts
+        SELECT sessions ⋈ users
+          WHERE sessions.id = sha256(token)
+            AND expires_at > now()           ← DATABASE clock, not app's
+        → decryptEmail(ciphertext, userId)   ← the one read-path decrypt
+    → null → redirect("/login"); user → page renders
+```
+
+There is deliberately no middleware doing a cookie-presence pre-check —
+it cannot reach the database cheaply, so the page-level check is the only
+one (requireUser.ts's header explains).
