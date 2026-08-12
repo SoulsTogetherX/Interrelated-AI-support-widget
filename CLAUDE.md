@@ -88,9 +88,20 @@ request's lifetime, deliberately uncached so rotation bites on the next
 question — with the env mock as the fallback that keeps the demo org and
 CI keyless; proven by an SSE round-trip through a loopback tenant
 provider plus the tenant-isolation and credential-removal cases.
-Embedding-role credentials stay schema-ready but API-rejected until the
-whole embedding path ships with source indexing (M3.6, next). The one
-package in the plan but not here — loadtest/ — arrives with M4.
+M3.6a is done — sources and the ingest loop went live (§3.22's enqueue
+route, §3.10.5's wake-driven mode, §9.9, DATAFLOW §7.9): the dashboard
+connects a crawl/sitemap source, the internal API vets it (same SSRF
+seam as credentials) and enqueues source + job in one transaction, and
+the enqueue WAKES the worker — production (render.yaml) now runs the
+worker with INGEST_POLL_MS=0, no timer at all: one boot tick for
+deploy-stranded jobs, then the dashboard's enqueue IS the scheduler and
+Neon sleeps between ingests. Progress streams back through the sources
+page's conditional auto-refresh. Verified live end to end: two real
+public pages crawled — one recovered by the boot tick, one by the wake
+path — with the UI flipping to "indexed" unattended. Still open in
+M3.6: the embedding half of BYO (remote adapters + save + ingest/query
+under the org's model). The one package in the plan but not here —
+loadtest/ — arrives with M4.
 
 ---
 
@@ -431,9 +442,10 @@ every push (flip to `main` when the demo should track releases). Neon
 connection values are marked `sync: false` — Render prompts for them in its
 dashboard; secrets never enter the repo. Exactly ONE service by design: the
 free tier's ~750 instance-hours/month keep one service always warm, not two
-(the M3 dashboard goes to Vercel instead). `INGEST_WORKER` is pinned to "0"
-here: the worker's poll loop would hold Neon's compute awake (§3.7), and
-production has no way to enqueue a job until M3 anyway. Since M2.5 it
+(the M3 dashboard goes to Vercel instead). Since M3.6a `INGEST_WORKER` is
+"1" with `INGEST_POLL_MS=0` — the wake-driven mode §3.10.5 explains: no
+timers, one boot tick, the dashboard's enqueue is the scheduler, Neon
+sleeps between ingests. Since M2.5 it
 also declares `WIDGET_TOKEN_SECRET` (sync: false — set in the Render
 dashboard so widget sessions survive deploys; unset would silently log
 visitors out on every deploy) and pins `LLM_PROVIDER=mock` until per-org
@@ -629,15 +641,16 @@ only speak that. The http
 server is created explicitly (not `app.listen`) because M4 attaches the
 WebSocket upgrade handler to the same server object.
 
-After listen, the ingest worker (§3.10.5) starts **only when
-`INGEST_WORKER=1`**. Opt-in because the worker polls Postgres: free against
-compose's local database (both stacks set the flag), but on Neon a few-second
-poll would hold compute awake around the clock against the ~100 CU-hour
-monthly budget — the same budget the DB-free health route protects. So
-render.yaml pins it to "0" until M3, which is also when production first
-GAINS a way to enqueue a job; flipping it on arrives together with an
-in-process wake-on-enqueue so polling becomes the fallback, not the
-mechanism. `EMBEDDING_PROVIDER` picks mock (default) or local — mock is an
+The ingest worker (§3.10.5) runs **only when `INGEST_WORKER=1`**, and
+since M3.6a it is CONSTRUCTED before the app (the internal enqueue
+route's onEnqueue is wired to its wake()) and STARTED after listen, as
+before. `INGEST_POLL_MS` picks the mode: unset/positive → the poll loop
+(dev compose, where local Postgres is free); "0" → wake-driven, which is
+what render.yaml now ships — on Neon a few-second poll would hold
+compute awake around the clock against the ~100 CU-hour monthly budget,
+the same budget the DB-free health route protects, so production has NO
+timer and the dashboard's enqueue is the scheduler.
+`EMBEDDING_PROVIDER` picks mock (default) or local — mock is an
 honest placeholder until per-org BYO providers (M3): its vectors carry no
 semantics, which costs nothing while no retrieval exists, and it is what
 lets CI drive the full pipeline keylessly.
@@ -768,6 +781,14 @@ force-exits.
   credential-less org falls back to the mock and never touches the other
   tenant's provider, and a removed credential stops being used on the
   very next question (no cache to serve it stale).
+- `routes/__tests__/internalSources.test.ts` — DB-gated. The enqueue
+  surface: source + queued job + the wake callback firing; malformed
+  inputs (upload kind, non-URLs, embedded credentials, depth out of
+  bounds) rejected with ZERO enqueues; the production vet refusing a
+  metadata-endpoint crawl target; and the wake-driven worker proof — a
+  pollMs-0 worker, idle after its start tick with NO timer in existence,
+  runs a job if and only if wake() is called (an upload-kind source's
+  fast loud failure is the no-network probe that the tick really ran).
 - `routes/__tests__/demo.test.ts` — keyless and DB-free (the demo surface
   is static config → static responses). The configured page carries the
   snippet with same-origin data-api; the unconfigured page is honest
@@ -923,10 +944,19 @@ dashboard, where a customer can see WHY a page was skipped; the cap and
 delay bound our footprint meanwhile).
 
 #### §3.10.5 `src/ingest/worker.ts`
-The queue consumer that ties the pipeline together; runs IN-PROCESS on a
-poll loop (a separate worker service was rejected: Render's free tier funds
-one instance, and the throughput ceiling is embedding rate limits, not
-CPU). The claim is one atomic UPDATE over a `FOR UPDATE SKIP LOCKED`
+The queue consumer that ties the pipeline together; runs IN-PROCESS (a
+separate worker service was rejected: Render's free tier funds one
+instance, and the throughput ceiling is embedding rate limits, not CPU).
+Scheduling since M3.6: `pollMs > 0` is the dev-compose mode (chained
+setTimeout loop, as always); **`pollMs: 0` is WAKE-DRIVEN, the production
+mode** — one tick at start() (catches jobs stranded by a deploy), then
+the worker is fully idle until wake(), which the internal enqueue route
+calls. A wake landing mid-tick is REMEMBERED (one follow-up tick), never
+dropped — in wake-driven mode there is no poll to catch a missed one.
+The Neon arithmetic that forces this: any repeating poll short enough to
+be useful holds Neon's compute awake against the ~100 CU-hour monthly
+budget; zero timers means the database sleeps precisely when the product
+is idle. The claim is one atomic UPDATE over a `FOR UPDATE SKIP LOCKED`
 subquery — concurrent workers skip each other's rows instead of blocking,
 so "a second worker is a deploy, not a rewrite" is literally true and
 tested. Crashed workers leave stale leases; the reclaim pass requeues them
@@ -1271,6 +1301,16 @@ deployments 404 these paths — indistinguishable from the routes not
 existing, which the smoke probe (§6.1) asserts from outside. server.ts
 enforces the all-or-nothing env pair: a secret without the master key
 refuses to boot rather than accept keys it cannot encrypt.
+
+Since M3.6a the surface also owns source enqueueing: POST
+/internal/orgs/:orgId/sources vets the location through the SAME url-vet
+seam (a crawl target is a tenant-typed URL this server will fetch — the
+credential-base-URL threat exactly; safeFetch re-vets every actual fetch
+with its connect-time hook), mirrors the schema's depth cap as a
+sentence instead of a constraint violation, writes source + queued job
+in one transaction, and then calls onEnqueue — which server.ts wires to
+the worker's wake(). In production that callback is the entire
+scheduler (§3.10.5).
 
 ---
 
@@ -1803,3 +1843,33 @@ with the clean 401 message — the key itself absent from the error, and
 nothing persisted on either failure. A successful save is covered by the
 loopback-fake integration tests; live-saving waits on real free-tier
 keys (the plan's open item).
+
+### §9.9 `src/lib/sources/`, AddSourceForm, AutoRefresh, the sources page (M3.6a)
+
+- **lib/sources/queries.ts** — sources with each one's LATEST ingest job
+  (jobs are append-per-crawl; the newest row is the current truth) plus
+  live document counts. Straight from Postgres like every dashboard
+  read; two plain queries and a JS pick over a DISTINCT ON, because a
+  tenant has a handful of sources.
+- **lib/sources/actions.ts** — the providers trust ladder verbatim
+  (signed-in → member → OWNER: connecting a crawl target spends quota
+  and changes what the widget answers from — org wiring, not
+  conversation work), then lib/realtime's createSource.
+- **components/AddSourceForm/** — kind picker (crawl/sitemap), depth
+  only for crawls (a sitemap enumerates its own pages); requirements
+  live server-side, visibility here.
+- **components/AutoRefresh/** — the ingest-progress mechanism: a tiny
+  client component calling router.refresh() on an interval, MOUNTED ONLY
+  while a job is queued/running, so an idle dashboard costs zero
+  requests. Polling over a socket on purpose: progress moves on the
+  seconds scale, and the WebSocket budget is reserved for M4's handoff
+  where latency matters.
+- **dashboard/[orgId]/sources/** — add form (owner), the per-source
+  status line (queued/crawling with page counts/indexed/failed-with-
+  reason), and the honest crawl promises in the intro (same-origin,
+  private addresses refused, unchanged pages skipped).
+
+Verified live at M3.6a with two real public pages: one job recovered by
+the BOOT tick after a dev-server restart (the deploy-stranded path), one
+run purely by wake (no poll timer existed), and the page's auto-refresh
+flipping to "1 pages indexed" unattended.

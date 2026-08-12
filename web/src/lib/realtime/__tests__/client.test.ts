@@ -6,7 +6,7 @@
 import { createServer } from "node:http"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { removeCredential, submitCredential } from "../index"
+import { createSource, removeCredential, submitCredential } from "../index"
 
 import type { Server } from "node:http"
 import type { IncomingMessage } from "node:http"
@@ -101,5 +101,21 @@ describe("realtime internal client", () => {
     expect(seen[0].url).toBe(
       "/internal/orgs/org_00000000000000000000000000000000/credentials/generation",
     )
+  })
+
+  it("POSTs a source and maps the enqueue result", async () => {
+    await listen(200, { ok: true, sourceId: "src_x", jobId: "job_y" })
+    const result = await createSource("org_00000000000000000000000000000000", {
+      kind: "url",
+      location: "https://docs.example.com/",
+      crawlDepth: 2,
+    })
+    expect(result).toEqual({ ok: true, value: { sourceId: "src_x", jobId: "job_y" } })
+    expect(seen[0].url).toBe("/internal/orgs/org_00000000000000000000000000000000/sources")
+    expect(JSON.parse(seen[0].body)).toEqual({
+      kind: "url",
+      location: "https://docs.example.com/",
+      crawlDepth: 2,
+    })
   })
 })

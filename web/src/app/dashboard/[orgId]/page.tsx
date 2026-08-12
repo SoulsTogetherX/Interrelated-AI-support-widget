@@ -71,8 +71,13 @@ export default async function OrgOverviewPage({
             — bring your own Groq, Gemini, Ollama, or OpenAI-compatible key.
           </li>
           <li>
-            <strong>Index your documentation</strong> — point a crawler at
-            your docs site. Arrives with M3.6.
+            <strong>
+              <Link href={`/dashboard/${org.id}/sources`}>
+                Index your documentation
+              </Link>
+            </strong>{" "}
+            — point a crawler at your docs site and watch it become
+            citable.
           </li>
           <li>
             <strong>Allowlist your site and copy the snippet</strong> —

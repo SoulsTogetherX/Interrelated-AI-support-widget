@@ -54,12 +54,15 @@ services:
       # with Node's bundled CA store.
       - key: POSTGRES_SSL
         value: "true"
-      # Ingest worker OFF in production for now, explicitly: its poll loop
-      # would query Neon every few seconds and hold compute awake against
-      # the ~100 CU-hour monthly budget — and nothing can enqueue a job in
-      # production until the M3 dashboard exists anyway. M3 flips this on
-      # together with an in-process wake on enqueue (poll as fallback only).
+      # Ingest worker ON since M3.6, in WAKE-DRIVEN mode: INGEST_POLL_MS=0
+      # means no timer at all — one tick at boot (catches jobs stranded by
+      # a deploy), then work happens exactly when the dashboard's enqueue
+      # wakes the worker through the internal API. Neon sleeps between
+      # ingests, which is the point: any repeating poll would hold its
+      # compute awake against the ~100 CU-hour monthly budget.
       - key: INGEST_WORKER
+        value: "1"
+      - key: INGEST_POLL_MS
         value: "0"
       # ── Widget surface (M2.5) ──
       # Session-token HMAC secret — set in the Render dashboard (any 32+

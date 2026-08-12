@@ -94,7 +94,27 @@ async function start(): Promise<void> {
   const dailyCap = Number(process.env.WIDGET_DAILY_ANSWER_CAP)
   console.log(`[boot] widget: llm=${llm.model} embeddings=${embedder.model}`)
 
+  // The worker is CONSTRUCTED before the app so the internal API's enqueue
+  // route can wake it (started further down, after listen, as before).
+  // INGEST_POLL_MS semantics since M3.6: unset → default poll (dev
+  // compose); a positive number → that poll; "0" → WAKE-DRIVEN, the
+  // production mode — one tick at start for deploy-stranded jobs, then
+  // work happens when an enqueue wakes the worker, and Neon sleeps
+  // between (worker.ts §3.10.5 has the budget arithmetic).
+  let worker: IngestWorker | null = null
+  if (process.env.INGEST_WORKER === "1") {
+    const pollRaw = process.env.INGEST_POLL_MS
+    const pollMs = pollRaw !== undefined && Number.isFinite(Number(pollRaw))
+      ? Number(pollRaw)
+      : undefined
+    worker = new IngestWorker({ db, embedder, ...(pollMs !== undefined ? { pollMs } : {}) })
+  }
+
   const internal = resolveInternalOptions()
+  if (internal && worker !== null) {
+    const w = worker
+    internal.onEnqueue = () => w.wake()
+  }
   console.log(`[boot] internal api: ${internal ? "mounted" : "not configured"}`)
 
   const app = createApp({
@@ -120,22 +140,16 @@ async function start(): Promise<void> {
     console.log(`[boot] realtime listening on :${port}`)
   })
 
-  // The ingest worker is OPT-IN (INGEST_WORKER=1): its poll loop queries
-  // Postgres every few seconds, which on Neon would hold compute awake
-  // around the clock — the same ~100 CU-hour budget the DB-free health
-  // route exists to protect. Both compose stacks turn it on (local Postgres
-  // has no such budget); render.yaml leaves it OFF until M3 gives the
-  // worker something that can enqueue in production plus an in-process wake
-  // instead of a poll.
-  let worker: IngestWorker | null = null
-  if (process.env.INGEST_WORKER === "1") {
-    const pollMs = Number(process.env.INGEST_POLL_MS) || undefined
-    // Same embedder instance as the widget surface — the agreement that
-    // ingest-time and query-time vectors share a model is enforced by
-    // construction here, not by two env reads happening to match.
-    worker = new IngestWorker({ db, embedder, ...(pollMs ? { pollMs } : {}) })
+  // The ingest worker is OPT-IN (INGEST_WORKER=1) and constructed above so
+  // the enqueue route can wake it; STARTED here, after listen, unchanged.
+  // (It shares the widget surface's embedder instance — ingest-time and
+  // query-time vectors agree on a model by construction, not by two env
+  // reads happening to match.) M3.6 turned production ON in wake-driven
+  // mode (INGEST_POLL_MS=0 in render.yaml): the dashboard's enqueue is the
+  // scheduler, and Neon sleeps between ingests.
+  if (worker !== null) {
     worker.start()
-    console.log(`[boot] ingest worker polling${pollMs ? ` every ${pollMs}ms` : ""}`)
+    console.log("[boot] ingest worker started")
   }
 
   //#region Shutdown

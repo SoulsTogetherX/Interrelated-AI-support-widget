@@ -29,8 +29,11 @@ internal API (§7.8): live-tested, encrypted at rest, suffix-only ever
 after. As of M3.5 those credentials ANSWER: the chat route resolves the
 org's generation credential per request (§5.3's resolve hop) with the
 env mock as fallback, so a saved key changes what model speaks on the
-very next question. Coming after: sources + ingest + the embedding half
-of BYO (M3.6), handoff (M4).
+very next question. As of M3.6a the dashboard is also the ingest
+producer (§7.9): connect a source → SSRF vet → source + job in one
+transaction → the worker WAKES (production has no poll timer at all —
+§3.1) → progress auto-refreshes on the sources page. Coming after: the
+embedding half of BYO (M3.6b), handoff (M4).
 
 ---
 
@@ -140,11 +143,17 @@ with `init: true` so PID 1 forwards signals.
 
 ## §3 Ingest — source → crawl → parse → chunk → embed → store
 
-The full pipeline, from a queued job to retrievable chunks. Today jobs are
-enqueued by `npm run enqueue` (realtime/scripts/enqueueSource.ts) or by
-tests; the M3 dashboard becomes the real producer.
+The full pipeline, from a queued job to retrievable chunks. Producers:
+the dashboard (§7.9 — the real one since M3.6a), `npm run enqueue`
+(realtime/scripts/enqueueSource.ts), and tests.
 
-### §3.1 The scheduling round (every INGEST_POLL_MS while idle)
+### §3.1 The scheduling round
+
+Triggered by the poll timer (dev compose: every INGEST_POLL_MS while
+idle) or — production's whole mechanism, INGEST_POLL_MS=0 — by
+`worker.wake()` from the enqueue route, plus one tick at boot for jobs a
+deploy stranded. A wake landing mid-tick queues exactly one follow-up
+tick (worker.ts #loop).
 
 ```
 IngestWorker poll timer fires
@@ -709,4 +718,33 @@ ProviderForm submit (Test or Test & save — intent from the pressed button)
     → success → revalidatePath(providers page) → status card re-renders
       from web/src/lib/providers/queries.ts — which can never select
       key_ciphertext; the suffix is all the dashboard will ever show
+```
+
+### §7.9 Source connect → crawl → visible progress (M3.6a)
+
+```
+AddSourceForm submit
+  → addSourceAction                    web/src/lib/sources/actions.ts
+    → currentUser → getOrgForMember → OWNER
+    → createSource                     web/src/lib/realtime/index.ts
+        POST {REALTIME_INTERNAL_URL}/internal/orgs/<id>/sources
+      → requireSecret → requireOrg     realtime/src/routes/internal.ts
+      → shape checks + SSRF vet        assertPublicUrl on the location —
+                                       the same seam as credential base
+                                       URLs; safeFetch re-vets every hop
+                                       at crawl time anyway
+      → ONE transaction: INSERT sources (pending)
+                         INSERT ingest_jobs (queued)
+      → onEnqueue()                    server.ts wired this to
+        → worker.wake()                realtime/src/ingest/worker.ts —
+                                       in production this call IS the
+                                       scheduler (no poll exists)
+          → tick → claim → §3.2 runs the crawl
+    → revalidatePath(sources page)
+
+meanwhile, in the browser:
+  sources page renders from            web/src/lib/sources/queries.ts
+    (sources + each one's LATEST job + live document counts)
+  a queued/running job mounts          components/AutoRefresh — 4s
+    router.refresh() until the job settles; idle pages poll nothing
 ```

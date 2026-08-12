@@ -90,6 +90,7 @@ class IngestWorker {
   #stopping = false
   #timer: NodeJS.Timeout | null = null
   #inflight: Promise<unknown> | null = null
+  #wakePending = false
 
   constructor(options: IngestWorkerOptions) {
     this.#db = options.db
@@ -103,19 +104,47 @@ class IngestWorker {
   }
 
   //#region Lifecycle
-  /** Starts the poll loop. Chained setTimeout rather than setInterval so a
-   *  long job can never overlap the next tick. */
+  /** Starts the loop. Chained setTimeout rather than setInterval so a long
+   *  job can never overlap the next tick. Since M3.6 `pollMs: 0` means
+   *  WAKE-DRIVEN: tick once at start (catches jobs stranded by a deploy),
+   *  then never on a timer — only wake() (the enqueue path) triggers work.
+   *  That is the production mode on Neon, where a poll every few seconds
+   *  would hold compute awake against the ~100 CU-hour budget; polling
+   *  remains the dev-compose fallback where Postgres is free. */
   start(): void {
-    const loop = (): void => {
-      if (this.#stopping) return
-      this.#inflight = this.tick()
-        .catch((err) => console.error("[ingest] tick failed:", err))
-        .finally(() => {
-          this.#inflight = null
-          if (!this.#stopping) this.#timer = setTimeout(loop, this.#pollMs)
-        })
+    this.#loop()
+  }
+
+  /** Immediate-tick request — wake-on-enqueue. If a tick is already in
+   *  flight the wake is REMEMBERED, not dropped: the enqueue that arrived
+   *  mid-tick would otherwise wait for a poll fallback that wake-driven
+   *  mode doesn't have. Stopped workers ignore wakes. */
+  wake(): void {
+    if (this.#stopping) return
+    if (this.#inflight) {
+      this.#wakePending = true
+      return
     }
-    loop()
+    if (this.#timer) clearTimeout(this.#timer)
+    this.#loop()
+  }
+
+  #loop(): void {
+    if (this.#stopping) return
+    this.#inflight = this.tick()
+      .catch((err) => console.error("[ingest] tick failed:", err))
+      .finally(() => {
+        this.#inflight = null
+        if (this.#stopping) return
+        if (this.#wakePending) {
+          // An enqueue landed while this tick ran — service it now.
+          this.#wakePending = false
+          this.#timer = setTimeout(() => this.#loop(), 0)
+        } else if (this.#pollMs > 0) {
+          this.#timer = setTimeout(() => this.#loop(), this.#pollMs)
+        }
+        // pollMs 0 + no pending wake: go idle until the next wake().
+      })
   }
 
   /** Stops accepting work and waits for the current tick to wind down (a

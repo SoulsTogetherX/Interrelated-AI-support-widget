@@ -128,4 +128,28 @@ export async function removeCredential(
   })
   return result.ok ? { ok: true, value: null } : result
 }
+
+/** Connect a source and enqueue its first crawl (M3.6). The realtime side
+ *  vets the URL (SSRF), writes source + job in one transaction, and wakes
+ *  the ingest worker — the enqueue IS production's scheduler. */
+export async function createSource(
+  orgId: string,
+  payload: { kind: "url" | "sitemap"; location: string; crawlDepth?: number },
+): Promise<InternalResult<{ sourceId: string; jobId: string }>> {
+  const result = await call(`/internal/orgs/${orgId}/sources`, {
+    method: "POST",
+    body: payload,
+  })
+  if (!result.ok) {
+    return result
+  }
+  const v = result.value
+  return {
+    ok: true,
+    value: {
+      sourceId: typeof v.sourceId === "string" ? v.sourceId : "",
+      jobId: typeof v.jobId === "string" ? v.jobId : "",
+    },
+  }
+}
 //#endregion

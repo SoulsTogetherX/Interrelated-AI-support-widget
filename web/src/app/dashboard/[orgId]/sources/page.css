@@ -1,0 +1,95 @@
+/* Sources page. */
+
+.sources {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.sources-crumbs {
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.sources-title {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.sources-intro {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.9375rem;
+}
+
+.sources-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+.sources-empty {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.sources-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sources-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  background: var(--paper-soft);
+}
+
+.sources-itemmain {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.sources-location {
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.sources-kind {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.sources-state {
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.sources-state-queued,
+.sources-state-running {
+  color: var(--accent);
+}
+
+.sources-state-done {
+  color: #166534;
+}
+
+.sources-state-failed {
+  color: #b91c1c;
+}
+
+.sources-state-none {
+  color: var(--ink-muted);
+}

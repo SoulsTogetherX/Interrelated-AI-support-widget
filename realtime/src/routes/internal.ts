@@ -27,6 +27,7 @@ import { timingSafeEqual } from "node:crypto"
 import { newId, isId } from "@shared/utils/ids"
 
 import { db } from "@/db/pool"
+import { assertPublicUrl } from "@/ingest/safeFetch"
 import {
   buildCredentialProvider,
   checkCredentialInput,
@@ -43,11 +44,16 @@ interface InternalRouteOptions {
   /** The shared secret. app.ts only mounts this surface when present;
    *  server.ts refuses a secret shorter than 32 chars at boot. */
   secret: string
-  /** Injectable base-URL vet (tests reach loopback fakes; production
-   *  default rejects anything non-public). */
+  /** Injectable URL vet, applied to credential base URLs AND source
+   *  locations alike (tests reach loopback fakes; production default
+   *  rejects anything non-public). */
   vetBaseUrl?: UrlVet
   /** Round-trip timeout override for tests. */
   testTimeoutMs?: number
+  /** Called after a source is enqueued — server.ts wires this to the
+   *  ingest worker's wake(), which is the whole production scheduling
+   *  mechanism (wake-driven mode has no poll to fall back on). */
+  onEnqueue?: () => void
 }
 //#endregion
 
@@ -186,6 +192,79 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         .orderBy("role")
         .execute()
       res.json({ ok: true, credentials: rows })
+    },
+  )
+
+  /** Connect a source and enqueue its first crawl (M3.6). The location is
+   *  a tenant-typed URL this server will fetch — the same SSRF shape as
+   *  credential base URLs, vetted with the same seam (and re-vetted at
+   *  every actual fetch by safeFetch, which owns the connect-time layer).
+   *  After the transaction commits, onEnqueue wakes the worker: in
+   *  production the enqueue IS the scheduler. */
+  app.post(
+    "/internal/orgs/:orgId/sources",
+    requireSecret,
+    requireOrg,
+    async (req: Request, res: Response) => {
+      const b = (req.body ?? {}) as Record<string, unknown>
+
+      if (b.kind !== "url" && b.kind !== "sitemap") {
+        res.status(422).json({ ok: false, error: "kind must be 'url' or 'sitemap'." })
+        return
+      }
+      const location = typeof b.location === "string" ? b.location.trim() : ""
+      let parsed: URL
+      try {
+        parsed = new URL(location)
+      } catch {
+        res.status(422).json({ ok: false, error: "location is not a valid URL." })
+        return
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        res.status(422).json({ ok: false, error: "location must be http(s)." })
+        return
+      }
+      if (parsed.username !== "" || parsed.password !== "") {
+        res.status(422).json({ ok: false, error: "location must not embed credentials." })
+        return
+      }
+      try {
+        await (vet ?? ((url: URL) => assertPublicUrl(url)))(parsed)
+      } catch {
+        res.status(422).json({ ok: false, error: "location must resolve to a public address." })
+        return
+      }
+
+      let crawlDepth: number | undefined
+      if (b.crawlDepth !== undefined) {
+        // Mirrors the schema CHECK (≤ 3) so the tenant sees a sentence, not
+        // a constraint violation.
+        if (typeof b.crawlDepth !== "number" || !Number.isInteger(b.crawlDepth) || b.crawlDepth < 0 || b.crawlDepth > 3) {
+          res.status(422).json({ ok: false, error: "crawlDepth must be an integer from 0 to 3." })
+          return
+        }
+        crawlDepth = b.crawlDepth
+      }
+
+      const sourceId = newId("src")
+      const jobId = newId("job")
+      await db.transaction().execute(async (trx) => {
+        await trx.insertInto("sources").values({
+          id: sourceId,
+          org_id: res.locals.orgId as string,
+          kind: b.kind as "url" | "sitemap",
+          location: parsed.href,
+          ...(crawlDepth !== undefined ? { crawl_depth: crawlDepth } : {}),
+        }).execute()
+        await trx.insertInto("ingest_jobs").values({
+          id: jobId,
+          org_id: res.locals.orgId as string,
+          source_id: sourceId,
+        }).execute()
+      })
+      options.onEnqueue?.()
+
+      res.json({ ok: true, sourceId, jobId })
     },
   )
 
