@@ -46,7 +46,10 @@ answering that thread while still keeping every word the visitor types —
 and as of M4.2 the two of them can actually talk (§8.3): a single-use
 60-second ticket settles identity BEFORE the WebSocket handshake
 completes, an agent attaching claims the handoff, and every message is
-persisted before it is broadcast.
+persisted before it is broadcast. M4.3 made a dropped connection
+survivable (§8.4) — the backlog on attach, delivered exactly once, and
+typing as an ephemeral hint — and M4.4/M4.5 built the two ends that use
+it: the widget's (§8.5) and the dashboard inbox's (§8.6).
 
 ---
 
@@ -1132,3 +1135,51 @@ therefore serves reconnects within a page load and the agent arriving
 mid-conversation, both of which are real; resuming across a reload needs a
 stored conversation id with an expiry and a recovery path for a stale one,
 and is named as future work rather than half-built.
+
+### §8.6 The agent's end (M4.5)
+
+The dashboard half. Note what is NOT here: no server-rendered thread, no
+second copy of the transcript — the socket's own replay is the thread.
+
+```
+/dashboard/[orgId]/inbox                     web/src/app/…/inbox/page.tsx
+  → requireOrgMember (any member: answering IS the agent role)
+  → listOpenHandoffs(orgId)                  lib/handoff/queries.ts
+      handoff_sessions ⋈ conversations, status <> 'closed'
+      unclaimed first, longest wait first    ← the queue's whole point
+  → AutoRefresh(8s), unconditionally: what changes this page is a VISITOR
+    escalating, which it can never learn from its own render
+
+click a row → /dashboard/[orgId]/inbox/[conversationId]
+  → requireOrgMember → getConversation (org-scoped 404) → getOpenHandoff
+      null → "nobody is waiting" + a link to the transcript, not an error
+  → <HandoffChat apiBase={NEXT_PUBLIC_WIDGET_API_URL}>   (client)
+      → useHandoffSocket
+          requestHandoffTicketAction(orgId, conversationId)   "use server"
+            signed-in? → member? → realtime POST
+              /internal/orgs/:orgId/handoff-tickets  (x-internal-secret)
+              ← {ticket}          realtime re-checks membership + open row
+            ← {ok:false}          → terminal: the mint IS the authorization
+                                    check, so its refusal is not retried
+          → wss://…/v1/handoff?ticket=…
+          → ready    → backoff reset; attaching CLAIMED the handoff (§8.3)
+            history  → replaces the rendered thread (bot's turns included)
+            message  → appended by id (idempotent against the backlog)
+            presence → visitors > 0 ? "Visitor is here" : "Visitor is away"
+            typing   → "Visitor is typing…", expired HERE after 6 s
+```
+
+Sending mirrors the widget exactly, including what it does not do:
+
+```
+submit → send(text)
+    not attached → false → the reply STAYS in the box + a notice
+    sent         → nothing appended locally; the server's echo renders it
+change → hintTyping() → one frame per TYPING_HINT_INTERVAL_MS
+```
+
+Still missing, and named rather than stubbed: nothing WRITES
+`handoff_sessions.closed_at` yet, so a claimed conversation stays claimed.
+The widget already handles the closed state (§8.5 — a null ticket is
+terminal and reads as "the assistant is back"), and the schema has had the
+column since §3.3.4; what does not exist is the button.

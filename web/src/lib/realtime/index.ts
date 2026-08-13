@@ -142,6 +142,37 @@ export async function removeCredential(
   return { ok: true, value: { reindexed: typeof v.reindexed === "number" ? v.reindexed : 0 } }
 }
 
+/**
+ * A 60-second single-use ticket for the handoff socket (M4.5), minted for
+ * an AGENT. It goes through realtime rather than being signed here because
+ * the signing key is derived from WIDGET_TOKEN_SECRET (§3.24), which lives
+ * on the realtime service alone — the dashboard proving who the agent is
+ * and realtime deciding what that is worth is the same split as
+ * credentials: web knows the person, realtime holds the keys.
+ *
+ * Realtime re-checks membership and that the handoff is still open, so
+ * this is not the only line of defense — but the caller must still do the
+ * checks in actions.ts, because a Server Action is a public POST endpoint.
+ */
+export async function mintHandoffTicket(
+  orgId: string,
+  conversationId: string,
+  userId: string,
+): Promise<InternalResult<{ ticket: string }>> {
+  const result = await call(`/internal/orgs/${orgId}/handoff-tickets`, {
+    method: "POST",
+    body: { conversationId, userId },
+  })
+  if (!result.ok) {
+    return result
+  }
+  const ticket = result.value.ticket
+  if (typeof ticket !== "string" || ticket === "") {
+    return { ok: false, error: "The realtime service returned no ticket." }
+  }
+  return { ok: true, value: { ticket } }
+}
+
 /** Connect a source and enqueue its first crawl (M3.6). The realtime side
  *  vets the URL (SSRF), writes source + job in one transaction, and wakes
  *  the ingest worker — the enqueue IS production's scheduler. */

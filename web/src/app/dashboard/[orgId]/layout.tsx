@@ -22,6 +22,11 @@ export default async function OrgLayout({
         <Link className="orgnav-link" href={`/dashboard/${orgId}`}>
           Overview
         </Link>
+        {/* Inbox before Conversations: one is people waiting right now, the
+            other is the archive, and the order says which is urgent. */}
+        <Link className="orgnav-link" href={`/dashboard/${orgId}/inbox`}>
+          Inbox
+        </Link>
         <Link className="orgnav-link" href={`/dashboard/${orgId}/conversations`}>
           Conversations
         </Link>

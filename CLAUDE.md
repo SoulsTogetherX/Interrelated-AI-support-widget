@@ -151,12 +151,21 @@ the agent's arrival flipping presence and claiming the handoff exactly
 once → "Support is typing…" appearing and self-expiring at its TTL → and
 the server KILLED mid-conversation, after which the widget reconnected on
 its own and its next message persisted through the new process. The
-bundle is 5.65 KB gzipped against the 15 KB budget. Still open in M4: the
-agent inbox in the dashboard — the last consumer of the protocol — and,
-recorded honestly rather than half-built, resuming a handoff across a page
-RELOAD (the widget keeps its conversation id in memory only; DATAFLOW §8.5
-states what that costs). The one package in the plan but not here —
-loadtest/ — arrives with the inbox.
+bundle is 5.65 KB gzipped against the 15 KB budget. M4.5 is done — the
+AGENT's end (§9.12, DATAFLOW §8.6): an inbox ordered by who has waited
+longest, and a live conversation view where attaching claims the handoff
+and the socket replays what the bot already said. Verified live with the
+widget and the dashboard in two browsers against one realtime process —
+escalation appearing in the queue, both turns replayed to the agent, a
+reply crossing to the widget, the visitor's answer crossing back, and
+"Visitor is typing…" appearing and expiring on its own TTL. Still open in
+M4: closing a handoff from the dashboard (the widget already handles the
+`ended` state, and §3.3.4's lifecycle has the column — nothing WRITES it
+yet, so a conversation stays claimed forever), loadtest/ for the
+concurrency numbers the plan's resume line quotes, and — recorded
+honestly rather than half-built — resuming a handoff across a page RELOAD
+(the widget keeps its conversation id in memory only; DATAFLOW §8.5 states
+what that costs).
 
 ---
 
@@ -2573,6 +2582,72 @@ verified citation; then `npm run ask --tamper` through the same pipeline
 → the dashboard showing the fabricated quote marked stripped and absent
 from the visitor-facing content, with cross-tenant and fabricated ids
 both 404.
+
+### §9.12 `src/lib/handoff/` + HandoffChat + the inbox (M4.5)
+
+The agent's end of the handoff socket — the protocol's last consumer, and
+the first surface in the dashboard that is not a form.
+
+- **lib/handoff/queries.ts** — the queue reads `handoff_sessions`, not
+  `conversations.status`, because the row is the RECORD of an escalation
+  with its own timestamps (§3.3.4) and M5's headline metric is a duration
+  between two of them. Ordering is the whole design: unclaimed first,
+  longest wait first — deliberately NOT by recency, which is the
+  conversations list's job (§9.10); an inbox sorted by recency buries
+  whoever has been waiting longest, who is exactly the person the tenant
+  is failing. The sort happens in JS because the status strings do not
+  sort that way and a CASE expression would hide the intent.
+  `getOpenHandoff` returning null is a NORMAL state — closed, never
+  escalated, another tenant's, or malformed, all indistinguishable.
+- **lib/handoff/actions.ts** — one Server Action, called once per
+  connection ATTEMPT because tickets are single-use. The trust ladder is
+  one rung shorter than providers/sources: signed-in → member, with no
+  owner check, because answering a waiting visitor IS the agent role. The
+  ladder is not decoration — a Server Action is reachable as a direct
+  POST, which Next's own docs say in as many words, so authorization
+  lives inside it and realtime checks membership again anyway.
+- **lib/realtime/index.ts → mintHandoffTicket** — the ticket is signed by
+  realtime rather than here because the key is derived from
+  WIDGET_TOKEN_SECRET (§3.24), which that service alone holds: the
+  dashboard proves who the agent is, realtime decides what that is worth
+  — the same split as credentials.
+- **components/HandoffChat/** — `useHandoffSocket.ts` owns the connection
+  and the frame reducer, `index.tsx` renders. Reimplemented rather than
+  shared with widget/src/handoff.ts for the reason sse.ts is not shared
+  with realtime's parser: the PROTOCOL is the contract (both import the
+  same frame types, so a change breaks both at compile time), the
+  transport is not — one copy is framework-free under a 15 KB budget, the
+  other is React state with no budget at all. What is identical is what
+  the protocol dictates: a ticket per attempt, backoff reset by the
+  `ready` FRAME rather than by the socket opening, and the incoming
+  typing hint expiring on THIS side after TYPING_TTL_MS. Sent messages
+  are not rendered locally — the echo is the render — and a send that
+  could not go keeps the agent's words in the box. Refs hold what the
+  socket owns and state holds what the UI draws, so a re-render cannot
+  burn a ticket; the effect's teardown is total, because React Strict
+  Mode double-invokes it in development and a phantom agent in the room
+  is the exact failure the heartbeat exists to prevent.
+- **dashboard/[orgId]/inbox/** — the queue, and per-conversation the live
+  surface. The thread is NOT server-rendered there: the socket replays it
+  on attach (DATAFLOW §8.4), so a server copy would be a second, staler
+  one that disagrees the moment a message lands. The transcript view
+  stays the audit surface and each page links to the other. AutoRefresh
+  runs unconditionally on the queue — unlike the sources page's
+  conditional mount — because the thing that changes it is a VISITOR
+  escalating, an event this page can never learn about from its own
+  render.
+- **Tests** — DB-gated: the queue's ordering (longest wait first, claimed
+  last), closed and never-escalated conversations absent, another
+  tenant's waiting visitor invisible even though they have waited longer
+  than anyone, and every single-lookup miss collapsing to null.
+
+Verified live end to end with the widget and the dashboard in two
+browsers against one realtime process: a visitor escalated from the
+Tailwind fixture, appeared in the inbox with their wait time, and the
+agent opening the conversation replayed both turns (the bot's included)
+and claimed it — after which a reply typed in the dashboard rendered in
+the widget, the visitor's answer rendered in the dashboard, and "Visitor
+is typing…" appeared while they composed and expired on its own TTL.
 
 ### §9.11 `src/lib/origins/` + the install page (M3.8)
 

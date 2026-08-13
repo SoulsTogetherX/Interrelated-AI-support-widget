@@ -1,0 +1,93 @@
+/* Class names prefixed "handoff-" — App Router CSS imports are global, so
+   the prefix IS the scoping mechanism (§9.2). */
+
+.handoff {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.handoff-state {
+  padding: 8px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-soft);
+}
+.handoff-state-live { color: #15803d }
+.handoff-state-visitor_away { color: var(--ink-muted) }
+.handoff-state-ended { color: #b45309 }
+
+.handoff-error,
+.handoff-unsent,
+.handoff-setup {
+  margin: 10px 14px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #fff7e6;
+  color: #7a5b00;
+  font-size: 13px;
+}
+
+.handoff-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  /* Tall enough to work in, bounded so the composer stays on screen. */
+  height: 420px;
+  overflow-y: auto;
+}
+
+.handoff-empty { color: var(--ink-muted); font-size: 14px }
+
+.handoff-msg {
+  max-width: 78%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--paper-soft);
+}
+/* The agent's own turns on the right, everyone else's on the left — the
+   arrangement every chat client has trained people to read. */
+.handoff-msg-agent { align-self: flex-end; background: var(--accent-soft) }
+.handoff-msg-visitor { align-self: flex-start }
+.handoff-msg-assistant { align-self: flex-start; border: 1px dashed var(--line); background: transparent }
+
+.handoff-who {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+.handoff-msg p { white-space: pre-wrap; overflow-wrap: break-word }
+.handoff-msg time { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-muted) }
+
+.handoff-typing { color: var(--ink-muted); font-size: 13px; font-style: italic }
+
+.handoff-compose {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+}
+.handoff-compose input {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+.handoff-compose button {
+  padding: 0 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.handoff-compose button:disabled { opacity: .5; cursor: default }
