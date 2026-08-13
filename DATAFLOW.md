@@ -49,7 +49,9 @@ completes, an agent attaching claims the handoff, and every message is
 persisted before it is broadcast. M4.3 made a dropped connection
 survivable (§8.4) — the backlog on attach, delivered exactly once, and
 typing as an ephemeral hint — and M4.4/M4.5 built the two ends that use
-it: the widget's (§8.5) and the dashboard inbox's (§8.6).
+it: the widget's (§8.5) and the dashboard inbox's (§8.6). M4.6 closed the
+loop (§8.7): an agent finishes the conversation, the room is TOLD, and the
+bot takes the thread back.
 
 ---
 
@@ -1183,3 +1185,56 @@ Still missing, and named rather than stubbed: nothing WRITES
 The widget already handles the closed state (§8.5 — a null ticket is
 terminal and reads as "the assistant is back"), and the schema has had the
 column since §3.3.4; what does not exist is the button.
+
+### §8.7 Closing a handoff (M4.6)
+
+The lifecycle's other end. Note where it does NOT go: web writes the origin
+allowlist directly (§7.11), but not this — closing has an in-process
+consequence, and the rooms live in realtime.
+
+```
+"Close conversation"                web/src/components/HandoffChat/index.tsx
+  → closeHandoffAction(orgId, conversationId)      "use server"
+      signed-in? → member? (no owner check: the agent who answered is the
+                            person who knows it is finished)
+      → POST /internal/orgs/:orgId/handoffs/:conversationId/close
+          x-internal-secret, {userId}
+        → membership re-established here, not taken on web's word
+        → closeHandoff(db, …)        realtime/src/handoff/escalate.ts
+            ONE transaction:
+              UPDATE handoff_sessions
+                SET status='closed', closed_at=NOW(),
+                    claimed_at = COALESCE(claimed_at, NOW()),
+                    claimed_by = COALESCE(claimed_by, <closer>)
+                WHERE conversation_id = … AND status <> 'closed'
+                                             ↑ the guard that makes five
+                                               simultaneous clicks one write
+              UPDATE conversations SET status='open'
+                (both rows or neither: a closed handoff under an
+                 'escalated' conversation would be a widget insisting a
+                 person owns a thread the bot is answering)
+            ← {closed:true}  — or {closed:false}, which is a normal answer
+                               (double click, or a colleague got there first)
+        → if closed: onHandoffClosed(conversationId)     server.ts wiring
+            → handoff.endRoom(conversationId)   realtime/src/handoff/socket.ts
+                → send {type:"closed"} to every member
+                → close each socket        (frame first, hang-up second)
+      → revalidatePath(inbox, inbox/[id])   the QUEUE is server-rendered;
+                                            the open chat learns from the
+                                            frame, not from this
+```
+
+What each end does with the frame:
+
+```
+widget      → HandoffSocket stops (no reconnect, no mint) → status "ended"
+              → leaveHandoff(): composer back to "Ask a question…"
+              → the next question goes to the BOT, which answers, because
+                §3.15.3 no longer finds an open handoff
+dashboard   → useHandoffSocket stops → state "ended" → composer disabled
+              → the revalidated page renders "nobody is waiting"
+```
+
+And the conversation can be escalated again tomorrow: the unique index is
+over OPEN rows only (§3.3.4), which is the whole reason the lifecycle is a
+table rather than a column on `conversations`.

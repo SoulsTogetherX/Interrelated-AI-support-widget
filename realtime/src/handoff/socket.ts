@@ -200,6 +200,8 @@ class Rooms {
 //#region Server
 function createHandoffServer(options: HandoffServerOptions): {
   handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => void
+  /** Ends a conversation's room — returns how many sockets were told. */
+  endRoom: (conversationId: string) => number
   close: () => Promise<void>
   readonly attached: number
 } {
@@ -555,6 +557,26 @@ function createHandoffServer(options: HandoffServerOptions): {
 
   return {
     handleUpgrade,
+    /**
+     * Tell a conversation's room it is over, then hang up (M4.6). Called by
+     * the internal close route, in THIS process, which is why the close
+     * lives behind realtime rather than being a direct write from the
+     * dashboard: the rooms are in memory here (§3.24's honest limit), so the
+     * write and the notification have to happen in the same place — the same
+     * argument that makes the ingest enqueue wake the worker (§3.22).
+     *
+     * The frame goes first and the socket closes after: a client that only
+     * saw the disconnect would spend a reconnect and a ticket mint to learn
+     * what one frame already said, and would show "reconnecting" meanwhile.
+     */
+    endRoom: (conversationId: string) => {
+      const members = rooms.members(conversationId)
+      for (const attachment of members) {
+        send(attachment.socket, { type: "closed" })
+        attachment.socket.close()
+      }
+      return members.length
+    },
     close: async () => {
       if (timer !== null) clearInterval(timer)
       for (const ws of wss.clients) ws.terminate()

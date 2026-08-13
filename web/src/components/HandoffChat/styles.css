@@ -11,11 +11,30 @@
 }
 
 .handoff-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 8px 14px;
   font-size: 13px;
   border-bottom: 1px solid var(--line);
   background: var(--paper-soft);
 }
+
+/* Quiet, not destructive-red: closing a handoff is routine and reversible
+   (the visitor can escalate again), not a delete. */
+.handoff-close {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4px 10px;
+  background: var(--paper);
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.handoff-close:hover:not(:disabled) { border-color: var(--accent); color: var(--accent) }
+.handoff-close:disabled { opacity: .6; cursor: default }
 .handoff-state-live { color: #15803d }
 .handoff-state-visitor_away { color: var(--ink-muted) }
 .handoff-state-ended { color: #b45309 }

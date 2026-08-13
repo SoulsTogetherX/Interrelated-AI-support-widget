@@ -133,6 +133,15 @@ async function start(): Promise<void> {
     const w = worker
     internal.onEnqueue = () => w.wake()
   }
+  // The close route has to reach the socket server, which does not exist
+  // until the http server does, which needs the app the route lives in.
+  // A late-bound closure breaks that circle without either side holding a
+  // half-built object — the same shape as onEnqueue, one construction
+  // order later.
+  let handoffSockets: { endRoom: (conversationId: string) => number } | null = null
+  if (internal) {
+    internal.onHandoffClosed = (conversationId) => handoffSockets?.endRoom(conversationId)
+  }
   console.log(`[boot] internal api: ${internal ? "mounted" : "not configured"}`)
 
   const app = createApp({
@@ -159,6 +168,7 @@ async function start(): Promise<void> {
   // authenticated by a single-use ticket BEFORE the handshake completes
   // (handoff/socket.ts); anything on another path gets a 404 and a FIN.
   const handoff = createHandoffServer({ db, ticketSecret: tokenSecret })
+  handoffSockets = handoff
   server.on("upgrade", (req, socket, head) => handoff.handleUpgrade(req, socket, head))
 
   server.listen(port, () => {

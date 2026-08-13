@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { db } from "@/db/pool"
 import { migrateToLatest } from "@/db/migrate"
-import { getOpenHandoff, requestHandoff } from "@/handoff/escalate"
+import { closeHandoff, getOpenHandoff, requestHandoff } from "@/handoff/escalate"
 import { newId } from "@shared/utils/ids"
 //#endregion
 
@@ -22,6 +22,17 @@ let otherOrgId: string
 async function makeConversation(org: string, visitor: string): Promise<string> {
   const id = newId("con")
   await db.insertInto("conversations").values({ id, org_id: org, visitor_id: visitor }).execute()
+  return id
+}
+
+/** An agent account. Only its id matters here — the dashboard creates
+ *  these properly (scrypt, encrypted email); a handoff just points at one. */
+async function makeAgent(): Promise<string> {
+  const id = newId("usr")
+  await db.insertInto("users").values({
+    id, email_index: `idx_${id}`, email_ciphertext: "v1.stub", password_hash: "scrypt$stub",
+  }).execute()
+  await db.insertInto("org_members").values({ org_id: orgId, user_id: id, role: "agent" }).execute()
   return id
 }
 
@@ -191,6 +202,93 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     expect(orphaned.claimed_by).toBeNull()
     expect(orphaned.claimed_at).not.toBeNull()
   })
+
+  //#region Closing (M4.6)
+  it("closes: the row is finished, the conversation is the bot's again, and it can escalate anew", async () => {
+    const conversationId = await makeConversation(orgId, "vis_close")
+    await requestHandoff(db, { orgId, conversationId, visitorId: "vis_close", reason: "visitor_request" })
+    expect(await conversationStatus(conversationId)).toBe("escalated")
+
+    const agent = await makeAgent()
+    const outcome = await closeHandoff(db, { orgId, conversationId, closedBy: agent })
+    expect(outcome).toEqual({ ok: true, closed: true })
+
+    // Both rows moved together: a closed handoff under a conversation still
+    // reading 'escalated' would be a widget saying a person owns a thread
+    // the bot is answering.
+    expect(await conversationStatus(conversationId)).toBe("open")
+    expect(await getOpenHandoff(db, conversationId)).toBeNull()
+    const row = await db.selectFrom("handoff_sessions").selectAll()
+      .where("conversation_id", "=", conversationId).executeTakeFirstOrThrow()
+    expect(row.status).toBe("closed")
+    expect(row.closed_at).toBeInstanceOf(Date)
+    // Nobody had attached, so closing is what claimed it — 'closed' with
+    // nobody ever having handled it would be a lie the CHECK allows.
+    expect(row.claimed_by).toBe(agent)
+    expect(row.claimed_at).toBeInstanceOf(Date)
+
+    // The index is over OPEN rows only, which is what lets the same visitor
+    // come back later.
+    const again = await requestHandoff(db, {
+      orgId, conversationId, visitorId: "vis_close", reason: "visitor_request",
+    })
+    expect(again).toMatchObject({ ok: true, created: true })
+    expect(await conversationStatus(conversationId)).toBe("escalated")
+  })
+
+  it("is idempotent, and concurrent closes produce ONE closed_at", async () => {
+    const conversationId = await makeConversation(orgId, "vis_twice")
+    await requestHandoff(db, { orgId, conversationId, visitorId: "vis_twice", reason: "visitor_request" })
+    const agent = await makeAgent()
+
+    // Five agents clicking at once — the UPDATE's `status <> 'closed'`
+    // guard is what makes four of them no-ops rather than four rewrites of
+    // when the conversation ended.
+    const outcomes = await Promise.all(
+      Array.from({ length: 5 }, () => closeHandoff(db, { orgId, conversationId, closedBy: agent })),
+    )
+    expect(outcomes.filter((o) => o.ok && o.closed)).toHaveLength(1)
+    expect(outcomes.every((o) => o.ok)).toBe(true)
+
+    const rows = await db.selectFrom("handoff_sessions").selectAll()
+      .where("conversation_id", "=", conversationId).execute()
+    expect(rows).toHaveLength(1)
+
+    // And a sixth, later, still reports honestly rather than failing.
+    expect(await closeHandoff(db, { orgId, conversationId, closedBy: agent }))
+      .toEqual({ ok: true, closed: false })
+  })
+
+  it("keeps an existing claim rather than reassigning it to whoever closed", async () => {
+    const conversationId = await makeConversation(orgId, "vis_claimed")
+    await requestHandoff(db, { orgId, conversationId, visitorId: "vis_claimed", reason: "visitor_request" })
+    const owner = await makeAgent()
+    const closer = await makeAgent()
+    await db.updateTable("handoff_sessions")
+      .set({ status: "active", claimed_by: owner, claimed_at: new Date() })
+      .where("conversation_id", "=", conversationId).execute()
+
+    await closeHandoff(db, { orgId, conversationId, closedBy: closer })
+    const row = await db.selectFrom("handoff_sessions").selectAll()
+      .where("conversation_id", "=", conversationId).executeTakeFirstOrThrow()
+    // Who HANDLED it is the fact worth keeping; a supervisor tidying the
+    // queue must not overwrite it.
+    expect(row.claimed_by).toBe(owner)
+  })
+
+  it("refuses another org's conversation, and a conversation that was never escalated", async () => {
+    const conversationId = await makeConversation(orgId, "vis_scope")
+    const agent = await makeAgent()
+    expect(await closeHandoff(db, { orgId: otherOrgId, conversationId, closedBy: agent }))
+      .toEqual({ ok: false, error: "not_found" })
+    expect(await closeHandoff(db, { orgId, conversationId: newId("con"), closedBy: agent }))
+      .toEqual({ ok: false, error: "not_found" })
+    // Never escalated: found, nothing to close — distinct answers, because
+    // this surface is internal and both ends are ours.
+    expect(await closeHandoff(db, { orgId, conversationId, closedBy: agent }))
+      .toEqual({ ok: true, closed: false })
+  })
+  //#endregion
 
   it("rejects the schema states that would corrupt the queue", async () => {
     const conversationId = await makeConversation(orgId, "vis_h")

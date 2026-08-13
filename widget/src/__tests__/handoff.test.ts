@@ -261,6 +261,26 @@ describe("HandoffSocket", () => {
     expect(FakeSocket.live).toHaveLength(2)
   })
 
+  it("ends on a `closed` frame without spending a reconnect to find out", async () => {
+    // Two tickets are available: the assertion is that the SECOND is never
+    // minted, because the server said what happened instead of just
+    // hanging up (M4.6).
+    const h = harness(["tkt_1", "tkt_2"])
+    h.socket.open()
+    const socket = await connected()
+    socket.deliver(READY)
+    expect(h.statuses.at(-1)).toBe("waiting")
+
+    socket.deliver({ type: "closed" })
+    expect(h.statuses.at(-1)).toBe("ended")
+    expect(socket.closed).toBe(true)
+
+    // The disconnect that follows a real close must not restart anything.
+    socket.drop()
+    vi.advanceTimersByTime(60_000)
+    expect(FakeSocket.live).toHaveLength(1)
+  })
+
   it("keeps retrying when the ticket mint FAILS — an outage is not a decision", async () => {
     const h = harness([new Error("network down"), "tkt_2"])
     h.socket.open()

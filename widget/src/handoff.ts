@@ -247,6 +247,13 @@ class HandoffSocket implements HandoffConnection {
       case "typing":
         this.#onTyping(frame.active)
         break
+      case "closed":
+        // Terminal, and said out loud (M4.6) rather than inferred from the
+        // disconnect that follows — so the visitor reads "the assistant is
+        // back" instead of watching a reconnect they do not need.
+        this.close()
+        this.#options.handlers.onStatus("ended")
+        break
       case "error":
         // Server errors on this socket are per-frame, not fatal (§3.25
         // refuses frames without dropping the connection), so there is

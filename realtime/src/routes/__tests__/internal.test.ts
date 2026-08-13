@@ -37,6 +37,8 @@ interface ApiBody {
 
 let appServer: Server
 let base: string
+/** Conversations whose room the close route rang (M4.6). */
+const closedRooms: string[] = []
 let fakeProvider: Server
 let fakeBase: string
 let orgId: string
@@ -102,7 +104,15 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     // vetBaseUrl: allow loopback so the fake is reachable; the production
     // default's fail-closed behavior gets its own dedicated app below.
     const app = createApp({
-      internal: { secret: SECRET, ticketSecret: TICKET_SECRET, vetBaseUrl: async () => {}, testTimeoutMs: 3000 },
+      internal: {
+        secret: SECRET,
+        ticketSecret: TICKET_SECRET,
+        vetBaseUrl: async () => {},
+        testTimeoutMs: 3000,
+        // Stands in for server.ts's wiring to the socket server: what the
+        // close test asserts is that the room is told, and told once.
+        onHandoffClosed: (conversationId) => { closedRooms.push(conversationId) },
+      },
     })
     appServer = createServer(app)
     await new Promise<void>((r) => appServer.listen(0, "127.0.0.1", r))
@@ -474,6 +484,51 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     expect((await ask({ conversationId: newId("con"), userId })).status).toBe(404)
     // And the surface still refuses an unauthenticated caller.
     expect((await post(`/internal/orgs/${orgId}/handoff-tickets`, { conversationId, userId })).status).toBe(401)
+
+    await db.deleteFrom("conversations").where("id", "=", conversationId).execute()
+    await db.deleteFrom("users").where("id", "in", [userId, outsiderId]).execute()
+  })
+
+  it("closes a handoff, tells the room exactly once, and stays honest on the second click", async () => {
+    const userId = newId("usr")
+    const outsiderId = newId("usr")
+    const conversationId = newId("con")
+    await db.insertInto("users").values([
+      { id: userId, email_index: `idx_${userId}`, email_ciphertext: "x", password_hash: "x" },
+      { id: outsiderId, email_index: `idx_${outsiderId}`, email_ciphertext: "x", password_hash: "x" },
+    ]).execute()
+    await db.insertInto("org_members").values({ org_id: orgId, user_id: userId, role: "agent" }).execute()
+    await db.insertInto("conversations")
+      .values({ id: conversationId, org_id: orgId, visitor_id: "vis_close" })
+      .execute()
+    await db.insertInto("handoff_sessions").values({
+      id: newId("hnd"), org_id: orgId, conversation_id: conversationId, reason: "visitor_request",
+    }).execute()
+
+    const close = (body: unknown, id = conversationId) =>
+      post(`/internal/orgs/${orgId}/handoffs/${id}/close`, body, SECRET)
+
+    const first = await close({ userId })
+    expect(first.status).toBe(200)
+    expect(await first.json()).toEqual({ ok: true, closed: true })
+    // The room is notified exactly once — server.ts wires this callback to
+    // the socket server, which is IN this process precisely so the write
+    // and the notification cannot separate.
+    expect(closedRooms).toEqual([conversationId])
+
+    // A second click reports honestly instead of failing, and must NOT ring
+    // the room again: a later escalation of the same conversation could be
+    // sitting in it.
+    const second = await close({ userId })
+    expect(second.status).toBe(200)
+    expect(await second.json()).toEqual({ ok: true, closed: false })
+    expect(closedRooms).toEqual([conversationId])
+
+    // Same refusals as the ticket route, for the same reason.
+    expect((await close({ userId: outsiderId })).status).toBe(404)
+    expect((await close({ userId: "not-an-id" })).status).toBe(422)
+    expect((await close({ userId }, newId("con"))).status).toBe(404)
+    expect((await post(`/internal/orgs/${orgId}/handoffs/${conversationId}/close`, { userId })).status).toBe(401)
 
     await db.deleteFrom("conversations").where("id", "=", conversationId).execute()
     await db.deleteFrom("users").where("id", "in", [userId, outsiderId]).execute()

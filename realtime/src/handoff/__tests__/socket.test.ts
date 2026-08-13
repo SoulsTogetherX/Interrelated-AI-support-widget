@@ -58,6 +58,9 @@ interface Client {
   next(): Promise<HandoffServerFrame>
   send(frame: unknown): void
   close(): Promise<void>
+  /** Waits for the SERVER to hang up — what the M4.6 close tests assert,
+   *  where the disconnect is the server's doing rather than ours. */
+  closed(): Promise<void>
 }
 
 function connect(ticket: string): Promise<Client> {
@@ -85,6 +88,9 @@ function connect(ticket: string): Promise<Client> {
         }),
         send: (frame: unknown) => socket.send(JSON.stringify(frame)),
         close: () => new Promise<void>((r) => { socket.once("close", () => r()); socket.close() }),
+        closed: () => socket.readyState === socket.CLOSED
+          ? Promise.resolve()
+          : new Promise<void>((r) => { socket.once("close", () => r()) }),
       })
     })
   })
@@ -473,6 +479,49 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
 
     await visitor.close()
     await agent.close()
+  })
+  //#endregion
+
+  //#region Closing (M4.6)
+  it("tells the room a handoff ended, then hangs up — both, in that order", async () => {
+    const conversationId = await escalatedConversation("vis_end")
+    const visitor = await connect(ticketFor(conversationId, "visitor", "vis_end"))
+    await open(visitor)
+    const agent = await connect(ticketFor(conversationId, "agent", agentId))
+    await open(agent)
+    await visitor.next() // presence (agent joined)
+
+    const closedSockets = handoff.endRoom(conversationId)
+    expect(closedSockets).toBe(2)
+
+    // The frame is the point: a client that only saw the disconnect would
+    // have to spend a reconnect and a ticket mint to learn which of "your
+    // agent finished" and "your wifi blinked" happened.
+    expect(await visitor.next()).toEqual({ type: "closed" })
+    expect(await agent.next()).toEqual({ type: "closed" })
+    await visitor.closed()
+    await agent.closed()
+
+    // And the room is empty afterwards, not holding two dead entries.
+    expect(handoff.endRoom(conversationId)).toBe(0)
+  })
+
+  it("leaves other conversations alone", async () => {
+    const mine = await escalatedConversation("vis_mine_end")
+    const theirs = await escalatedConversation("vis_theirs_end")
+    const inMine = await connect(ticketFor(mine, "visitor", "vis_mine_end"))
+    const inTheirs = await connect(ticketFor(theirs, "visitor", "vis_theirs_end"))
+    await open(inMine)
+    await open(inTheirs)
+
+    handoff.endRoom(mine)
+    expect(await inMine.next()).toEqual({ type: "closed" })
+    // The other room heard nothing at all — its next frame is its own.
+    inTheirs.send({ type: "message", text: "still here" })
+    expect(await inTheirs.next()).toMatchObject({ type: "message", text: "still here" })
+
+    await inMine.closed()
+    await inTheirs.close()
   })
   //#endregion
 

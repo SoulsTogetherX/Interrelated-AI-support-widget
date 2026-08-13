@@ -173,6 +173,30 @@ export async function mintHandoffTicket(
   return { ok: true, value: { ticket } }
 }
 
+/**
+ * Close a handoff (M4.6). Through realtime rather than written here —
+ * unlike the origin allowlist, which web owns outright (§9.11) — because
+ * closing has an in-process consequence: the socket rooms live in that
+ * service, and the two people in the conversation must be TOLD it ended.
+ *
+ * `closed: false` means there was nothing open, which is a normal answer
+ * (a double click, or a colleague who got there first), not a failure.
+ */
+export async function closeHandoff(
+  orgId: string,
+  conversationId: string,
+  userId: string,
+): Promise<InternalResult<{ closed: boolean }>> {
+  const result = await call(`/internal/orgs/${orgId}/handoffs/${conversationId}/close`, {
+    method: "POST",
+    body: { userId },
+  })
+  if (!result.ok) {
+    return result
+  }
+  return { ok: true, value: { closed: result.value.closed === true } }
+}
+
 /** Connect a source and enqueue its first crawl (M3.6). The realtime side
  *  vets the URL (SSRF), writes source + job in one transaction, and wakes
  *  the ingest worker — the enqueue IS production's scheduler. */

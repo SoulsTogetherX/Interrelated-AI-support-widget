@@ -40,6 +40,7 @@ import {
 } from "@/credentials/validate"
 import { encryptProviderKey, keySuffix } from "@/credentials/vault"
 import { mintHandoffTicket } from "@/handoff/ticket"
+import { closeHandoff } from "@/handoff/escalate"
 
 import type { Transaction } from "kysely"
 import type { Express, Request, Response, NextFunction } from "express"
@@ -66,6 +67,12 @@ interface InternalRouteOptions {
    *  ingest worker's wake(), which is the whole production scheduling
    *  mechanism (wake-driven mode has no poll to fall back on). */
   onEnqueue?: () => void
+  /** Called after a handoff is closed — server.ts wires this to the socket
+   *  server's endRoom(), so the two people in the conversation are TOLD it
+   *  ended rather than left to infer it from a dropped connection (M4.6).
+   *  Optional for the same reason onEnqueue is: a stack without a socket
+   *  server still has a working close. */
+  onHandoffClosed?: (conversationId: string) => void
 }
 //#endregion
 
@@ -361,6 +368,65 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       options.onEnqueue?.()
 
       res.json({ ok: true, sourceId, jobId })
+    },
+  )
+
+  /**
+   * Close a handoff (M4.6) — the agent is done, and the conversation goes
+   * back to the bot.
+   *
+   * Through realtime rather than written straight from web (which is what
+   * §9.11's allowlist does, holding no secret and needing no process state)
+   * because this change has an in-process consequence: the socket rooms
+   * live HERE, so closing and telling the two people in the room have to
+   * happen in the same place. The same argument as the source enqueue
+   * waking the worker.
+   *
+   * Membership is re-established the way the ticket route does it: web
+   * already checked, and this route does not take web's word for it.
+   */
+  app.post(
+    "/internal/orgs/:orgId/handoffs/:conversationId/close",
+    requireSecret,
+    requireOrg,
+    async (req: Request, res: Response) => {
+      // Same stance as the role param below: a path segment is untrusted
+      // input until isId has looked at it, and Express 5 types it wide.
+      const conversationId = typeof req.params.conversationId === "string"
+        ? req.params.conversationId
+        : ""
+      const b = (req.body ?? {}) as Record<string, unknown>
+      const userId = typeof b.userId === "string" ? b.userId : ""
+      if (!isId("con", conversationId) || !isId("usr", userId)) {
+        res.status(422).json({ ok: false, error: "conversationId and userId are required." })
+        return
+      }
+
+      const member = await db
+        .selectFrom("org_members")
+        .select("user_id")
+        .where("org_id", "=", res.locals.orgId as string)
+        .where("user_id", "=", userId)
+        .executeTakeFirst()
+      if (!member) {
+        res.status(404).json({ ok: false, error: "not found" })
+        return
+      }
+
+      const outcome = await closeHandoff(db, {
+        orgId: res.locals.orgId as string,
+        conversationId,
+        closedBy: userId,
+      })
+      if (!outcome.ok) {
+        res.status(404).json({ ok: false, error: "not found" })
+        return
+      }
+      // Only when a row actually changed: a second close must not hang up
+      // on a room that a LATER escalation of the same conversation has
+      // since filled.
+      if (outcome.closed) options.onHandoffClosed?.(conversationId)
+      res.json({ ok: true, closed: outcome.closed })
     },
   )
 

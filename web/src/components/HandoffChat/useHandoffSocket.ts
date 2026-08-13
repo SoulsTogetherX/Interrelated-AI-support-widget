@@ -151,6 +151,14 @@ export function useHandoffSocket(options: {
             typingTimerRef.current = setTimeout(() => setVisitorTyping(false), TYPING_TTL_MS)
           }
           break
+        case "closed":
+          // Terminal (M4.6). Said out loud rather than inferred from the
+          // disconnect that follows, so this stops the loop instead of
+          // spending a reconnect to be told the same thing.
+          stoppedRef.current = true
+          readyRef.current = false
+          setState("ended")
+          break
         case "error":
           // Per-frame refusals; the socket stays open (§3.25).
           break

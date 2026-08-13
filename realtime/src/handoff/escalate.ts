@@ -17,6 +17,7 @@
 //#region Imports
 import { newId } from "@shared/utils/ids"
 
+import { sql } from "kysely"
 import type { Kysely, Transaction } from "kysely"
 import type { Database } from "@/db/schema"
 //#endregion
@@ -170,5 +171,71 @@ export async function requestHandoff(
     if (!winner) throw error
     return { ok: true, handoff: winner, created: false }
   }
+}
+
+/**
+ * The other end of the lifecycle (M4.6): an agent is finished, and the
+ * conversation goes back to being the bot's.
+ *
+ * The mirror image of requestHandoff in every way that matters. It moves
+ * both rows in ONE transaction — closing the handoff while leaving
+ * `conversations.status = 'escalated'` would leave a visitor whose widget
+ * says a person owns the thread while the bot answers it. It reports
+ * `closed: false` when there was nothing open, so a double-clicked button
+ * and a second agent closing the same conversation are both free rather
+ * than errors. And the WHERE clause is what makes that safe under
+ * concurrency: the UPDATE only touches a row that is still open, so two
+ * simultaneous closes produce one write and one no-op instead of a
+ * second closed_at overwriting the first.
+ *
+ * Status goes back to 'open', not 'closed': a conversation whose handoff
+ * ended is answerable again (§3.15.3 stops finding an open handoff, so the
+ * pipeline resumes), and 'closed' is for a conversation nobody is having.
+ * The partial unique index is over OPEN rows only, so this same
+ * conversation can be escalated again later — which is exactly why the
+ * lifecycle is a table and not a column (§3.3.4).
+ */
+export async function closeHandoff(
+  db: Kysely<Database>,
+  request: { orgId: string; conversationId: string; closedBy: string },
+): Promise<{ ok: true; closed: boolean } | { ok: false; error: "not_found" }> {
+  const conversation = await db
+    .selectFrom("conversations")
+    .select("id")
+    .where("id", "=", request.conversationId)
+    .where("org_id", "=", request.orgId)
+    .executeTakeFirst()
+  if (!conversation) {
+    return { ok: false, error: "not_found" }
+  }
+
+  return await db.transaction().execute(async (trx) => {
+    const updated = await trx
+      .updateTable("handoff_sessions")
+      .set({
+        status: "closed",
+        closed_at: new Date(),
+        // Claim it on the way out if nobody had: an agent who resolves a
+        // conversation without ever attaching (answered by phone, say) is
+        // still the agent who handled it, and 'closed' with a null
+        // claimed_at would say nobody ever did.
+        claimed_at: sql`COALESCE(claimed_at, NOW())`,
+        claimed_by: sql`COALESCE(claimed_by, ${request.closedBy})`,
+      })
+      .where("conversation_id", "=", request.conversationId)
+      .where("org_id", "=", request.orgId)
+      .where("status", "!=", "closed")
+      .executeTakeFirst()
+
+    const closed = Number(updated.numUpdatedRows ?? 0n) > 0
+    if (closed) {
+      await trx
+        .updateTable("conversations")
+        .set({ status: "open" })
+        .where("id", "=", request.conversationId)
+        .execute()
+    }
+    return { ok: true, closed } as const
+  })
 }
 //#endregion

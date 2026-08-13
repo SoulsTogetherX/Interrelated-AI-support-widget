@@ -348,6 +348,25 @@ describe("mountWidget", () => {
     expect(fake.askCalls.at(-1)).toEqual({ question: "are you back?", conversationId: "con_ui" })
   })
 
+  it("returns the conversation to the assistant when the agent closes it", async () => {
+    const fake = fakeClient([[META, REFUSAL, NO_CLAIMS], [META, DONE]])
+    mountWidget(host, fake.client)
+    await escalateThrough(fake)
+
+    // What the socket does on a `closed` frame (handoff.test.ts pins that
+    // half); here it is what the PANEL does with it.
+    fake.server().onStatus("ended")
+    expect(fake.closed()).toBe(true)
+    expect(query(".status").textContent).toContain("assistant is back")
+    expect(query<HTMLInputElement>(".foot input").placeholder).toBe("Ask a question…")
+
+    // And the bot answers again — which is literally true server-side once
+    // the handoff is closed.
+    await askThrough("is anyone there?")
+    expect(fake.askCalls.at(-1)).toEqual({ question: "is anyone there?", conversationId: "con_ui" })
+    expect(fake.sent).toEqual([])
+  })
+
   it("never renders socket text as markup either — the same XSS rule as claims", async () => {
     const fake = fakeClient([[META, REFUSAL, NO_CLAIMS]])
     mountWidget(host, fake.client)

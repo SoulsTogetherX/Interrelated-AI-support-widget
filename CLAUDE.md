@@ -158,11 +158,13 @@ and the socket replays what the bot already said. Verified live with the
 widget and the dashboard in two browsers against one realtime process —
 escalation appearing in the queue, both turns replayed to the agent, a
 reply crossing to the widget, the visitor's answer crossing back, and
-"Visitor is typing…" appearing and expiring on its own TTL. Still open in
-M4: closing a handoff from the dashboard (the widget already handles the
-`ended` state, and §3.3.4's lifecycle has the column — nothing WRITES it
-yet, so a conversation stays claimed forever), loadtest/ for the
-concurrency numbers the plan's resume line quotes, and — recorded
+"Visitor is typing…" appearing and expiring on its own TTL. M4.6 is done,
+and with it the handoff LIFECYCLE is complete (§2.4.7, §3.23, §3.22,
+§3.25, §9.12, DATAFLOW §8.7): an agent can finish a conversation, the
+room is TOLD rather than left to infer it from a dropped socket, and the
+bot takes the thread back — verified live, including the very next
+question being answered by the bot again. Still open in M4: loadtest/ for
+the concurrency numbers the plan's resume line quotes, and — recorded
 honestly rather than half-built — resuming a handoff across a page RELOAD
 (the widget keeps its conversation id in memory only; DATAFLOW §8.5 states
 what that costs).
@@ -393,6 +395,14 @@ silence legible, and each is shaped by what it is NOT:
   Bounded by `HANDOFF_HISTORY_LIMIT` (50): an upgrade must not become an
   unbounded transcript download, and the dashboard already has the full
   record over HTTP (§9.10).
+M4.6 added the frame that ends it. **`closed`** is terminal — the server
+sends it and hangs up — and it exists even though hanging up ALONE would
+eventually produce the same conclusion (the reconnect's ticket mint 404s).
+The difference is ambiguity: a closed socket looks exactly like a dropped
+one, so without the frame a client must spend a reconnect and a mint to
+distinguish "your agent finished" from "your wifi blinked", and shows the
+wrong thing meanwhile. One frame removes the ambiguity before it exists.
+
 - **`typing`** is never persisted, never replayed, and never echoed to its
   sender — the transcript is the record of what was SAID, not of what
   someone nearly said, and a client knows it is typing. It carries a role
@@ -1032,7 +1042,13 @@ force-exits.
   the record intact — the test that caught the claimed_by/claimed_at
   invariant (§3.3.4). Plus the schema states that would corrupt the queue:
   active with nobody holding it, closed with no closing time, an unknown
-  reason.
+  reason. The M4.6 block covers the other end: closing moves both rows and
+  lets the conversation be escalated anew; five CONCURRENT closes produce
+  exactly one closed_at and four honest `closed: false` answers; closing
+  claims an unclaimed handoff but never reassigns one already claimed; and
+  another org's conversation, a fabricated id, and one that was never
+  escalated are answered distinctly here — this surface is internal, and
+  both ends of it are ours.
 - `handoff/__tests__/ticket.test.ts` — keyless. Round-trip, a distinct
   nonce per mint, the expiry boundary (valid at exp−1, rejected AT exp),
   tamper/wrong-secret/garbage/validly-signed-wrong-shape, KEY SEPARATION in
@@ -1064,7 +1080,11 @@ force-exits.
   written to `messages`, cleared by sending, and cleared again by
   disconnecting mid-sentence. Every connection in the suite now also pins
   the opening order (ready → history → presence) through one shared
-  helper, which asserts backlog and flushed ids are disjoint.
+  helper, which asserts backlog and flushed ids are disjoint. M4.6 adds
+  closing: `endRoom` sends `closed` to every member and THEN hangs up
+  (both, in that order — the frame is what spares a client a pointless
+  reconnect), leaves the room empty rather than holding dead entries, and
+  touches no other conversation.
 - `credentials/__tests__/vault.test.ts` — keyless. Round-trip, AAD swap,
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
@@ -1102,7 +1122,12 @@ force-exits.
   zero upstream calls; a failing upstream storing nothing and never
   echoing the key; the PRODUCTION url vet rejecting loopback (the SSRF
   default, asserted by NOT injecting the test seam); and the unconfigured
-  app 404ing the whole surface. The M3.6b block adds the embedding role
+  app 404ing the whole surface. The M4.6 block adds closing a handoff:
+  the room rung exactly ONCE (a second click answers `closed: false` and
+  stays silent, since a later escalation of that conversation could be
+  sitting in the room), plus the ticket route's refusal set repeated —
+  outsider, malformed id, unknown conversation, no secret. The M3.6b
+  block adds the embedding role
   end to end against a loopback embeddings endpoint: the dimension is
   MEASURED not declared (the form never asks for one) and stored on the
   row; a 1536-d model is refused with both numbers in the sentence while
@@ -1687,6 +1712,16 @@ existing, which the smoke probe (§6.1) asserts from outside. server.ts
 enforces the all-or-nothing env pair: a secret without the master key
 refuses to boot rather than accept keys it cannot encrypt.
 
+Since M4.6 it also owns closing a handoff (`POST
+/internal/orgs/:orgId/handoffs/:conversationId/close`), for the reason the
+enqueue route exists: the effect is not only a row. The socket rooms live
+in realtime's memory, so the close and the `closed` frame have to happen in
+one process, and the route calls onHandoffClosed only when a row ACTUALLY
+changed — ringing the room on a second click could hang up on a later
+escalation of the same conversation that is already sitting in it.
+Membership is re-established here rather than taken on web's word, exactly
+as the ticket route does it.
+
 Since M3.6a the surface also owns source enqueueing: POST
 /internal/orgs/:orgId/sources vets the location through the SAME url-vet
 seam (a crawl target is a tenant-typed URL this server will fetch — the
@@ -1750,6 +1785,23 @@ visitor's message is still persisted, deliberately, because it is exactly
 what the waiting agent needs to read and a queued visitor who keeps typing
 must not have those turns dropped. Answering anyway would put two voices in
 one conversation and bill the tenant for the privilege.
+
+`closeHandoff` (M4.6) is the transition's mirror image, and mirrors its
+reasoning too. Both rows move in ONE transaction — a closed handoff under a
+conversation still reading 'escalated' would be a widget insisting a person
+owns a thread the bot is answering. The UPDATE's `status <> 'closed'` guard
+is what makes concurrency safe without a lock: five agents clicking at once
+produce one write and four no-ops instead of four rewrites of when the
+conversation ended, and the function reports `closed: false` for those,
+because a double click and a colleague who got there first are normal
+answers rather than errors. Closing also CLAIMS the handoff if nobody had
+(`COALESCE(claimed_at, NOW())`) — a resolved handoff with nobody ever
+having handled it is a lie the CHECK constraint happily permits — while an
+existing claim is left alone, since who handled it is the fact worth
+keeping. The conversation returns to 'open', not 'closed': §3.15.3 stops
+finding an open handoff, so the bot answers again, and the partial unique
+index over open rows lets the same visitor escalate later — which is why
+the lifecycle is a table and not a column.
 
 The public surface is `POST /v1/widget/escalate` (§3.18): plain JSON, not
 SSE — the transition is one small state change, and the stream that carries
@@ -1857,6 +1909,15 @@ for someone who left.
    `TYPING_TTL_MS`, which is what that TTL is for. Two stops are explicit
    rather than left to it: sending a message ends composing by definition,
    and a socket closing mid-sentence announces the stop on its way out.
+
+**M4.6 — `endRoom`.** Closing a handoff has an in-process consequence: the
+rooms are in memory HERE, so the write and the notification must happen in
+the same place, which is why the dashboard's close goes through realtime
+(§3.22) rather than being a direct write like the origin allowlist. The
+frame goes out first and the socket closes after — the reverse would make
+both ends spend a reconnect to learn what one frame already said. server.ts
+wires the route's callback to this with a late-bound closure, because the
+socket server needs the http server, which needs the app the route lives in.
 
 Shutdown ordering matters and server.ts handles it: sockets are terminated
 BEFORE `server.close()` can finish, because an open WebSocket is a live
@@ -2123,7 +2184,10 @@ second button. A `handoff` answer event enters the same mode without any
 click, which is how a tab that did not escalate catches up (another tab
 did, or the page was reloaded mid-handoff). And `ended` leaves it, giving
 the conversation back to the bot — literally true server-side, since the
-pipeline stops finding an open handoff and answers again.
+pipeline stops finding an open handoff and answers again. Since M4.6 that
+state usually arrives as the socket's `closed` FRAME rather than as a
+failed reconnect, so a visitor whose agent just finished reads "the
+assistant is back" instead of watching a reconnection they do not need.
 
 Two decisions are worth their comments. Sent messages are NOT rendered
 locally: the server echoes every message to its sender (§2.4.7), so the
@@ -2178,8 +2242,10 @@ frame per interval and re-announce immediately after a send; the incoming
 indicator expires on the RECEIVER's timer with no frame saying so; a send
 before `ready` is refused rather than swallowed; a drop reconnects with a
 NEW ticket, a null ticket ends it permanently, a FAILED mint keeps
-retrying (an outage is not a decision), and close() stops everything. The
-UI suite covers the same states through the DOM: the offer appearing only
+retrying (an outage is not a decision), and close() stops everything.
+M4.6 adds the `closed` frame ending the session WITHOUT a reconnect —
+pinned by leaving a second ticket available and asserting it is never
+minted. The UI suite covers the same states through the DOM: the offer appearing only
 after a refusal and only once, escalation switching the panel, the
 transcript rendering the bot's turns alongside the agent's, sends going
 to the socket instead of the bot with unsent text kept, catching up on a
@@ -2599,13 +2665,20 @@ the first surface in the dashboard that is not a form.
   sort that way and a CASE expression would hide the intent.
   `getOpenHandoff` returning null is a NORMAL state — closed, never
   escalated, another tenant's, or malformed, all indistinguishable.
-- **lib/handoff/actions.ts** — one Server Action, called once per
-  connection ATTEMPT because tickets are single-use. The trust ladder is
+- **lib/handoff/actions.ts** — two Server Actions. The ticket one is
+  called once per connection ATTEMPT because tickets are single-use. The trust ladder is
   one rung shorter than providers/sources: signed-in → member, with no
   owner check, because answering a waiting visitor IS the agent role. The
   ladder is not decoration — a Server Action is reachable as a direct
   POST, which Next's own docs say in as many words, so authorization
-  lives inside it and realtime checks membership again anyway.
+  lives inside it and realtime checks membership again anyway. The M4.6
+  close action shares that ladder for the same reason — the agent who
+  answered the conversation is the person who knows it is finished, and
+  requiring an owner's click would leave conversations claimed forever.
+  It revalidates the QUEUE rather than the open chat, because the chat
+  learns from the socket's `closed` frame; nothing in the component sets
+  the ended state on its own, so the UI can never claim an ending the
+  server did not perform.
 - **lib/realtime/index.ts → mintHandoffTicket** — the ticket is signed by
   realtime rather than here because the key is derived from
   WIDGET_TOKEN_SECRET (§3.24), which that service alone holds: the
@@ -2641,6 +2714,12 @@ the first surface in the dashboard that is not a form.
   tenant's waiting visitor invisible even though they have waited longer
   than anyone, and every single-lookup miss collapsing to null.
 
+The header also carries the M4.6 **Close conversation** button, with no
+confirmation dialog on purpose: closing is reversible by the product's own
+rules — the visitor can escalate again, and the partial index over open
+rows lets them — so "are you sure?" would be ceremony over a decision that
+costs one click to undo.
+
 Verified live end to end with the widget and the dashboard in two
 browsers against one realtime process: a visitor escalated from the
 Tailwind fixture, appeared in the inbox with their wait time, and the
@@ -2648,6 +2727,11 @@ agent opening the conversation replayed both turns (the bot's included)
 and claimed it — after which a reply typed in the dashboard rendered in
 the widget, the visitor's answer rendered in the dashboard, and "Visitor
 is typing…" appeared while they composed and expired on its own TTL.
+M4.6 closed the same loop: the button flipped the widget to "the support
+chat has ended — the assistant is back" through the `closed` frame (not
+through a failed reconnect), turned the dashboard page into its
+nobody-is-waiting state, and the very next question in the widget was
+answered by the bot again.
 
 ### §9.11 `src/lib/origins/` + the install page (M3.8)
 

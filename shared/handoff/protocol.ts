@@ -74,6 +74,21 @@ type HandoffServerFrame =
    *  forever — the same phantom-participant problem the heartbeat solves for
    *  presence, solved here without server state. */
   | { type: "typing"; role: HandoffRole; active: boolean }
+  /**
+   * The handoff is over (M4.6): an agent resolved it, and the conversation
+   * belongs to the bot again. TERMINAL — the server closes the socket right
+   * after, and a client that reconnects would only be told there is nothing
+   * to connect to.
+   *
+   * A frame rather than just hanging up, even though hanging up would
+   * eventually produce the same conclusion (the reconnect's ticket mint
+   * 404s, §8.5). The difference is that a closed socket is ambiguous — a
+   * dropped connection looks identical — so a client would have to spend a
+   * reconnect and a mint to distinguish "your agent finished" from "your
+   * wifi blinked", and would show the wrong thing meanwhile. This says
+   * which it is, in one frame, before the ambiguity exists.
+   */
+  | { type: "closed" }
   /** A frame was refused (malformed, too long, or sent to a conversation
    *  that has since closed). Carries a short reason because BOTH ends of
    *  this socket are authenticated parties — unlike the public SSE stream,

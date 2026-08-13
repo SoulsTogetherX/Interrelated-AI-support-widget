@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from "react"
 
 import { MAX_HANDOFF_MESSAGE_CHARS } from "@shared/handoff/protocol"
 
-import { requestHandoffTicketAction } from "@/lib/handoff/actions"
+import { closeHandoffAction, requestHandoffTicketAction } from "@/lib/handoff/actions"
 import { useHandoffSocket } from "./useHandoffSocket"
 import "./styles.css"
 
@@ -75,6 +75,8 @@ function Chat({
 }) {
   const [draft, setDraft] = useState("")
   const [unsent, setUnsent] = useState(false)
+  const [closing, setClosing] = useState(false)
+  const [closeError, setCloseError] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
 
   const { state, messages, visitorTyping, error, send, hintTyping } = useHandoffSocket({
@@ -110,9 +112,35 @@ function Chat({
     <section className="handoff" aria-label="Live conversation">
       <header className={`handoff-state handoff-state-${state}`}>
         <span>{STATE_LABEL[state]}</span>
+        {state !== "ended" && (
+          <button
+            type="button"
+            className="handoff-close"
+            disabled={closing}
+            onClick={() => {
+              setClosing(true)
+              setCloseError(null)
+              // No confirmation dialog: closing is REVERSIBLE by the
+              // product's own rules — the visitor can escalate again and
+              // the partial index over open rows lets them (§3.3.4) — so
+              // an "are you sure?" would be ceremony over a decision that
+              // costs one more click to undo.
+              void closeHandoffAction(orgId, conversationId).then((result) => {
+                setClosing(false)
+                // The socket's `closed` frame is what flips this panel to
+                // ended; nothing is set here on success, so the UI can
+                // never claim an ending the server did not perform.
+                if (!result.ok) setCloseError(result.error)
+              })
+            }}
+          >
+            {closing ? "Closing…" : "Close conversation"}
+          </button>
+        )}
       </header>
 
       {error !== null && <p className="handoff-error">{error}</p>}
+      {closeError !== null && <p className="handoff-error">{closeError}</p>}
 
       <div className="handoff-log" ref={logRef} role="log" aria-live="polite">
         {messages.length === 0 && state !== "connecting" && (
