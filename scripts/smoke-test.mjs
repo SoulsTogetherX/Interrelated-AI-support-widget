@@ -82,6 +82,32 @@ await check("POST /v1/widget/chat without a session returns 401", async () => {
   if (res.status !== 401) throw new Error(`status ${res.status}`)
 })
 
+// The handoff socket (M4.2). fetch cannot speak WebSocket, so this sends the
+// handshake by hand — which is the point: it proves the upgrade handler is
+// attached to the SHIPPED server AND that it refuses an unticketed client
+// before any WebSocket exists. A 101 here would mean the upgrade
+// authenticates after the handshake, which is the bug the design avoids.
+await check("WebSocket upgrade without a ticket is refused, not accepted", async () => {
+  const { request } = await import(base.startsWith("https") ? "node:https" : "node:http")
+  const status = await new Promise((resolve, reject) => {
+    const req = request(`${base}/v1/handoff`, {
+      headers: {
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": "AAAAAAAAAAAAAAAAAAAAAA==",
+      },
+      timeout: 10_000,
+    })
+    req.on("response", (res) => { res.resume(); resolve(res.statusCode) })
+    req.on("upgrade", (_res, socket) => { socket.destroy(); resolve(101) })
+    req.on("timeout", () => { req.destroy(); reject(new Error("timed out")) })
+    req.on("error", reject)
+    req.end()
+  })
+  if (status !== 401) throw new Error(`status ${status}`)
+})
+
 // Same posture check for the second token-authenticated route (M4.1): a 404
 // would mean it fell off the app, a 200 that its auth did.
 await check("POST /v1/widget/escalate without a session returns 401", async () => {

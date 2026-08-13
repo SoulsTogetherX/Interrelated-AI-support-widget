@@ -6,6 +6,7 @@ import { createApp } from "@/app"
 import pool, { db } from "@/db/pool"
 import { migrateToLatest } from "@/db/migrate"
 import { IngestWorker } from "@/ingest/worker"
+import { createHandoffServer } from "@/handoff/socket"
 import { buildLLMProvider } from "@/answer/buildLLM"
 import { resolveTokenSecret } from "@/widget/sessionToken"
 import { hasMasterKey } from "@/credentials/vault"
@@ -23,7 +24,7 @@ import type { InternalRouteOptions } from "@/routes/internal"
 // at encryption time (after the plaintext crossed the wire), so the
 // half-configured state refuses to boot instead. A short secret refuses
 // too — same stance as the widget token secret.
-function resolveInternalOptions(): InternalRouteOptions | undefined {
+function resolveInternalOptions(ticketSecret: string): InternalRouteOptions | undefined {
   const secret = process.env.INTERNAL_API_SECRET
   if (!secret) return undefined
   if (secret.length < 32) {
@@ -36,7 +37,7 @@ function resolveInternalOptions(): InternalRouteOptions | undefined {
         "or neither.",
     )
   }
-  return { secret }
+  return { secret, ticketSecret }
 }
 //#endregion
 
@@ -95,6 +96,11 @@ async function start(): Promise<void> {
   const llm = buildLLMProvider(process.env.LLM_PROVIDER ?? "mock")
   const maxDistance = Number(process.env.ANSWER_MAX_DISTANCE)
   const dailyCap = Number(process.env.WIDGET_DAILY_ANSWER_CAP)
+  // One secret, resolved once: the widget's session tokens are signed with
+  // it directly and the handoff tickets with a key DERIVED from it
+  // (handoff/ticket.ts). Both halves must agree, so neither reads env
+  // separately.
+  const tokenSecret = resolveTokenSecret()
   console.log(`[boot] widget: llm=${llm.model} embeddings=${embedder.model}`)
 
   // The worker is CONSTRUCTED before the app so the internal API's enqueue
@@ -122,7 +128,7 @@ async function start(): Promise<void> {
     })
   }
 
-  const internal = resolveInternalOptions()
+  const internal = resolveInternalOptions(tokenSecret)
   if (internal && worker !== null) {
     const w = worker
     internal.onEnqueue = () => w.wake()
@@ -132,7 +138,7 @@ async function start(): Promise<void> {
   const app = createApp({
     widget: {
       db, embedder, llm,
-      tokenSecret: resolveTokenSecret(),
+      tokenSecret,
       ...(Number.isFinite(maxDistance) ? { maxDistance } : {}),
       ...(Number.isFinite(dailyCap) ? { dailyAnswerCap: dailyCap } : {}),
     },
@@ -147,6 +153,13 @@ async function start(): Promise<void> {
     },
   })
   const server = createServer(app)
+
+  // The handoff socket (M4.2) attaches to THIS server object — the reason
+  // it is created explicitly rather than through app.listen(). Upgrades are
+  // authenticated by a single-use ticket BEFORE the handshake completes
+  // (handoff/socket.ts); anything on another path gets a 404 and a FIN.
+  const handoff = createHandoffServer({ db, ticketSecret: tokenSecret })
+  server.on("upgrade", (req, socket, head) => handoff.handleUpgrade(req, socket, head))
 
   server.listen(port, () => {
     console.log(`[boot] realtime listening on :${port}`)
@@ -175,8 +188,13 @@ async function start(): Promise<void> {
     draining = true
     console.log(`[shutdown] ${signal} received, draining`)
     const workerStopped = worker ? worker.stop() : Promise.resolve()
+    // Sockets are closed BEFORE server.close() can finish: an open
+    // WebSocket is a live connection, and http.Server.close waits for
+    // every one of them — a deploy would otherwise hang until Render's
+    // kill timeout with the visitor's browser still holding the socket.
+    const socketsClosed = handoff.close()
     server.close(() => {
-      workerStopped
+      Promise.all([workerStopped, socketsClosed])
         .then(() => pool.end())
         .then(
           () => process.exit(0),

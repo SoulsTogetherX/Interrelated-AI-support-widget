@@ -40,6 +40,7 @@ describe.skipIf(!hasDb)("internal sources API + wake-driven worker", () => {
     const app = createApp({
       internal: {
         secret: SECRET,
+        ticketSecret: SECRET,
         vetBaseUrl: async () => {},
         onEnqueue: () => { enqueueCalls += 1 },
       },
@@ -98,7 +99,7 @@ describe.skipIf(!hasDb)("internal sources API + wake-driven worker", () => {
   })
 
   it("the PRODUCTION vet rejects private crawl targets", async () => {
-    const prodApp = createApp({ internal: { secret: SECRET } })
+    const prodApp = createApp({ internal: { secret: SECRET, ticketSecret: SECRET } })
     const prodServer = createServer(prodApp)
     await new Promise<void>((r) => prodServer.listen(0, "127.0.0.1", r))
     const pp = prodServer.address() as { port: number }

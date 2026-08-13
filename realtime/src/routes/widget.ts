@@ -11,6 +11,7 @@ import { isId } from "@shared/utils/ids"
 import { answerQuestion } from "@/answer/pipeline"
 import { resolveEmbeddingProvider, resolveGenerationProvider } from "@/credentials/resolve"
 import { requestHandoff } from "@/handoff/escalate"
+import { mintHandoffTicket } from "@/handoff/ticket"
 import { RateLimiter } from "@/widget/rateLimit"
 import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
 import type { SessionTokenPayload } from "@/widget/sessionToken"
@@ -128,6 +129,7 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
   app.options("/v1/widget/session", preflight)
   app.options("/v1/widget/chat", preflight)
   app.options("/v1/widget/escalate", preflight)
+  app.options("/v1/widget/handoff-ticket", preflight)
 
   /** Token auth + the origin re-check, shared by every route that carries a
    *  session. Returns the verified session, or null having ALREADY answered
@@ -376,6 +378,53 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       res.json({ status: outcome.handoff.status, created: outcome.created })
     } catch (err) {
       console.error("[widget] escalate failed:", err)
+      res.status(500).json({ error: "internal error" })
+    }
+  })
+
+  // ── Handoff ticket: the visitor's key to the socket (M4.2) ───────────────
+  // The session token cannot ride a WebSocket handshake (browsers set no
+  // headers there), so it is spent HERE, on an ordinary authenticated POST,
+  // for a ticket that is good for 60 seconds and one upgrade. What ends up
+  // in the URL — and therefore in every access log between here and the
+  // browser — is the disposable one. See handoff/ticket.ts.
+  app.post("/v1/widget/handoff-ticket", async (req: Request, res: Response) => {
+    try {
+      const session = authenticate(req, res)
+      if (session === null) return
+
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const conversationId = body["conversationId"]
+      if (typeof conversationId !== "string" || !isId("con", conversationId)) {
+        res.status(400).json({ error: "invalid conversationId" })
+        return
+      }
+
+      // A ticket is only issued for a conversation this visitor owns AND
+      // that actually has a human waiting: no handoff, nothing to connect
+      // to. Both failures are one 404 — the socket's own upgrade check
+      // repeats this, so nothing here is the only line of defense.
+      const open = await options.db
+        .selectFrom("handoff_sessions")
+        .innerJoin("conversations", "conversations.id", "handoff_sessions.conversation_id")
+        .select("handoff_sessions.id")
+        .where("handoff_sessions.conversation_id", "=", conversationId)
+        .where("handoff_sessions.status", "!=", "closed")
+        .where("conversations.org_id", "=", session.org)
+        .where("conversations.visitor_id", "=", session.visitor)
+        .executeTakeFirst()
+      if (!open) {
+        res.status(404).json({ error: "conversation not found" })
+        return
+      }
+
+      const minted = mintHandoffTicket(
+        { con: conversationId, org: session.org, role: "visitor", sub: session.visitor },
+        options.tokenSecret,
+      )
+      res.json({ ticket: minted.ticket, expiresAt: minted.expiresAt })
+    } catch (err) {
+      console.error("[widget] handoff ticket failed:", err)
       res.status(500).json({ error: "internal error" })
     }
   })

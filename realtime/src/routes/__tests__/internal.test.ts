@@ -19,6 +19,7 @@ import type { Server } from "node:http"
 
 const hasDb = Boolean(process.env.POSTGRES_PASSWORD)
 const SECRET = "internal-test-secret-0123456789abcdef" // ≥32 chars
+const TICKET_SECRET = "internal-test-ticket-secret-0123456789"
 const TENANT_KEY = "sk-tenant-supersecret-abcd1234"
 
 /** What the API's JSON bodies can carry — typed so assertions stay checked. */
@@ -101,7 +102,7 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     // vetBaseUrl: allow loopback so the fake is reachable; the production
     // default's fail-closed behavior gets its own dedicated app below.
     const app = createApp({
-      internal: { secret: SECRET, vetBaseUrl: async () => {}, testTimeoutMs: 3000 },
+      internal: { secret: SECRET, ticketSecret: TICKET_SECRET, vetBaseUrl: async () => {}, testTimeoutMs: 3000 },
     })
     appServer = createServer(app)
     await new Promise<void>((r) => appServer.listen(0, "127.0.0.1", r))
@@ -435,11 +436,55 @@ describe.skipIf(!hasDb)("internal credential API", () => {
   })
   //#endregion
 
+  //#region Agent handoff tickets (M4.2)
+  it("mints an agent socket ticket only for a member and an open handoff", async () => {
+    const userId = newId("usr")
+    const outsiderId = newId("usr")
+    const conversationId = newId("con")
+    await db.insertInto("users").values([
+      { id: userId, email_index: `idx_${userId}`, email_ciphertext: "x", password_hash: "x" },
+      { id: outsiderId, email_index: `idx_${outsiderId}`, email_ciphertext: "x", password_hash: "x" },
+    ]).execute()
+    await db.insertInto("org_members").values({ org_id: orgId, user_id: userId, role: "agent" }).execute()
+    await db.insertInto("conversations")
+      .values({ id: conversationId, org_id: orgId, visitor_id: "vis_ticket" })
+      .execute()
+
+    const ask = (body: unknown) => post(`/internal/orgs/${orgId}/handoff-tickets`, body, SECRET)
+
+    // No handoff open yet: a ticket would admit an agent to a conversation
+    // nobody asked for help with.
+    expect((await ask({ conversationId, userId })).status).toBe(404)
+
+    await db.insertInto("handoff_sessions").values({
+      id: newId("hnd"), org_id: orgId, conversation_id: conversationId, reason: "visitor_request",
+    }).execute()
+
+    const granted = await ask({ conversationId, userId })
+    expect(granted.status).toBe(200)
+    const body = (await granted.json()) as { ticket?: string; expiresAt?: number }
+    expect(body.ticket).toContain(".")
+    expect((body.expiresAt ?? 0) - Date.now()).toBeLessThanOrEqual(60_000)
+
+    // A signed-in user who is NOT a member of this org gets nothing — the
+    // dashboard checks too, but this route is the only thing that can mint
+    // an agent ticket, so it re-establishes the claim rather than trusting it.
+    expect((await ask({ conversationId, userId: outsiderId })).status).toBe(404)
+    expect((await ask({ conversationId, userId: "not-an-id" })).status).toBe(422)
+    expect((await ask({ conversationId: newId("con"), userId })).status).toBe(404)
+    // And the surface still refuses an unauthenticated caller.
+    expect((await post(`/internal/orgs/${orgId}/handoff-tickets`, { conversationId, userId })).status).toBe(401)
+
+    await db.deleteFrom("conversations").where("id", "=", conversationId).execute()
+    await db.deleteFrom("users").where("id", "in", [userId, outsiderId]).execute()
+  })
+  //#endregion
+
   it("the PRODUCTION url vet rejects private/loopback base URLs", async () => {
     // A second app WITHOUT the injected vet: the default must refuse our
     // loopback fake — this is the SSRF boundary doing its job, and it is
     // exactly why the other tests had to inject a permissive one.
-    const prodApp = createApp({ internal: { secret: SECRET } })
+    const prodApp = createApp({ internal: { secret: SECRET, ticketSecret: TICKET_SECRET } })
     const prodServer = createServer(prodApp)
     await new Promise<void>((r) => prodServer.listen(0, "127.0.0.1", r))
     const pp = prodServer.address() as { port: number }

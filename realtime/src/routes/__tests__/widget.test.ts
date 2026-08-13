@@ -381,6 +381,42 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
         .where("conversation_id", "=", conversationId).execute()).toHaveLength(0)
     })
 
+    it("issues a socket ticket only for an escalated conversation the visitor owns", async () => {
+      const token = await freshToken()
+      const opened = await chat(token, { question: CHUNK_TEXT })
+      const meta = opened.events.find((e) => e.type === "meta")
+      const conversationId = meta?.type === "meta" ? meta.conversationId : ""
+
+      const ticketUrl = `${baseUrl}/v1/widget/handoff-ticket`
+      const ask = (body: unknown, auth = token) => fetch(ticketUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: GOOD_ORIGIN, authorization: `Bearer ${auth}` },
+        body: JSON.stringify(body),
+      })
+
+      // No handoff yet — there is nothing to connect to, so no ticket.
+      expect((await ask({ conversationId })).status).toBe(404)
+
+      await fetch(`${baseUrl}/v1/widget/escalate`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: GOOD_ORIGIN, authorization: `Bearer ${token}` },
+        body: JSON.stringify({ conversationId }),
+      })
+
+      const granted = await ask({ conversationId })
+      expect(granted.status).toBe(200)
+      const body = (await granted.json()) as { ticket: string; expiresAt: number }
+      expect(body.ticket).toContain(".")
+      // 60 seconds, not the session token's 30 minutes: it rides in a URL.
+      expect(body.expiresAt - Date.now()).toBeLessThanOrEqual(60_000)
+      // The long-lived credential is NOT what gets handed over.
+      expect(body.ticket).not.toBe(token)
+
+      // Another visitor cannot get a ticket to this conversation.
+      expect((await ask({ conversationId }, await freshToken())).status).toBe(404)
+      expect((await ask({ conversationId: "nope" })).status).toBe(400)
+    })
+
     it("rejects a bad token and a malformed conversationId before any write", async () => {
       const token = await freshToken()
       expect((await escalate("not-a-token", { conversationId: newId("con") })).status).toBe(401)

@@ -124,8 +124,16 @@ M4 (human handoff) is underway. M4.1 is done — the escalation transition
 (§3.3.4, §3.23, DATAFLOW §8): a conversation becomes a person's exactly
 once, idempotent by SCHEMA rather than by application deduplication, and
 the bot then stays out of the thread while still persisting everything the
-visitor types, because that is what the waiting agent needs to read. The
-one package in the plan but not here — loadtest/ — arrives later in M4.
+visitor types, because that is what the waiting agent needs to read.
+M4.2 is done — the socket that carries the conversation (§2.4.7, §3.24,
+§3.25, DATAFLOW §8.3): identity at UPGRADE via a single-use 60-second
+ticket, because a browser cannot put a credential in a WebSocket
+handshake's headers and a URL is the worst place in the system to keep
+one; an agent attaching IS the claim; and every message is persisted
+before it is broadcast, with the sender's role taken from the ticket and
+never from the frame. Still open in M4: replay on reconnect, typing
+indicators, and the two UI ends (widget bubble, agent inbox). The one
+package in the plan but not here — loadtest/ — arrives with them.
 
 ---
 
@@ -316,6 +324,26 @@ incremental claim parser can later emit each claim the moment it verifies
 WITHOUT changing this protocol — that future-proofing is the reason the
 protocol is claim-granular rather than delta-granular. The M2.5 SSE route
 serializes these verbatim; the widget consumes them.
+
+#### §2.4.7 `shared/handoff/protocol.ts`
+The handoff socket's wire protocol (M4.2) — the human half of the
+conversation, where §2.4.4c's AnswerEvent is the bot's. In shared/ for the
+same reason: three packages speak it (realtime produces and consumes, the
+widget is the visitor end, the dashboard the agent end).
+
+Deliberately tiny and SYMMETRIC: both ends send the identical frame
+(`{type:"message", text}`), and the server is what knows who is talking. A
+client that could declare its own role would be a client that could
+impersonate an agent, so role is never an input, only an output — the
+socket takes it from the ticket. Server frames are `ready` (who you are +
+the handoff's state; a client that never gets one did not authenticate),
+`message` (broadcast to EVERYONE including the sender, so both ends render
+one order from one source of truth rather than guessing whether their own
+message landed), `presence` (a COUNT, not names — a support agent's
+identity is the tenant's to disclose, not ours), and `error`. Errors here
+carry a reason, unlike the public SSE stream's opaque one, because both
+ends of this socket are authenticated parties. `MAX_HANDOFF_MESSAGE_CHARS`
+(4000) is the socket's equivalent of app.ts's 64 KB body cap.
 
 #### §2.4.6 `shared/db/schema.ts`
 The hand-written Kysely types for every table — MOVED here from
@@ -945,6 +973,26 @@ force-exits.
   invariant (§3.3.4). Plus the schema states that would corrupt the queue:
   active with nobody holding it, closed with no closing time, an unknown
   reason.
+- `handoff/__tests__/ticket.test.ts` — keyless. Round-trip, a distinct
+  nonce per mint, the expiry boundary (valid at exp−1, rejected AT exp),
+  tamper/wrong-secret/garbage/validly-signed-wrong-shape, KEY SEPARATION in
+  both directions (a session token is not a ticket and vice versa), and
+  single use: consumed once, refused forever, with the sweep proven to drop
+  only entries whose tickets the verifier would already reject.
+- `handoff/__tests__/socket.test.ts` — DB-gated, and the only suite that
+  drives real WebSocket clients against a real listener. The upgrade
+  boundary first: no ticket, a forged one, and the wrong path are refused
+  with status codes rather than accepted-then-closed; a REPLAYED ticket is
+  refused seconds later while still unexpired; another org's, another
+  visitor's, and a closed handoff's tickets all 404. Then the behavior: an
+  agent attaching flips the row to active with claimed_by set and both
+  sides see presence change (and see it change back when they leave); the
+  relay carries both ways with roles taken from the TICKET — a visitor
+  frame claiming `role:"agent"` is stored as a visitor's — and both ends
+  receive the identical broadcast; malformed, empty, and oversized frames
+  are refused WITHOUT dropping the socket (hanging up on a visitor
+  mid-support-conversation is not an error-handling strategy); and a
+  message reaches only its own room.
 - `credentials/__tests__/vault.test.ts` — keyless. Round-trip, AAD swap,
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
@@ -1640,6 +1688,74 @@ visitor who has spent their question budget should not have a separate
 allowance for summoning staff. Reason is fixed to `visitor_request` at this
 boundary: `low_confidence` is the pipeline's call to make, not a request's
 to claim.
+
+### §3.24 `src/handoff/ticket.ts` — identity at upgrade (M4.2)
+
+Both ends of the handoff socket already hold a credential: the visitor a
+30-minute session token, the agent a dashboard cookie. Neither can be used
+directly, because **a browser cannot set headers on a WebSocket
+handshake** — the credential would have to ride in the URL, and a URL is
+the worst place in this system to put one (access logs, proxy logs, error
+reports). So each side spends its real credential on an ordinary
+authenticated POST and receives a ticket good for SIXTY SECONDS and
+exactly ONE upgrade. A ticket recovered from a log is already spent,
+already expired, or both.
+
+Signed with a key DERIVED from WIDGET_TOKEN_SECRET
+(`HMAC(secret, "interrelated/handoff-ticket/v1")`) rather than the secret
+itself: one env var, two token types, and cross-acceptance impossible by
+construction — a session token can never verify as a ticket even if a
+future refactor made their payload shapes overlap. A test pins both
+directions.
+
+Single-use is the half that needs state, and it is in-memory on purpose —
+the §3.17.2 argument (one always-on instance; a shared store would defend
+against a topology that cannot occur). The sweep is safe by ordering: an
+entry is dropped only once the ticket it remembers has expired, and expiry
+is checked by the verifier BEFORE the registry is consulted, so a sweep can
+never re-open a spent ticket. **The honest limit, which belongs in the
+README:** a second instance would need this set — and §3.25's rooms — in
+Redis. It is the one place where "a second worker is a deploy, not a
+rewrite" stops being true for this codebase.
+
+### §3.25 `src/handoff/socket.ts` — the WebSocket server (M4.2)
+
+`noServer: true` with a hand-written upgrade handler, deliberately. The ws
+library will happily attach to an http server and let you authenticate in
+the connection handler — the wrong shape, because it completes a handshake
+for an unauthenticated party: a connection exists, holds a slot, and can
+send frames before anyone has checked who it is. Here the ticket is
+verified and SPENT before `handleUpgrade` is called at all, so an
+unauthenticated socket is never a WebSocket — it is a TCP connection that
+gets an HTTP status and a FIN. That is the identity-at-upgrade pattern the
+plan names, and the smoke probe asserts it from outside the image by
+sending a real handshake and requiring a 401 rather than a 101.
+
+After the ticket, the database still gets a say: the handoff must be open
+(one closed in the seconds since minting means the conversation is the
+bot's again), the org must match, and a VISITOR ticket only opens its own
+conversation. An **agent attaching IS the claim** — presence is the product
+meaning of "active", so there is no separate button to forget to press;
+the UPDATE is guarded on `status='pending'` so two agents arriving together
+produce one claim and two participants rather than a lost update.
+
+On a message: validated, PERSISTED, then broadcast — in that order, because
+a message the other side saw but the transcript never recorded is worse
+than a slow one, and the transcript view (§9.10) is the record of what was
+said. The role written to `messages.role` comes from the ticket; a frame
+claiming `role: "agent"` is ignored, which a test proves by sending exactly
+that. Rooms are keyed by conversation so a broadcast cannot cross threads
+(also tested), and empty rooms are deleted rather than accumulating one
+entry per conversation the service has ever seen. The heartbeat exists for
+half-open sockets — a closing laptop lid never fires 'close', and without
+it a phantom agent would show as present forever while the visitor waits
+for someone who left.
+
+Shutdown ordering matters and server.ts handles it: sockets are terminated
+BEFORE `server.close()` can finish, because an open WebSocket is a live
+connection and http.Server.close waits for every one — a deploy would
+otherwise hang until Render's kill timeout with browsers still holding
+sockets.
 
 ---
 

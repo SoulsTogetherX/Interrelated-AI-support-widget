@@ -42,7 +42,11 @@ credential row, with a model change re-queueing the corpus in the same
 transaction that changed it (§7.8) — **M3 COMPLETE.** M4 (handoff) is
 underway: as of M4.1 a conversation can be handed to a person (§8), which
 is one idempotent state change and one deliberate silence — the bot stops
-answering that thread while still keeping every word the visitor types.
+answering that thread while still keeping every word the visitor types —
+and as of M4.2 the two of them can actually talk (§8.3): a single-use
+60-second ticket settles identity BEFORE the WebSocket handshake
+completes, an agent attaching claims the handoff, and every message is
+persisted before it is broadcast.
 
 ---
 
@@ -122,9 +126,14 @@ process start
               migration's header spells out)
       2. createApp()                     realtime/src/app.ts
            → trust proxy, 64 KB JSON cap, configureHealthRoutes()
-      3. createServer(app).listen(BACKEND_PORT ?? PORT ?? 3000)
-           (explicit http server, not app.listen — M4 attaches the
-            WebSocket upgrade handler to this same object)
+      3. createServer(app)
+           → createHandoffServer({db, ticketSecret})
+                                         realtime/src/handoff/socket.ts
+           → server.on("upgrade", …)     the reason this is an explicit
+                                         http server and not app.listen:
+                                         the handoff socket attaches to
+                                         THIS object (§8.3)
+           → .listen(BACKEND_PORT ?? PORT ?? 3000)
       4. if INGEST_WORKER=1:             realtime/src/server.ts
            → buildEmbedder()             mock, or local via dynamic import
            → new IngestWorker({...}).start()
@@ -141,6 +150,10 @@ SIGTERM (Render deploy / docker stop) or SIGINT (Ctrl+C)
   → shutdown()                           realtime/src/server.ts
       1. worker.stop()    — no new ticks; an in-flight job is requeued
                             between pages (§3.4) so no work is lost
+      1b. handoff.close() — terminate open WebSockets FIRST: http.Server
+                            .close() waits for every live connection, and
+                            a socket is one, so a deploy would otherwise
+                            hang until the platform's kill timeout
       2. server.close()   — stop accepting; in-flight requests finish
       3. pool.end()       — release Postgres connections (after 1 resolves)
       4. exit(0)          (exit(1) if the drain itself errored)
@@ -915,3 +928,69 @@ The persist-then-stop order is the point: the visitor's words are exactly
 what the waiting agent needs to read, and someone who keeps typing while
 queued must not have those turns dropped. Answering anyway would put two
 voices in one conversation and bill the tenant for it.
+
+### §8.3 The socket — ticket → upgrade → two-way conversation (M4.2)
+
+Neither end can put its real credential in a WebSocket handshake (browsers
+set no headers there), so both spend it on an ordinary POST first:
+
+```
+VISITOR                                 AGENT
+POST /v1/widget/handoff-ticket          POST /internal/orgs/<id>/handoff-tickets
+  Bearer <session token>                  x-internal-secret  (from a Next
+  realtime/src/routes/widget.ts            Server Action that already
+                                           established the user's session)
+  → conversation must be THEIRS and      → user must be a MEMBER, and the
+    have an open handoff, else 404         handoff open, else 404
+  → mintHandoffTicket(role:"visitor")    → mintHandoffTicket(role:"agent")
+                                         realtime/src/routes/internal.ts
+        both: realtime/src/handoff/ticket.ts — 60s, single use, signed with
+        a key DERIVED from WIDGET_TOKEN_SECRET so a session token can never
+        be spent as a ticket
+```
+
+Then the upgrade, where identity is settled before a WebSocket exists:
+
+```
+GET /v1/handoff?ticket=…  (Upgrade: websocket)
+  → server.on("upgrade")             realtime/src/server.ts
+  → handleUpgrade                    realtime/src/handoff/socket.ts
+      path mismatch                  → 404 + FIN
+      verifyHandoffTicket            → 401 + FIN   (forged, expired, shape)
+      tickets.consume(jti)           → 401 + FIN   (REPLAY — spent before
+                                       any database work, so a replayed
+                                       ticket costs what a forged one does)
+      handoff still open? org match? visitor's own conversation?
+                                     → 404 + FIN
+      ── only now ──> wss.handleUpgrade → a WebSocket exists
+  → onConnection
+      join room (keyed by conversation)
+      agent + status 'pending' → UPDATE … SET status='active',
+        claimed_by, claimed_at WHERE status='pending'
+        (attaching IS claiming; the guard makes two agents arriving
+         together one claim and two participants)
+      → send  {type:"ready", role, conversationId, status}
+      → broadcast {type:"presence", agents, visitors}
+```
+
+And the relay, which is the same in both directions:
+
+```
+client → {type:"message", text}
+  → onFrame                          realtime/src/handoff/socket.ts
+      JSON? shape? 1..4000 chars?    → {type:"error", reason} and the
+                                       socket STAYS OPEN
+      → ONE transaction: INSERT messages (role from the TICKET, never
+                           from the frame)
+                         UPDATE conversations.last_message_at
+      → broadcast {type:"message", id, role, text, at} to the whole room,
+        sender included
+close / heartbeat timeout
+  → leave room → broadcast presence  (a phantom agent would otherwise
+                                      leave the visitor waiting forever)
+```
+
+Not yet: replay on reconnect (a client that drops mid-conversation
+reconnects to a live socket but no backlog), typing indicators, and both
+UI ends. The transcript is already complete in Postgres — §9.10 renders it
+— so replay is a read the socket does not yet perform, not data it lacks.

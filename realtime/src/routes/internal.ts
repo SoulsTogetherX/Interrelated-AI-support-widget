@@ -39,6 +39,7 @@ import {
   testGenerationRoundTrip,
 } from "@/credentials/validate"
 import { encryptProviderKey, keySuffix } from "@/credentials/vault"
+import { mintHandoffTicket } from "@/handoff/ticket"
 
 import type { Transaction } from "kysely"
 import type { Express, Request, Response, NextFunction } from "express"
@@ -51,6 +52,10 @@ interface InternalRouteOptions {
   /** The shared secret. app.ts only mounts this surface when present;
    *  server.ts refuses a secret shorter than 32 chars at boot. */
   secret: string
+  /** The widget token secret, from which handoff-ticket keys are derived
+   *  (M4.2). Same value the socket verifies with — passed rather than read
+   *  from env here so tests can drive both ends deterministically. */
+  ticketSecret: string
   /** Injectable URL vet, applied to credential base URLs AND source
    *  locations alike (tests reach loopback fakes; production default
    *  rejects anything non-public). */
@@ -356,6 +361,64 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       options.onEnqueue?.()
 
       res.json({ ok: true, sourceId, jobId })
+    },
+  )
+
+  /**
+   * Mint an AGENT's handoff-socket ticket (M4.2). The dashboard cannot sign
+   * one itself — the ticket key is derived from realtime's token secret,
+   * which web has no business holding — so a Server Action asks for one
+   * here, having already established the user's session.
+   *
+   * This route is the only thing in the system that can mint an agent
+   * ticket, so it re-establishes what web claims rather than trusting it:
+   * the user must be a MEMBER of the org (either role — reading and
+   * answering conversations is the agent job), and the conversation must
+   * belong to that org and have a handoff still open. The socket's upgrade
+   * check repeats the last part; this one keeps a ticket from existing at
+   * all for a conversation nobody is waiting on.
+   */
+  app.post(
+    "/internal/orgs/:orgId/handoff-tickets",
+    requireSecret,
+    requireOrg,
+    async (req: Request, res: Response) => {
+      const b = (req.body ?? {}) as Record<string, unknown>
+      const conversationId = typeof b.conversationId === "string" ? b.conversationId : ""
+      const userId = typeof b.userId === "string" ? b.userId : ""
+      if (!isId("con", conversationId) || !isId("usr", userId)) {
+        res.status(422).json({ ok: false, error: "conversationId and userId are required." })
+        return
+      }
+
+      const member = await db
+        .selectFrom("org_members")
+        .select("user_id")
+        .where("org_id", "=", res.locals.orgId as string)
+        .where("user_id", "=", userId)
+        .executeTakeFirst()
+      if (!member) {
+        res.status(404).json({ ok: false, error: "not found" })
+        return
+      }
+
+      const open = await db
+        .selectFrom("handoff_sessions")
+        .select("id")
+        .where("conversation_id", "=", conversationId)
+        .where("org_id", "=", res.locals.orgId as string)
+        .where("status", "!=", "closed")
+        .executeTakeFirst()
+      if (!open) {
+        res.status(404).json({ ok: false, error: "not found" })
+        return
+      }
+
+      const minted = mintHandoffTicket(
+        { con: conversationId, org: res.locals.orgId as string, role: "agent", sub: userId },
+        options.ticketSecret,
+      )
+      res.json({ ok: true, ticket: minted.ticket, expiresAt: minted.expiresAt })
     },
   )
 
