@@ -38,8 +38,19 @@ const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return next
 }) as typeof fetch
 
+/** Never called by these tests — the socket has its own suite (handoff.test.ts)
+ *  where a scripted fake stands in for a real connection. */
+const noSocket = (): WebSocket => {
+  throw new Error("no socket expected in the HTTP suite")
+}
+
 function makeClient(): ApiClient {
-  return new ApiClient({ apiBase: "https://api.test/", publishableKey: "pk_test", fetchImpl: fakeFetch })
+  return new ApiClient({
+    apiBase: "https://api.test/",
+    publishableKey: "pk_test",
+    fetchImpl: fakeFetch,
+    socketFactory: noSocket,
+  })
 }
 
 const MINT_OK = () => jsonResponse(200, { token: "tok.sig", expiresAt: 9999999999999, visitorId: "vis_abc" })
@@ -120,6 +131,39 @@ describe("ApiClient", () => {
 
     script = [MINT_OK(), jsonResponse(429, { error: "too many requests" })]
     await expect(collect(makeClient().ask("q"))).rejects.toBeInstanceOf(RateLimitError)
+  })
+
+  it("escalates over the same authenticated path, reporting who created the handoff", async () => {
+    script = [MINT_OK(), jsonResponse(200, { status: "pending", created: true })]
+    const outcome = await makeClient().escalate("con_1")
+    expect(outcome).toEqual({ status: "pending", created: true })
+    expect(calls[1]!.url).toBe("https://api.test/v1/widget/escalate")
+    expect(calls[1]!.headers["authorization"]).toBe("Bearer tok.sig")
+    expect(calls[1]!.body).toEqual({ conversationId: "con_1" })
+  })
+
+  it("mints a socket ticket, and re-mints the SESSION once when it has expired", async () => {
+    // The whole reason #authed is shared: a 30-minute session expiring
+    // while a visitor waits for an agent must be as invisible on the ticket
+    // route as it is on chat — otherwise the socket simply never reconnects.
+    script = [
+      MINT_OK(),
+      jsonResponse(401, { error: "invalid session" }),
+      MINT_OK(),
+      jsonResponse(200, { ticket: "tkt.sig", expiresAt: 9999999999999 }),
+    ]
+    expect(await makeClient().handoffTicket("con_1")).toBe("tkt.sig")
+    expect(calls.map((c) => c.url.split("/").at(-1)))
+      .toEqual(["session", "handoff-ticket", "session", "handoff-ticket"])
+  })
+
+  it("reports a closed handoff as null, not as an error — only one of them stops retrying", async () => {
+    script = [MINT_OK(), jsonResponse(404, { error: "conversation not found" })]
+    expect(await makeClient().handoffTicket("con_gone")).toBeNull()
+
+    // A server failure still throws: the reconnect loop must keep trying.
+    script = [MINT_OK(), jsonResponse(500, { error: "internal error" })]
+    await expect(makeClient().handoffTicket("con_1")).rejects.toThrow(/handoff ticket failed \(500\)/)
   })
 
   it("surfaces a second 401 as a real failure instead of looping", async () => {

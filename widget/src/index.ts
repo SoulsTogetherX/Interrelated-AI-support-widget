@@ -11,6 +11,11 @@ import { mountWidget } from "./ui"
 // an es2020 target, async functions use the engine's internal Promise, not
 // window.Promise.)
 const capturedFetch = window.fetch.bind(window)
+// Same argument for the socket constructor: the handoff connection must not
+// route through whatever a host page installed over window.WebSocket after
+// us. Captured as a factory so nothing downstream touches a global.
+const CapturedWebSocket = window.WebSocket
+const capturedSocketFactory = (url: string): WebSocket => new CapturedWebSocket(url)
 //#endregion
 
 //#region Boot
@@ -49,7 +54,12 @@ function boot(): void {
     document.body.append(host)
     mountWidget(
       host,
-      new ApiClient({ apiBase: api, publishableKey: key, fetchImpl: capturedFetch }),
+      new ApiClient({
+        apiBase: api,
+        publishableKey: key,
+        fetchImpl: capturedFetch,
+        socketFactory: capturedSocketFactory,
+      }),
       {
         ...(title !== undefined ? { title } : {}),
         ...(accent !== undefined ? { accent } : {}),

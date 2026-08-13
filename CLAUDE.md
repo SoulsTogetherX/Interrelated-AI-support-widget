@@ -131,9 +131,32 @@ ticket, because a browser cannot put a credential in a WebSocket
 handshake's headers and a URL is the worst place in the system to keep
 one; an agent attaching IS the claim; and every message is persisted
 before it is broadcast, with the sender's role taken from the ticket and
-never from the frame. Still open in M4: replay on reconnect, typing
-indicators, and the two UI ends (widget bubble, agent inbox). The one
-package in the plan but not here — loadtest/ — arrives with them.
+never from the frame. M4.3 is done, and with it the socket PROTOCOL is
+complete (§2.4.7, §3.25, DATAFLOW §8.4): a client that drops gets the
+conversation back on attach — the bot's half included, because that is
+what an arriving agent needs to read — delivered exactly once even when
+messages land during the attach itself, and on Postgres's clock so replay
+and live frames merge into one correctly ordered thread; and typing
+travels as an ephemeral, self-expiring hint that touches no table, is
+never echoed to its sender, and cannot be turned into a broadcast storm
+by a per-keystroke client. M4.4 is done — the VISITOR's end of that
+protocol (§8.1b–§8.1c, DATAFLOW §8.5): a refusal now offers a person, the
+panel switches from the bot to the socket, and the widget survives losing
+its connection because a ticket is single-use and a reconnect is simply a
+fresh mint. Verified live in a real browser against the Tailwind fixture,
+with a scripted agent standing in for the inbox that does not exist yet:
+refusal → escalate → the transcript replayed over the local thread → a
+message echoed back from the server rather than rendered optimistically →
+the agent's arrival flipping presence and claiming the handoff exactly
+once → "Support is typing…" appearing and self-expiring at its TTL → and
+the server KILLED mid-conversation, after which the widget reconnected on
+its own and its next message persisted through the new process. The
+bundle is 5.65 KB gzipped against the 15 KB budget. Still open in M4: the
+agent inbox in the dashboard — the last consumer of the protocol — and,
+recorded honestly rather than half-built, resuming a handoff across a page
+RELOAD (the widget keeps its conversation id in memory only; DATAFLOW §8.5
+states what that costs). The one package in the plan but not here —
+loadtest/ — arrives with the inbox.
 
 ---
 
@@ -331,19 +354,47 @@ conversation, where §2.4.4c's AnswerEvent is the bot's. In shared/ for the
 same reason: three packages speak it (realtime produces and consumes, the
 widget is the visitor end, the dashboard the agent end).
 
-Deliberately tiny and SYMMETRIC: both ends send the identical frame
-(`{type:"message", text}`), and the server is what knows who is talking. A
-client that could declare its own role would be a client that could
-impersonate an agent, so role is never an input, only an output — the
-socket takes it from the ticket. Server frames are `ready` (who you are +
-the handoff's state; a client that never gets one did not authenticate),
-`message` (broadcast to EVERYONE including the sender, so both ends render
-one order from one source of truth rather than guessing whether their own
-message landed), `presence` (a COUNT, not names — a support agent's
-identity is the tenant's to disclose, not ours), and `error`. Errors here
-carry a reason, unlike the public SSE stream's opaque one, because both
-ends of this socket are authenticated parties. `MAX_HANDOFF_MESSAGE_CHARS`
-(4000) is the socket's equivalent of app.ts's 64 KB body cap.
+Deliberately tiny and SYMMETRIC: both ends send the identical frames
+(`{type:"message", text}` and `{type:"typing", active}`), and the server is
+what knows who is talking. A client that could declare its own role would
+be a client that could impersonate an agent, so role is never an input,
+only an output — the socket takes it from the ticket. Server frames are
+`ready` (who you are + the handoff's state; a client that never gets one
+did not authenticate), `message` (broadcast to EVERYONE including the
+sender, so both ends render one order from one source of truth rather than
+guessing whether their own message landed), `presence` (a COUNT, not names
+— a support agent's identity is the tenant's to disclose, not ours), and
+`error`. Errors here carry a reason, unlike the public SSE stream's opaque
+one, because both ends of this socket are authenticated parties.
+`MAX_HANDOFF_MESSAGE_CHARS` (4000) is the socket's equivalent of app.ts's
+64 KB body cap.
+
+M4.3 added the two frames that make a dropped connection survivable and a
+silence legible, and each is shaped by what it is NOT:
+
+- **`history`** is a separate frame from `message`, not a burst of them,
+  because a replayed message is not a new event: a client receiving the
+  backlog as `message` frames would double-render everything it still had
+  and ring a notification for prose from an hour ago. One frame is
+  something a client renders OVER its thread instead of appending to. Its
+  entries carry `HandoffTranscriptRole`, which is WIDER than the socket's
+  own role union — the bot's answers are in there as `assistant`, because
+  what the bot already told this visitor is most of what an arriving agent
+  needs to read, and relabelling those turns would misattribute them.
+  Bounded by `HANDOFF_HISTORY_LIMIT` (50): an upgrade must not become an
+  unbounded transcript download, and the dashboard already has the full
+  record over HTTP (§9.10).
+- **`typing`** is never persisted, never replayed, and never echoed to its
+  sender — the transcript is the record of what was SAID, not of what
+  someone nearly said, and a client knows it is typing. It carries a role
+  rather than a name, for presence's reason. The self-expiry is a
+  CONTRACT rather than server state: `TYPING_TTL_MS` (6000) is how long a
+  receiver may hold the indicator without a refresh, `TYPING_HINT_INTERVAL_MS`
+  (2000) how often a still-typing client re-asserts it. TTL > 2× interval
+  so one dropped or throttled frame makes the indicator flicker rather
+  than lie, and a socket that dies mid-sentence cannot leave "an agent is
+  typing…" on screen forever — the phantom-participant problem the
+  heartbeat solves for presence, solved here without a timer per socket.
 
 #### §2.4.6 `shared/db/schema.ts`
 The hand-written Kysely types for every table — MOVED here from
@@ -992,7 +1043,19 @@ force-exits.
   receive the identical broadcast; malformed, empty, and oversized frames
   are refused WITHOUT dropping the socket (hanging up on a visitor
   mid-support-conversation is not an error-handling strategy); and a
-  message reaches only its own room.
+  message reaches only its own room. The M4.3 block covers replay and
+  typing: the backlog carries the BOT's turns as well as the humans' (an
+  arriving agent must not have to go find what the visitor was already
+  told), a reconnecting client gets back what it said with a
+  byte-identical timestamp (the one-clock property), the backlog is
+  bounded to the NEWEST window, and a client attaching mid-conversation
+  sees every message exactly once — the case that fails 3 runs of 3 with
+  the buffer removed. Typing: relayed to the other side, coalesced from a
+  five-keystroke burst into ONE frame, never echoed to the sender, never
+  written to `messages`, cleared by sending, and cleared again by
+  disconnecting mid-sentence. Every connection in the suite now also pins
+  the opening order (ready → history → presence) through one shared
+  helper, which asserts backlog and flushed ids are disjoint.
 - `credentials/__tests__/vault.test.ts` — keyless. Round-trip, AAD swap,
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
@@ -1751,6 +1814,41 @@ half-open sockets — a closing laptop lid never fires 'close', and without
 it a phantom agent would show as present forever while the visitor waits
 for someone who left.
 
+**M4.3 — replay and typing.** Attaching now yields `ready` → `history` →
+`presence`, and the room relays composing hints. Three decisions carry it:
+
+1. **The backlog is buffered into, not read around.** A client joins its
+   room BEFORE its history is read, so both naive orderings are wrong in
+   the window between: reading first and joining after LOSES a message
+   committed in between (nobody was in the room to hear the broadcast),
+   while joining first without a buffer delivers one TWICE — or delivers
+   it and then renders the backlog over it. So live `message` frames queue
+   on the attachment until the backlog is on the wire, then flush minus
+   any id the backlog already carried. The window is one indexed SELECT
+   wide and the fix costs an empty array per connection; the test that
+   pins it attaches a client mid-conversation and asserts every message
+   arrives exactly once under EITHER interleaving — and it failed on 3
+   runs of 3 with the buffer removed, which is what makes it a regression
+   test rather than decoration.
+2. **One clock, and it is Postgres's.** The message insert now RETURNs
+   `created_at` and broadcasts that, instead of stamping a `Date` in this
+   process. Replay and live frames land in ONE rendered list, and this
+   process and the database are different machines (Render and Neon) —
+   their skew can exceed the gap between two turns of a fast exchange, so
+   taking the stored instant for both makes a reconnecting client's merged
+   thread ordered by construction. It also matches the answer pipeline's
+   rows, which take the column default. A test asserts the `at` a client
+   sees live is byte-identical to the one it gets back on replay.
+3. **Typing costs the server no timer and no state worth leaking.** The
+   relay coalesces: a repeat earns the wire only when it refreshes a
+   receiver's TTL, a change always does, and a hard 250 ms floor bounds a
+   per-keystroke client — by DROPPING, never by erroring, since answering
+   every keystroke with an error frame is a worse storm than the one being
+   prevented. A state change lost to the floor self-heals within
+   `TYPING_TTL_MS`, which is what that TTL is for. Two stops are explicit
+   rather than left to it: sending a message ends composing by definition,
+   and a socket closing mid-sentence announces the stop on its way out.
+
 Shutdown ordering matters and server.ts handles it: sockets are terminated
 BEFORE `server.close()` can finish, because an open WebSocket is a live
 connection and http.Server.close waits for every one — a deploy would
@@ -1940,6 +2038,18 @@ their deps; all four are devDependencies). shared/ contributes TYPE-ONLY
 imports (the AnswerEvent wire protocol) that esbuild erases — zero bytes,
 one source of truth for the contract.
 
+Since M4.4 shared/ also contributes three VALUES — the handoff protocol's
+`MAX_HANDOFF_MESSAGE_CHARS`, `TYPING_HINT_INTERVAL_MS`, and
+`TYPING_TTL_MS`. That is not a softening of the no-runtime-imports rule
+(§8.1), which is about BEHAVIOR: an SSE parser is reimplemented for browser
+streams rather than lifted from the server. A TTL and its refresh interval
+are contract — the invariant that makes them correct (TTL > 2× interval)
+is a property of the PAIR, so copying the numbers here is exactly the
+drift shared/ exists to prevent. esbuild inlines them and no module
+survives into the bundle; the one visible cost is that `@shared` now needs
+an alias in the widget's esbuild command and vitest config, because
+type-only imports were erased before anything had to resolve them.
+
 ### §8.1 `src/index.ts` + `src/api.ts` + `src/sse.ts`
 The boot and network half. index.ts reads its config off its own
 `<script>` tag (data-key / data-api / data-title / data-accent) via
@@ -1965,6 +2075,59 @@ the token that owned the just-created conversation, making every
 follow-up ask die "conversation not found". A test now pins
 three concurrent ensureSession calls to exactly one mint request.
 
+M4.4 added `escalate`, `handoffTicket`, and `openHandoff` to the same
+client, and in doing so factored the 401-re-mint dance into one `#authed`
+helper: a 30-minute session expiring while a visitor waits for an agent
+must be as invisible on the ticket route as it is on chat, or the socket
+would simply stop reconnecting after half an hour. `handoffTicket`
+returns NULL rather than throwing when there is no open handoff, because
+that is the one answer the reconnect loop must treat as final — a thrown
+error is an outage and outages are what the loop is for. `openHandoff`
+lives here rather than in ui.ts so the UI keeps knowing nothing about
+network configuration; it is the same seam that lets DOM tests inject
+scripted answers, now injecting a scripted socket.
+
+### §8.1b `src/handoff.ts`
+The visitor's end of the handoff socket (§2.4.7) — sse.ts's sibling: the
+protocol is shared, the transport is not. It owns the one fact the UI
+should not have to think about, that a socket is not a durable
+connection. Tickets are single-use and expire in 60 seconds (§3.24), so a
+reconnect is a fresh MINT plus a fresh upgrade; there is no credential
+kept anywhere, which is also why a stolen ticket is worthless. Backoff is
+exponential with jitter and capped at 8 s, and is reset by the `ready`
+FRAME rather than by the socket opening — a connection that opens and
+dies before authenticating has made no progress, and treating it as
+success is how a reconnect loop becomes a hot loop. The loop is
+unbounded, because giving up would leave a waiting visitor staring at a
+dead panel; it ends only on `close()` or on the null ticket that means
+the handoff is over. Composing hints are throttled here to the protocol's
+refresh interval (the server floors them again at 250 ms — a client that
+honors the contract never meets that floor), and the incoming indicator's
+TTL timer lives here too: the RECEIVER expiring it is precisely why the
+server needs no timer per socket.
+
+### §8.1c The handoff UI (in `src/ui.ts`)
+Three entry points, one state. The "Talk to a person" offer appears after
+a REFUSAL — the moment the product has admitted it cannot help, which the
+events protocol names in as many words (§2.4.4c) — and never stacks a
+second button. A `handoff` answer event enters the same mode without any
+click, which is how a tab that did not escalate catches up (another tab
+did, or the page was reloaded mid-handoff). And `ended` leaves it, giving
+the conversation back to the bot — literally true server-side, since the
+pipeline stops finding an open handoff and answers again.
+
+Two decisions are worth their comments. Sent messages are NOT rendered
+locally: the server echoes every message to its sender (§2.4.7), so the
+echo is the render — one order from one source of truth, and nothing to
+reconcile against the replay. And `history` REPLACES the thread rather
+than appending to it, because on attach the server's transcript is the
+truth; the honest cost is that earlier bot answers come back as the text
+the visitor saw, without the citation links the widget drew the first
+time (messages.content is visitor-facing text; the per-claim verdicts
+live in the dashboard, §9.10). A send that could not go returns false and
+the visitor's words stay in the box — a support message that silently
+vanished is worse than one that visibly did not send.
+
 ### §8.2 `src/ui.ts` + `src/styles.ts`
 The rendering half, built on a three-line element factory with one iron
 rule: everything textual goes through textContent, NEVER innerHTML —
@@ -1988,11 +2151,32 @@ sse: frame reassembly across network chunks, a multi-byte character
 split mid-encoding, non-data frames ignored, trailing partial never
 parsed. api: mint-once semantics, visitor-id persistence and reuse,
 bearer-token asks, the 401→re-mint→retry dance (and a SECOND 401
-surfacing as failure instead of looping), both 429 mappings. ui: shadow
-isolation (nothing leaks into light DOM), open/greet/warm behavior,
+surfacing as failure instead of looping), both 429 mappings, escalation
+over the same authenticated path, a ticket mint that re-mints the SESSION
+mid-wait, and the closed-handoff null vs the 500 that still throws. ui:
+shadow isolation (nothing leaks into light DOM), open/greet/warm behavior,
 claims with citation links, conversation-id threading between asks, the
 XSS and javascript:-href probes, refusal rendering, and all three
 failure shapes recovering the input — the widget never bricks.
+
+handoff (M4.4): the socket suite drives a scripted FakeSocket, so a
+connection's whole lifecycle is deterministic. Pinned: the ticket rides
+the URL and the URL is wss + the mounted path; status follows the
+server's frames (ready → waiting, presence → connected and back); history
+and live messages reach DIFFERENT callbacks (collapsing them would
+double-render a reconnecting client); composing hints coalesce to one
+frame per interval and re-announce immediately after a send; the incoming
+indicator expires on the RECEIVER's timer with no frame saying so; a send
+before `ready` is refused rather than swallowed; a drop reconnects with a
+NEW ticket, a null ticket ends it permanently, a FAILED mint keeps
+retrying (an outage is not a decision), and close() stops everything. The
+UI suite covers the same states through the DOM: the offer appearing only
+after a refusal and only once, escalation switching the panel, the
+transcript rendering the bot's turns alongside the agent's, sends going
+to the socket instead of the bot with unsent text kept, catching up on a
+`handoff` event this tab did not start, ending handing the composer back
+to the assistant, and the XSS probe repeated for socket text — because
+agent prose is as attacker-reachable as model output.
 
 ### §8.4 `fixtures/` + `scripts/serve.mjs`
 The three host pages the plan requires, each testing a distinct failure

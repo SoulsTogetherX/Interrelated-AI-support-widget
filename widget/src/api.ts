@@ -1,6 +1,8 @@
 //#region Imports
 import type { AnswerEvent } from "@shared/grounding/events"
 import { readAnswerEvents } from "./sse"
+import { HandoffSocket } from "./handoff"
+import type { HandoffConnection, HandoffHandlers, SocketFactory } from "./handoff"
 //#endregion
 
 //#region Type Defs
@@ -13,6 +15,30 @@ import { readAnswerEvents } from "./sse"
 interface WidgetClient {
   ensureSession(): Promise<void>
   ask(question: string, conversationId?: string): AsyncIterable<AnswerEvent>
+  /** Hand this conversation to a person (M4.1). Idempotent server-side, so
+   *  a double click costs a round-trip and nothing else; `created` false
+   *  means the visitor was already in the queue and the UI should not
+   *  announce it twice. */
+  escalate(conversationId: string): Promise<{ status: string; created: boolean }>
+  /**
+   * A 60-second single-use ticket for the handoff socket (§3.24) — minted
+   * once per connection ATTEMPT and never stored, which is what makes a
+   * reconnect a fresh mint rather than a kept credential.
+   *
+   * NULL means there is no open handoff to connect to: the agent closed it,
+   * or it was never this visitor's. That is the terminal answer, and it is
+   * a return value rather than a thrown error precisely because it must be
+   * distinguishable from a network failure — one stops handoff.ts's
+   * reconnect loop, the other is what the loop is for.
+   */
+  handoffTicket(conversationId: string): Promise<string | null>
+  /**
+   * Opens the handoff socket for this conversation. On the CLIENT rather
+   * than constructed in ui.ts so the UI keeps knowing nothing about network
+   * configuration — the same split that lets DOM tests inject scripted
+   * answers, now injecting a scripted socket too.
+   */
+  openHandoff(conversationId: string, handlers: HandoffHandlers): HandoffConnection
 }
 
 interface ApiClientOptions {
@@ -22,6 +48,8 @@ interface ApiClientOptions {
    *  monkeypatch window.fetch after us, and the widget must not inherit
    *  whatever an analytics snippet did to it. */
   fetchImpl: typeof fetch
+  /** WebSocket, captured at load for fetch's reason. */
+  socketFactory: SocketFactory
 }
 
 /** The org's daily answer ceiling is spent — a terminal state for today,
@@ -59,6 +87,7 @@ class ApiClient implements WidgetClient {
   readonly #apiBase: string
   readonly #publishableKey: string
   readonly #fetch: typeof fetch
+  readonly #socketFactory: SocketFactory
   #token: string | null = null
   #visitorId: string | null = loadVisitor()
   #minting: Promise<void> | null = null
@@ -67,6 +96,7 @@ class ApiClient implements WidgetClient {
     this.#apiBase = options.apiBase.replace(/\/$/, "")
     this.#publishableKey = options.publishableKey
     this.#fetch = options.fetchImpl
+    this.#socketFactory = options.socketFactory
   }
 
   /**
@@ -112,13 +142,10 @@ class ApiClient implements WidgetClient {
    * terminal for today, a bucket limit is "try again in a moment".
    */
   async *ask(question: string, conversationId?: string): AsyncIterable<AnswerEvent> {
-    await this.ensureSession()
-    let response = await this.#post(question, conversationId)
-    if (response.status === 401) {
-      this.#token = null
-      await this.#mint()
-      response = await this.#post(question, conversationId)
-    }
+    const response = await this.#authed("/v1/widget/chat", {
+      question,
+      ...(conversationId !== undefined ? { conversationId } : {}),
+    })
     if (response.status === 429) {
       const body = await response.json().catch(() => null) as { error?: string } | null
       if (body?.error === "daily quota reached") throw new QuotaError(body.error)
@@ -128,17 +155,70 @@ class ApiClient implements WidgetClient {
     yield* readAnswerEvents(response.body)
   }
 
-  #post(question: string, conversationId?: string): Promise<Response> {
-    return this.#fetch(`${this.#apiBase}/v1/widget/chat`, {
+  /**
+   * Escalate to a person. The server is idempotent by SCHEMA (§3.3.4), so
+   * this needs no local guard against a double click — it reports which
+   * request actually created the handoff and lets the UI stay quiet on the
+   * second.
+   */
+  async escalate(conversationId: string): Promise<{ status: string; created: boolean }> {
+    const response = await this.#authed("/v1/widget/escalate", { conversationId })
+    // Escalation shares the chat route's per-visitor bucket on purpose
+    // (§3.23) — so its only 429 is that bucket, never the daily answer cap,
+    // which no model call is being made against.
+    if (response.status === 429) throw new RateLimitError("too many requests")
+    if (!response.ok) throw new Error(`escalate failed (${response.status})`)
+    return await response.json() as { status: string; created: boolean }
+  }
+
+  async handoffTicket(conversationId: string): Promise<string | null> {
+    const response = await this.#authed("/v1/widget/handoff-ticket", { conversationId })
+    // 404 is "no open handoff for this visitor" — which, after a successful
+    // escalate, means it was CLOSED: the one answer worth not retrying.
+    if (response.status === 404) return null
+    if (!response.ok) throw new Error(`handoff ticket failed (${response.status})`)
+    const body = await response.json() as { ticket: string }
+    return body.ticket
+  }
+
+  openHandoff(conversationId: string, handlers: HandoffHandlers): HandoffConnection {
+    const socket = new HandoffSocket({
+      apiBase: this.#apiBase,
+      conversationId,
+      client: this,
+      handlers,
+      socketFactory: this.#socketFactory,
+    })
+    socket.open()
+    return socket
+  }
+
+  /**
+   * Every authenticated call goes through here, which is what keeps the
+   * silent-re-mint rule in ONE place: a 30-minute token expiring
+   * mid-conversation must be invisible on the chat route, the escalate
+   * button, and every ticket mint alike — and a second 401 is a real
+   * failure that surfaces rather than a loop.
+   */
+  async #authed(path: string, body: Record<string, unknown>): Promise<Response> {
+    await this.ensureSession()
+    let response = await this.#post(path, body)
+    if (response.status === 401) {
+      this.#token = null
+      await this.#mint()
+      response = await this.#post(path, body)
+    }
+    return response
+  }
+
+  #post(path: string, body: Record<string, unknown>): Promise<Response> {
+    return this.#fetch(`${this.#apiBase}${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${this.#token}`,
       },
-      body: JSON.stringify({
-        question,
-        ...(conversationId !== undefined ? { conversationId } : {}),
-      }),
+      body: JSON.stringify(body),
     })
   }
 }

@@ -875,14 +875,16 @@ OriginForm submit
 ## §8 Handoff — bot → human (M4, underway)
 
 M4.1 is the transition itself: the moment a conversation stops being the
-bot's. The socket that carries the human's replies, presence, and replay
-arrive in the increments after this one; what exists today is the state
-change, the queue row it writes, and the silence it imposes on the bot.
+bot's — the state change, the queue row it writes, and the silence it
+imposes on the bot. M4.2 is the socket that carries the human's replies,
+M4.3 completes its protocol with replay and typing, and M4.4 is the
+visitor's end of it (§8.5). What is still missing is the agent's: the
+dashboard inbox that answers.
 
 ### §8.1 Escalation — POST `/v1/widget/escalate`
 
 ```
-widget "talk to a person"           (M4.3 renders the button)
+widget "talk to a person"           (the widget UI renders the button)
   → POST /v1/widget/escalate        realtime/src/routes/widget.ts
       Origin + Bearer token         the SAME authenticate() ladder chat
                                     uses: uniform 401 on a bad token, 403
@@ -964,12 +966,15 @@ GET /v1/handoff?ticket=…  (Upgrade: websocket)
                                      → 404 + FIN
       ── only now ──> wss.handleUpgrade → a WebSocket exists
   → onConnection
-      join room (keyed by conversation)
+      join room (keyed by conversation)   ← BEFORE the history read, so
+                                            nothing said meanwhile is lost
       agent + status 'pending' → UPDATE … SET status='active',
         claimed_by, claimed_at WHERE status='pending'
         (attaching IS claiming; the guard makes two agents arriving
          together one claim and two participants)
       → send  {type:"ready", role, conversationId, status}
+      → replay (§8.4)  → send {type:"history", messages[]}
+                       → flush anything buffered meanwhile
       → broadcast {type:"presence", agents, visitors}
 ```
 
@@ -981,16 +986,149 @@ client → {type:"message", text}
       JSON? shape? 1..4000 chars?    → {type:"error", reason} and the
                                        socket STAYS OPEN
       → ONE transaction: INSERT messages (role from the TICKET, never
-                           from the frame)
+                           from the frame) RETURNING created_at
                          UPDATE conversations.last_message_at
       → broadcast {type:"message", id, role, text, at} to the whole room,
-        sender included
+        sender included        ← `at` is the RETURNED created_at, so this
+                                 frame and §8.4's backlog agree on when
+      → was this sender typing? → broadcast {type:"typing", active:false}
+                                  to everyone else (sending ends composing)
 close / heartbeat timeout
+  → was it typing? → broadcast {type:"typing", active:false} to the others
   → leave room → broadcast presence  (a phantom agent would otherwise
                                       leave the visitor waiting forever)
 ```
 
-Not yet: replay on reconnect (a client that drops mid-conversation
-reconnects to a live socket but no backlog), typing indicators, and both
-UI ends. The transcript is already complete in Postgres — §9.10 renders it
-— so replay is a read the socket does not yet perform, not data it lacks.
+### §8.4 Replay and typing (M4.3)
+
+Replay is a read the socket performs on attach — the transcript was always
+complete in Postgres (§9.10 renders it); what was missing was handing it to
+a client that just reconnected.
+
+```
+onConnection, after `ready`
+  → replay(attachment)               realtime/src/handoff/socket.ts
+      SELECT id, role, content, created_at FROM messages
+        WHERE conversation_id = …
+        ORDER BY created_at DESC, id DESC LIMIT 50   ← the newest window,
+          walking messages_conversation (conversation_id, created_at, id)
+          backwards instead of sorting a long thread to discard most of it
+      reverse() → reading order
+      → send {type:"history", messages:[{id, role, text, at}, …]}
+          role widens to include 'assistant': the bot's turns are most of
+          what an arriving agent needs, and relabelling them would
+          misattribute them
+      · read failed → {type:"error", reason:"history unavailable"} and the
+        socket stays open — a lost backlog must not cost the LIVE
+        conversation
+  → flush the buffer:
+      messages broadcast since the room join are sent now, minus any id
+      the backlog already carried
+```
+
+The buffer is the whole correctness argument, and both naive orderings are
+wrong without it:
+
+```
+read history, THEN join   → a message committed in between is broadcast to
+                            a room this client is not in yet → LOST
+join, THEN read (no buf)  → a message committed in between is in the
+                            backlog AND arrives live → DUPLICATED (or
+                            delivered, then rendered over by the backlog)
+join, buffer, read, flush → in the backlog or in the flush, never both,
+                            never neither
+```
+
+Typing never touches a table:
+
+```
+client → {type:"typing", active}
+  → onFrame → relayTyping
+      not a boolean?               → {type:"error", …} (the two things it
+                                     could mean are opposites)
+      < 250 ms since last relay    → DROPPED silently (an error per
+                                     keystroke is a worse storm)
+      same state, < 2 s            → DROPPED (a repeat only earns the wire
+                                     when it refreshes a receiver's TTL)
+      otherwise → broadcast {type:"typing", role, active} to EVERYONE ELSE
+                  (role from the ticket; the sender knows it is typing)
+receiver
+  → shows the indicator, drops it after TYPING_TTL_MS (6 s) without a
+    refresh — so a socket dying mid-sentence cannot leave "typing…" on
+    screen, with no server-side timer to own it
+```
+
+### §8.5 The visitor's end (M4.4)
+
+The widget half, from the refusal that offers a person to the socket that
+replaces the bot.
+
+```
+answer stream ends with {type:"refusal"}      widget/src/ui.ts
+  → offerEscalation()  → "Talk to a person" (once; never while a person
+                          already owns the thread)
+click
+  → client.escalate(conversationId)           widget/src/api.ts
+      POST /v1/widget/escalate  (bearer session token, one silent re-mint
+                                 on 401 — the same #authed path as chat)
+      ← {status, created}       created:false = already queued, say nothing
+  → enterHandoff(status)                      ui.ts
+      status bar above the log (it must not scroll away)
+      composer switches: placeholder, maxLength = MAX_HANDOFF_MESSAGE_CHARS
+      → client.openHandoff(conversationId, handlers)
+          → new HandoffSocket(...).open()     widget/src/handoff.ts
+```
+
+Connecting, and re-connecting, are the same path — which is the point:
+
+```
+HandoffSocket#connect
+  → onStatus("connecting")
+  → client.handoffTicket(conversationId)
+      POST /v1/widget/handoff-ticket
+      ← {ticket}   → wss://…/v1/handoff?ticket=…
+      ← null       → onStatus("ended"), loop STOPS (an agent closing the
+                     conversation is a decision, not an outage)
+      ← throws     → backoff (500ms ×2 … 8s, jittered) and try again
+  → socket frames:
+      ready     → backoff reset (authenticated, not merely connected)
+                  → "waiting" | "connected"
+      history   → renderTranscript(): the log is REBUILT from it
+      message   → one bubble, class = role (visitor | agent | assistant)
+      presence  → agents > 0 ? "connected" : "waiting"
+      typing    → indicator, expired by the RECEIVER after TYPING_TTL_MS
+  → socket closes (server restart, laptop sleep, network switch)
+      → clear the indicator, schedule a reconnect: a NEW mint, because a
+        ticket is single-use — nothing is kept to replay
+```
+
+Sending, and the deliberate absence of an optimistic render:
+
+```
+submit (handoff mode)                          ui.ts
+  → handoff.send(text)
+      not attached → false → the text STAYS in the box + a notice
+      sent         → nothing rendered locally
+  ← the server broadcasts the message back to its sender (§8.3)
+      → onMessage → the bubble appears
+  (one order from one source of truth, and nothing to reconcile against
+   the replay that may arrive later)
+keystroke → handoff.hintTyping() → at most one frame per
+            TYPING_HINT_INTERVAL_MS; the server floors it again at 250 ms
+```
+
+The bot's own answer can also start this, with no click at all:
+
+```
+ask() → {type:"handoff", status}               (§8.2: a person owns it)
+  → enterHandoff(status)
+```
+
+That is how a second tab, or a tab that reloaded, catches up. **The honest
+limit:** the widget keeps its conversation id in memory only, so a RELOAD
+starts a new conversation rather than rejoining the handoff — the visitor
+would have to ask once more to be told a person owns the thread. Replay
+therefore serves reconnects within a page load and the agent arriving
+mid-conversation, both of which are real; resuming across a reload needs a
+stored conversation id with an expiry and a recovery path for a stale one,
+and is named as future work rather than half-built.

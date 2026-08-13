@@ -11,7 +11,8 @@ import { requestHandoff } from "@/handoff/escalate"
 import { createHandoffServer } from "@/handoff/socket"
 import { mintHandoffTicket, TicketRegistry } from "@/handoff/ticket"
 import { newId } from "@shared/utils/ids"
-import type { HandoffServerFrame } from "@shared/handoff/protocol"
+import { HANDOFF_HISTORY_LIMIT } from "@shared/handoff/protocol"
+import type { HandoffHistoryMessage, HandoffServerFrame } from "@shared/handoff/protocol"
 //#endregion
 
 //#region Test Setup
@@ -87,6 +88,66 @@ function connect(ticket: string): Promise<Client> {
       })
     })
   })
+}
+
+/** Fails loudly instead of hanging on a frame that never comes — a lost
+ *  message should read as a lost message, not as a suite timeout. */
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), ms)
+    timer.unref()
+    promise.then(resolve, reject).finally(() => clearTimeout(timer))
+  })
+}
+
+/**
+ * Consumes the opening sequence every attachment gets — ready, then the
+ * backlog, then presence — and hands back everything the client was told had
+ * already been said. Pinning the order HERE means every test that merely
+ * wants a connected client also pins it.
+ *
+ * Messages that landed while the backlog was being read are flushed between
+ * history and presence, so they are collected too — and checked against the
+ * backlog's ids, which is the once-and-only-once contract asserted for every
+ * connection in the suite rather than only in the test that races it.
+ */
+async function open(client: Client): Promise<HandoffHistoryMessage[]> {
+  const ready = await within(client.next(), 5_000, "ready")
+  if (ready.type !== "ready") throw new Error(`expected ready, got ${ready.type}`)
+  const history = await within(client.next(), 5_000, "history")
+  if (history.type !== "history") throw new Error(`expected history, got ${history.type}`)
+
+  const ids = new Set(history.messages.map((message) => message.id))
+  const flushed: HandoffHistoryMessage[] = []
+  let frame = await within(client.next(), 5_000, "presence")
+  while (frame.type === "message") {
+    if (ids.has(frame.id)) throw new Error(`message ${frame.id} arrived twice: backlog and live`)
+    ids.add(frame.id)
+    flushed.push({ id: frame.id, role: frame.role, text: frame.text, at: frame.at })
+    frame = await within(client.next(), 5_000, "presence")
+  }
+  if (frame.type !== "presence") throw new Error(`expected presence, got ${frame.type}`)
+  return [...history.messages, ...flushed]
+}
+
+/** A turn already in the transcript before anyone attaches — what replay
+ *  exists to recover. Written straight to the table because the bot's half
+ *  of the conversation predates the socket entirely (§3.15.3 wrote it). */
+async function seedMessage(
+  conversationId: string,
+  role: "visitor" | "assistant" | "agent",
+  content: string,
+): Promise<string> {
+  const id = newId("msg")
+  await db.insertInto("messages").values({
+    id,
+    conversation_id: conversationId,
+    org_id: orgId,
+    role,
+    content,
+    ...(role === "assistant" ? { model: "mock-llm" } : {}),
+  }).execute()
+  return id
 }
 
 /** The status code an upgrade was refused with — what a rejected client
@@ -178,12 +239,16 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
 
     const ready = await visitor.next()
     expect(ready).toEqual({ type: "ready", role: "visitor", conversationId, status: "pending" })
+    // An empty conversation still gets its backlog frame: a client must not
+    // have to distinguish "no history yet" from "history did not arrive".
+    expect(await visitor.next()).toEqual({ type: "history", messages: [] })
     expect(await visitor.next()).toEqual({ type: "presence", agents: 0, visitors: 1 })
 
     const agent = await connect(ticketFor(conversationId, "agent", agentId))
     // The agent's own ready says active — attaching IS claiming, so there
     // is no separate button to forget to press.
     expect(await agent.next()).toEqual({ type: "ready", role: "agent", conversationId, status: "active" })
+    expect(await agent.next()).toEqual({ type: "history", messages: [] })
     // …and the visitor learns a person is here.
     expect(await visitor.next()).toEqual({ type: "presence", agents: 1, visitors: 1 })
 
@@ -205,11 +270,9 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
   it("relays both ways, persists every message, and attributes roles from the TICKET", async () => {
     const conversationId = await escalatedConversation("vis_relay")
     const visitor = await connect(ticketFor(conversationId, "visitor", "vis_relay"))
-    await visitor.next() // ready
-    await visitor.next() // presence
+    await open(visitor)
     const agent = await connect(ticketFor(conversationId, "agent", agentId))
-    await agent.next()   // ready
-    await agent.next()   // presence
+    await open(agent)
     await visitor.next() // presence (agent joined)
 
     // A client cannot name its own role: this frame CLAIMS to be an agent.
@@ -247,14 +310,18 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
   it("rejects malformed frames and oversized messages without dropping the socket", async () => {
     const conversationId = await escalatedConversation("vis_frames")
     const visitor = await connect(ticketFor(conversationId, "visitor", "vis_frames"))
-    await visitor.next() // ready
-    await visitor.next() // presence
+    await open(visitor)
 
     visitor.socket.send("not json at all")
     expect(await visitor.next()).toMatchObject({ type: "error", reason: expect.stringContaining("JSON") })
 
-    visitor.send({ type: "typing" })
+    visitor.send({ type: "whisper", text: "hello" })
     expect(await visitor.next()).toMatchObject({ type: "error", reason: "unsupported frame" })
+
+    // A typing frame without its flag is refused rather than assumed: the
+    // two things it could have meant are opposites.
+    visitor.send({ type: "typing" })
+    expect(await visitor.next()).toMatchObject({ type: "error", reason: expect.stringContaining("active") })
 
     visitor.send({ type: "message", text: "   " })
     expect((await visitor.next()).type).toBe("error")
@@ -277,8 +344,8 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     const beta = await escalatedConversation("vis_beta")
     const inAlpha = await connect(ticketFor(alpha, "visitor", "vis_alpha"))
     const inBeta = await connect(ticketFor(beta, "visitor", "vis_beta"))
-    await inAlpha.next(); await inAlpha.next()
-    await inBeta.next(); await inBeta.next()
+    await open(inAlpha)
+    await open(inBeta)
 
     inAlpha.send({ type: "message", text: "alpha only" })
     expect(await inAlpha.next()).toMatchObject({ text: "alpha only" })
@@ -290,6 +357,179 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
 
     await inAlpha.close()
     await inBeta.close()
+  })
+  //#endregion
+
+  //#region Replay on reconnect (M4.3)
+  it("replays the conversation — the bot's half included — to whoever attaches", async () => {
+    const conversationId = await escalatedConversation("vis_history")
+    const asked = await seedMessage(conversationId, "visitor", "how do I cancel my plan?")
+    const answered = await seedMessage(conversationId, "assistant", "Cancel from Settings → Billing.")
+    const helped = await seedMessage(conversationId, "agent", "I can do that for you now.")
+
+    const visitor = await connect(ticketFor(conversationId, "visitor", "vis_history"))
+    const backlog = await open(visitor)
+    // Chronological, and reaching back BEFORE the escalation: what the bot
+    // said is part of the conversation, not a separate document.
+    expect(backlog.map((m) => [m.id, m.role, m.text])).toEqual([
+      [asked, "visitor", "how do I cancel my plan?"],
+      [answered, "assistant", "Cancel from Settings → Billing."],
+      [helped, "agent", "I can do that for you now."],
+    ])
+    expect(Number.isNaN(Date.parse(backlog[0]!.at))).toBe(false)
+
+    // The agent gets the same backlog: reading what the bot already told
+    // this visitor IS the job, and the socket must not make an arriving
+    // agent go looking for it.
+    const agent = await connect(ticketFor(conversationId, "agent", agentId))
+    expect((await open(agent)).map((m) => m.id)).toEqual([asked, answered, helped])
+
+    await visitor.close()
+    await agent.close()
+  })
+
+  it("gives a reconnecting client back what it said before the drop, on one clock", async () => {
+    const conversationId = await escalatedConversation("vis_reconnect")
+    const first = await connect(ticketFor(conversationId, "visitor", "vis_reconnect"))
+    await open(first)
+    first.send({ type: "message", text: "my card was charged twice" })
+    const live = await first.next()
+    if (live.type !== "message") throw new Error("expected the message back")
+    await first.close()
+
+    // A FRESH ticket: tickets are single use, so reconnecting is minting
+    // again (§3.24) rather than re-spending something the client kept.
+    const again = await connect(ticketFor(conversationId, "visitor", "vis_reconnect"))
+    // Identical `at`, not merely a close one — the live frame and the
+    // backlog both carry Postgres's clock, so a client merging the two
+    // cannot have Render/Neon skew reorder its thread.
+    expect(await open(again)).toEqual([
+      { id: live.id, role: "visitor", text: "my card was charged twice", at: live.at },
+    ])
+    await again.close()
+  })
+
+  it("bounds the backlog at the newest turns rather than shipping a whole thread", async () => {
+    const conversationId = await escalatedConversation("vis_long")
+    const overflow = 5
+    const base = Date.now() - 60 * 60 * 1000
+    await db.insertInto("messages").values(
+      Array.from({ length: HANDOFF_HISTORY_LIMIT + overflow }, (_, i) => ({
+        id: newId("msg"),
+        conversation_id: conversationId,
+        org_id: orgId,
+        role: "visitor" as const,
+        content: `turn ${i}`,
+        // Explicit timestamps: one bulk insert shares a transaction clock,
+        // and rows tying on created_at would order by a random id.
+        created_at: new Date(base + i * 1000),
+      })),
+    ).execute()
+
+    const visitor = await connect(ticketFor(conversationId, "visitor", "vis_long"))
+    const backlog = await open(visitor)
+    expect(backlog).toHaveLength(HANDOFF_HISTORY_LIMIT)
+    // The NEWEST window, still in reading order — the oldest turns are what
+    // a bounded backlog drops.
+    expect(backlog[0]!.text).toBe(`turn ${overflow}`)
+    expect(backlog.at(-1)!.text).toBe(`turn ${HANDOFF_HISTORY_LIMIT + overflow - 1}`)
+    await visitor.close()
+  })
+
+  it("delivers each message exactly once to a client attaching mid-conversation", async () => {
+    const conversationId = await escalatedConversation("vis_race")
+    const agent = await connect(ticketFor(conversationId, "agent", agentId))
+    await open(agent)
+
+    // Talk continuously ACROSS the visitor's attach so its backlog read and
+    // the room's live broadcasts overlap. The interleaving is not forced —
+    // and does not need to be: the assertion holds under every one of them,
+    // which is the property. A message committed inside the window is
+    // legally in both the read and the broadcast; the client must still see
+    // it once, and none may go missing between the two.
+    const turns = 12
+    const chatter = (async () => {
+      for (let i = 0; i < turns; i++) {
+        agent.send({ type: "message", text: `turn ${i}` })
+        await new Promise((resolve) => setTimeout(resolve, 2))
+      }
+    })()
+
+    const visitor = await connect(ticketFor(conversationId, "visitor", "vis_race"))
+    const seen = new Map<string, string>()
+    for (const message of await open(visitor)) seen.set(message.id, message.text)
+    await chatter
+
+    while (seen.size < turns) {
+      const frame = await within(visitor.next(), 5_000, `${turns - seen.size} more messages`)
+      if (frame.type !== "message") continue
+      // The duplicate this buffer exists to prevent.
+      expect(seen.has(frame.id)).toBe(false)
+      seen.set(frame.id, frame.text)
+    }
+    expect([...seen.values()].sort()).toEqual(
+      Array.from({ length: turns }, (_, i) => `turn ${i}`).sort(),
+    )
+
+    await visitor.close()
+    await agent.close()
+  })
+  //#endregion
+
+  //#region Typing (M4.3)
+  it("relays typing to the other side, coalesces repeats, and never echoes it back", async () => {
+    const conversationId = await escalatedConversation("vis_typing")
+    const visitor = await connect(ticketFor(conversationId, "visitor", "vis_typing"))
+    await open(visitor)
+    const agent = await connect(ticketFor(conversationId, "agent", agentId))
+    await open(agent)
+    await visitor.next() // presence (agent joined)
+
+    // Five keystrokes' worth in a burst. A per-keystroke client is not an
+    // error, it is just a client — so the room pays for one frame, not five.
+    for (let i = 0; i < 5; i++) visitor.send({ type: "typing", active: true })
+    expect(await agent.next()).toEqual({ type: "typing", role: "visitor", active: true })
+
+    visitor.send({ type: "message", text: "still there?" })
+    // If the other four had been relayed, THIS would be a typing frame.
+    expect(await agent.next()).toMatchObject({ type: "message", role: "visitor", text: "still there?" })
+    // Sending ends composing: the indicator cannot outlive the sentence it
+    // was announcing.
+    expect(await agent.next()).toEqual({ type: "typing", role: "visitor", active: false })
+
+    // The sender saw its own message (one order from one source of truth)
+    // and none of its own typing frames (it knows).
+    expect(await visitor.next()).toMatchObject({ type: "message", text: "still there?" })
+
+    // And nothing about composing reached the transcript — typing is not
+    // something anyone said.
+    const rows = await db.selectFrom("messages").selectAll()
+      .where("conversation_id", "=", conversationId).execute()
+    expect(rows.map((r) => r.content)).toEqual(["still there?"])
+
+    await visitor.close()
+    await agent.close()
+  })
+
+  it("clears a typing indicator when the composer disconnects", async () => {
+    const conversationId = await escalatedConversation("vis_ghost")
+    const visitor = await connect(ticketFor(conversationId, "visitor", "vis_ghost"))
+    await open(visitor)
+    const agent = await connect(ticketFor(conversationId, "agent", agentId))
+    await open(agent)
+    await visitor.next() // presence (agent joined)
+
+    visitor.send({ type: "typing", active: true })
+    expect(await agent.next()).toEqual({ type: "typing", role: "visitor", active: true })
+
+    await visitor.close()
+    // The phantom-participant problem the heartbeat solves for presence,
+    // solved here at the moment of close: a visitor who drops mid-sentence
+    // must not leave "typing…" burning on the agent's screen.
+    expect(await agent.next()).toEqual({ type: "typing", role: "visitor", active: false })
+    expect(await agent.next()).toEqual({ type: "presence", agents: 1, visitors: 0 })
+
+    await agent.close()
   })
   //#endregion
 })

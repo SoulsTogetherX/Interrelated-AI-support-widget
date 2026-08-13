@@ -7,8 +7,16 @@ import type { Duplex } from "node:stream"
 import type { Kysely } from "kysely"
 
 import { newId } from "@shared/utils/ids"
-import { MAX_HANDOFF_MESSAGE_CHARS } from "@shared/handoff/protocol"
-import type { HandoffRole, HandoffServerFrame } from "@shared/handoff/protocol"
+import {
+  HANDOFF_HISTORY_LIMIT,
+  MAX_HANDOFF_MESSAGE_CHARS,
+  TYPING_HINT_INTERVAL_MS,
+} from "@shared/handoff/protocol"
+import type {
+  HandoffHistoryMessage,
+  HandoffRole,
+  HandoffServerFrame,
+} from "@shared/handoff/protocol"
 
 import type { Database } from "@/db/schema"
 import { TicketRegistry, verifyHandoffTicket } from "@/handoff/ticket"
@@ -28,6 +36,12 @@ import { TicketRegistry, verifyHandoffTicket } from "@/handoff/ticket"
  * handleUpgrade is called at all, so an unauthenticated socket is never a
  * WebSocket in the first place; it is a TCP connection that gets an HTTP
  * error and a FIN. That is the identity-at-upgrade pattern the plan names.
+ *
+ * Since M4.3 an attaching client is also handed the conversation's tail
+ * (`replay`) and the room relays typing hints — the two things that make a
+ * dropped connection recoverable and a silence legible. Both are additions
+ * to this same shape: replay is a bounded read on attach, and typing is a
+ * relay that touches no table at all.
  *
  * Rooms are in memory, keyed by conversation. Single always-on instance by
  * design (§3.17.2's argument, and Render's free tier), so this is correct
@@ -63,17 +77,57 @@ interface Attachment {
   /** Visitor id or dashboard user id — from the TICKET, never from a frame. */
   subject: string
   alive: boolean
+  /**
+   * Live `message` frames held back until this attachment's backlog has been
+   * sent (M4.3), then flushed minus anything the backlog already contained.
+   * Non-null means "still replaying".
+   *
+   * The window it covers is small — a claim UPDATE and one indexed SELECT —
+   * but it is not empty, and both naive orderings are wrong in it. Reading
+   * history BEFORE joining the room LOSES a message committed in between
+   * (nobody was in the room to hear the broadcast). Joining first without a
+   * buffer DUPLICATES one, or worse delivers it and then has the backlog
+   * render over it. Buffering is what makes attach lossless in both
+   * directions, and it costs an empty array per connection.
+   */
+  pending: Extract<HandoffServerFrame, { type: "message" }>[] | null
+  /** Last typing state relayed for this attachment, and when — the two
+   *  fields the coalescer needs so a per-keystroke client cannot turn into a
+   *  per-keystroke broadcast. */
+  typing: boolean
+  typingRelayedAt: number
 }
 //#endregion
 
 //#region Constants
 const DEFAULT_PATH = "/v1/handoff"
 const DEFAULT_HEARTBEAT_MS = 30_000
+/**
+ * The hard floor between two typing relays from one attachment, whatever
+ * they say. The protocol asks well-behaved clients to refresh every
+ * TYPING_HINT_INTERVAL_MS and the coalescer already collapses repeats, so
+ * this only ever bites a client sending per keystroke or flipping the flag
+ * to make noise — and it bites by DROPPING, not by erroring: answering every
+ * keystroke with an error frame would be a worse storm than the one being
+ * prevented. A state change lost to the floor self-heals within
+ * TYPING_TTL_MS, which is exactly what that TTL is for.
+ */
+const TYPING_FLOOR_MS = 250
 //#endregion
 
 //#region Helpers
 function send(socket: WebSocket, frame: HandoffServerFrame): void {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(frame))
+}
+
+/** Sends, unless this attachment is still replaying and the frame is a live
+ *  message — in which case it queues behind the backlog. See Attachment. */
+function deliver(attachment: Attachment, frame: HandoffServerFrame): void {
+  if (attachment.pending !== null && frame.type === "message") {
+    attachment.pending.push(frame)
+    return
+  }
+  send(attachment.socket, frame)
 }
 
 /** Refuses an upgrade the way HTTP does — a status line and a FIN. The
@@ -111,7 +165,18 @@ class Rooms {
   }
 
   broadcast(conversationId: string, frame: HandoffServerFrame): void {
-    for (const attachment of this.members(conversationId)) send(attachment.socket, frame)
+    for (const attachment of this.members(conversationId)) deliver(attachment, frame)
+  }
+
+  /** Everyone but one. Used only by typing: a client knows it is composing,
+   *  and echoing that back is how a naive client ends up rendering itself as
+   *  "someone is typing". Messages deliberately do NOT use this — the sender
+   *  seeing its own message through the same broadcast is what gives both
+   *  ends one order from one source of truth. */
+  broadcastExcept(conversationId: string, except: Attachment, frame: HandoffServerFrame): void {
+    for (const attachment of this.members(conversationId)) {
+      if (attachment !== except) deliver(attachment, frame)
+    }
   }
 
   presence(conversationId: string): { agents: number; visitors: number } {
@@ -216,6 +281,12 @@ function createHandoffServer(options: HandoffServerOptions): {
           role: payload.role,
           subject: payload.sub,
           alive: true,
+          // Buffering starts at construction, before the room join below —
+          // there must be no instant in which this attachment is in a room
+          // and unable to hold a message back.
+          pending: [],
+          typing: false,
+          typingRelayedAt: 0,
         }, row.handoff_id, row.status)
       })
     })().catch((err) => {
@@ -259,6 +330,11 @@ function createHandoffServer(options: HandoffServerOptions): {
       conversationId: attachment.conversationId,
       status: currentStatus,
     })
+    // ready → history → presence, in that order: identity, then what was
+    // said, then who is here. Presence waits behind one indexed read, which
+    // is a millisecond the other members will not notice and buys every
+    // client a deterministic opening sequence.
+    await replay(attachment)
     rooms.broadcast(attachment.conversationId, { type: "presence", ...rooms.presence(attachment.conversationId) })
 
     ws.on("pong", () => { attachment.alive = true })
@@ -266,10 +342,102 @@ function createHandoffServer(options: HandoffServerOptions): {
     ws.on("close", () => {
       rooms.leave(attachment)
       attachments.delete(attachment)
+      // Someone who disconnects mid-sentence must not leave their indicator
+      // burning on the other end. The receiver's TTL would clear it a few
+      // seconds later; saying so immediately is free and exact.
+      if (attachment.typing) {
+        rooms.broadcastExcept(attachment.conversationId, attachment, {
+          type: "typing", role: attachment.role, active: false,
+        })
+      }
       rooms.broadcast(attachment.conversationId, { type: "presence", ...rooms.presence(attachment.conversationId) })
     })
     ws.on("error", (err) => {
       console.error("[handoff] socket error:", err.message)
+    })
+  }
+
+  /**
+   * Replay on reconnect (M4.3): the conversation's tail, sent once, right
+   * after `ready`.
+   *
+   * The transcript was already complete in Postgres — the dashboard renders
+   * it (§9.10) — so this is a read the socket had not been performing, not
+   * data it lacked. It reaches back BEFORE the escalation on purpose: what
+   * the bot already told this visitor is most of what an arriving agent
+   * needs, and a visitor who reloads the page mid-handoff expects their
+   * whole exchange, not the half that happened after they asked for a human.
+   */
+  async function replay(attachment: Attachment): Promise<void> {
+    let messages: HandoffHistoryMessage[] = []
+    try {
+      const rows = await options.db
+        .selectFrom("messages")
+        .select(["id", "role", "content", "created_at"])
+        .where("conversation_id", "=", attachment.conversationId)
+        // Newest first, then reversed in memory: the TAIL is what a client
+        // needs, and descending is what lets the messages_conversation index
+        // (conversation_id, created_at, id) stop after the limit instead of
+        // sorting a long thread to throw most of it away. The id tie-break
+        // matches the index's own trailing column, so turns written inside
+        // one transaction still come back in a stable order.
+        .orderBy("created_at", "desc")
+        .orderBy("id", "desc")
+        .limit(HANDOFF_HISTORY_LIMIT)
+        .execute()
+      rows.reverse()
+      messages = rows.map((row) => ({
+        id: row.id,
+        role: row.role,
+        text: row.content,
+        at: row.created_at.toISOString(),
+      }))
+      send(attachment.socket, { type: "history", messages })
+    } catch (err) {
+      // A failed read must not cost the client its LIVE conversation. The
+      // socket stays open, the buffer below still flushes, and the client is
+      // TOLD its backlog is missing rather than left to infer an empty
+      // thread from silence.
+      console.error("[handoff] history replay failed:", err)
+      send(attachment.socket, { type: "error", reason: "history unavailable" })
+    }
+
+    // Replay ends the moment the backlog is on the wire (or has failed).
+    // Whatever arrived meanwhile goes out now, minus anything the backlog
+    // already carried — a message committed inside the window is legally in
+    // both, and the client must see it exactly once.
+    const buffered = attachment.pending ?? []
+    attachment.pending = null
+    const replayed = new Set(messages.map((message) => message.id))
+    for (const frame of buffered) {
+      if (!replayed.has(frame.id)) send(attachment.socket, frame)
+    }
+  }
+
+  /**
+   * Typing, coalesced (M4.3). Nothing is persisted and nothing is echoed to
+   * the sender; the only state kept is the last thing this attachment said
+   * and when, which is what turns a per-keystroke client into at most one
+   * frame per TYPING_HINT_INTERVAL_MS on the wire.
+   */
+  function relayTyping(attachment: Attachment, active: boolean): void {
+    const now = Date.now()
+    const sinceLast = now - attachment.typingRelayedAt
+    if (sinceLast < TYPING_FLOOR_MS) return
+    if (active === attachment.typing) {
+      // A repeat earns the wire only when it refreshes a receiver's TTL, and
+      // only `true` has a TTL to refresh: nobody's screen changes when "not
+      // typing" is said a second time.
+      if (!active || sinceLast < TYPING_HINT_INTERVAL_MS) return
+    }
+    attachment.typing = active
+    attachment.typingRelayedAt = now
+    rooms.broadcastExcept(attachment.conversationId, attachment, {
+      type: "typing",
+      // Role from the TICKET, exactly as for a message — the one rule this
+      // socket never bends.
+      role: attachment.role,
+      active,
     })
   }
 
@@ -281,7 +449,18 @@ function createHandoffServer(options: HandoffServerOptions): {
       send(attachment.socket, { type: "error", reason: "frame was not JSON" })
       return
     }
-    const frame = parsed as { type?: unknown; text?: unknown }
+    const frame = parsed as { type?: unknown; text?: unknown; active?: unknown }
+    if (frame.type === "typing") {
+      // Strict about the flag rather than defaulting it to true: "typing"
+      // and "stopped typing" are opposite claims, and guessing which one a
+      // malformed frame meant is how an indicator gets stuck.
+      if (typeof frame.active !== "boolean") {
+        send(attachment.socket, { type: "error", reason: "typing frame needs a boolean 'active'" })
+        return
+      }
+      relayTyping(attachment, frame.active)
+      return
+    }
     if (frame.type !== "message" || typeof frame.text !== "string") {
       send(attachment.socket, { type: "error", reason: "unsupported frame" })
       return
@@ -296,10 +475,19 @@ function createHandoffServer(options: HandoffServerOptions): {
     // transcript never recorded is worse than a slow one, and the
     // dashboard's transcript view (§9.10) is the record of what was said.
     const id = newId("msg")
-    const at = new Date()
+    let at: Date
     try {
-      await options.db.transaction().execute(async (trx) => {
-        await trx.insertInto("messages").values({
+      at = await options.db.transaction().execute(async (trx) => {
+        // RETURNING the stored created_at rather than stamping a Date here:
+        // the broadcast and the backlog (replay, above) are rendered in ONE
+        // list by both clients, so they must agree on when a turn happened.
+        // This process and the database are different machines — on Render
+        // and Neon respectively — and their clocks can differ by more than
+        // the gap between two turns of a fast exchange. Taking Postgres's
+        // clock for both makes a reconnecting client's merged thread
+        // ordered by construction, and matches the answer pipeline's rows,
+        // which take the column default.
+        const inserted = await trx.insertInto("messages").values({
           id,
           conversation_id: attachment.conversationId,
           org_id: attachment.orgId,
@@ -307,11 +495,12 @@ function createHandoffServer(options: HandoffServerOptions): {
           // that could name its own role could impersonate an agent.
           role: attachment.role,
           content: text,
-        }).execute()
+        }).returning("created_at").executeTakeFirstOrThrow()
         await trx.updateTable("conversations")
-          .set({ last_message_at: at })
+          .set({ last_message_at: inserted.created_at })
           .where("id", "=", attachment.conversationId)
           .execute()
+        return inserted.created_at
       })
     } catch (err) {
       console.error("[handoff] message persist failed:", err)
@@ -326,6 +515,19 @@ function createHandoffServer(options: HandoffServerOptions): {
       text,
       at: at.toISOString(),
     })
+
+    // Sending a message ends composing by definition. Clearing here rather
+    // than waiting for the client's own `typing:false` means an indicator can
+    // never outlive the sentence it was announcing, and this path bypasses
+    // the relay floor deliberately: unlike a keystroke, a sent message
+    // already cost a transaction, so it cannot be used to make noise.
+    if (attachment.typing) {
+      attachment.typing = false
+      attachment.typingRelayedAt = Date.now()
+      rooms.broadcastExcept(attachment.conversationId, attachment, {
+        type: "typing", role: attachment.role, active: false,
+      })
+    }
   }
   //#endregion
 

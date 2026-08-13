@@ -57,6 +57,25 @@ const WIDGET_CSS = `
 .cite a { color: var(--accent); text-decoration: none }
 .cite a:hover { text-decoration: underline }
 .typing { align-self: flex-start; color: #8a8f9e; font-size: 13px; padding: 2px 4px }
+/* Handoff (M4.4). The agent's messages sit on the assistant's side but
+   must not be mistaken for the bot's — hence a label, drawn in CSS so no
+   per-message DOM pays for it. */
+.msg.agent { align-self: flex-start; background: #e8efff; border-bottom-left-radius: 4px }
+.msg.agent::before {
+  content: "Support"; display: block; font-size: 11px; font-weight: 600;
+  color: #4a5578; margin-bottom: 2px;
+}
+.status {
+  padding: 7px 14px; background: #f6f7fb; border-bottom: 1px solid #e7e8ee;
+  font-size: 12px; color: #5b6076; text-align: center;
+}
+.offer { align-self: center }
+.escalate {
+  border: 1px solid var(--accent); border-radius: 9px; padding: 7px 14px;
+  background: #fff; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
+}
+.escalate:hover { background: rgba(79,70,229,.06) }
+.escalate:disabled { opacity: .5; cursor: default }
 .foot { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #e7e8ee }
 .foot input {
   flex: 1; border: 1px solid #d4d6e0; border-radius: 9px; padding: 9px 12px;
