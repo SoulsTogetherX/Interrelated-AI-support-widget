@@ -1,0 +1,29 @@
+{
+  // loadtest/ follows the eval/ pattern exactly: no package.json, no build
+  // step — the modules are compiled by whichever consumer imports them (the
+  // root vitest runner for histogram's tests, tsx when
+  // realtime/scripts/runLoadtest.ts imports them through @loadtest/*). Same
+  // strictness as shared/ and eval/, for the same reason: nothing else
+  // catches an error here before a consumer does.
+  //
+  // "DOM" is in lib for exactly one symbol: the global WebSocket the
+  // harness uses as its client. Node has shipped it since 22, but its types
+  // live in the DOM lib rather than @types/node — and pulling in the whole
+  // DOM lib is still cheaper than adding a dependency to a folder whose
+  // entire point is not having any.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM"],
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true
+  },
+  "include": ["./**/*.ts"]
+}

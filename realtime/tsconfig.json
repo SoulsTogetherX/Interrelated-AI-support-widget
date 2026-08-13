@@ -20,7 +20,8 @@
       "@/*": ["./src/*"],
       "@shared/*": ["../shared/*"],
       "@providers/*": ["../providers/*"],
-      "@eval/*": ["../eval/*"]
+      "@eval/*": ["../eval/*"],
+      "@loadtest/*": ["../loadtest/*"]
     }
   },
   // vitest.config.ts is deliberately NOT typechecked here: it runs as ESM

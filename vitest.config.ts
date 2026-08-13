@@ -10,9 +10,17 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   test: {
-    // shared/, providers/, AND eval/ — alias-joined source folders with no
-    // package.json of their own, so the root runner owns their tests.
-    include: ["shared/**/*.test.ts", "providers/**/*.test.ts", "eval/**/*.test.ts"],
+    // shared/, providers/, eval/, AND loadtest/ — alias-joined source
+    // folders with no package.json of their own, so the root runner owns
+    // their tests. (loadtest's socket scenario needs a running service and
+    // is not a unit test; what IS unit-tested here is the histogram whose
+    // percentiles end up in the README.)
+    include: [
+      "shared/**/*.test.ts",
+      "providers/**/*.test.ts",
+      "eval/**/*.test.ts",
+      "loadtest/**/*.test.ts",
+    ],
     environment: "node",
   },
 })

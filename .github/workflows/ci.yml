@@ -66,7 +66,7 @@ jobs:
             widget/package-lock.json
             web/package-lock.json
 
-      # ── root: shared/ + providers/ + eval/ tests + typechecks ────────────
+      # ── root: shared/ + providers/ + eval/ + loadtest/ tests + typechecks ─
       - name: root deps
         run: npm ci
       - name: shared typecheck
@@ -75,6 +75,11 @@ jobs:
         run: npm run typecheck:providers
       - name: eval typecheck
         run: npm run typecheck:eval
+      # The load harness is typechecked and its percentile code unit-tested
+      # here, but the RUN is not a CI job: latency on a shared runner
+      # measures the runner (loadtest/RESULTS.md says so at length).
+      - name: loadtest typecheck
+        run: npm run typecheck:loadtest
       - name: root tests
         run: npm test
 

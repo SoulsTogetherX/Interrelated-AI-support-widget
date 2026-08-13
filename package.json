@@ -8,7 +8,8 @@
     "test:watch": "vitest",
     "typecheck:shared": "tsc -p shared/tsconfig.json",
     "typecheck:providers": "tsc -p providers/tsconfig.json",
-    "typecheck:eval": "tsc -p eval/tsconfig.json"
+    "typecheck:eval": "tsc -p eval/tsconfig.json",
+    "typecheck:loadtest": "tsc -p loadtest/tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
