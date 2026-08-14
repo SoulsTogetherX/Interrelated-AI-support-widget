@@ -51,7 +51,10 @@ survivable (§8.4) — the backlog on attach, delivered exactly once, and
 typing as an ephemeral hint — and M4.4/M4.5 built the two ends that use
 it: the widget's (§8.5) and the dashboard inbox's (§8.6). M4.6 closed the
 loop (§8.7): an agent finishes the conversation, the room is TOLD, and the
-bot takes the thread back.
+bot takes the thread back. **M4 COMPLETE.** M5 is underway: as of M5.1 the
+tenant can see what the product is doing (§9) — deflection, strip rate,
+latency, and time-to-first-human-response, all read from columns the
+pipeline has been writing since M2.
 
 ---
 
@@ -1238,3 +1241,47 @@ dashboard   → useHandoffSocket stops → state "ended" → composer disabled
 And the conversation can be escalated again tomorrow: the unique index is
 over OPEN rows only (§3.3.4), which is the whole reason the lifecycle is a
 table rather than a column on `conversations`.
+
+---
+
+## §9 Metrics (M5.1)
+
+A read path, but the definitions are the interesting part: each of the three
+headline numbers had an easier version that would have been wrong.
+
+```
+GET /dashboard/[orgId]/metrics          web/src/app/dashboard/[orgId]/metrics/page.tsx
+  → requireOrgMember(orgId)             (readable by agents too — §9.12's rung)
+  → getOrgMetrics(org.id, 30)           web/src/lib/metrics/queries.ts
+      four queries, in parallel, all org-scoped in the WHERE:
+
+      answerMetrics      messages WHERE role='assistant' AND created_at >= since
+                         count(*), count(*) filter (refused),
+                         percentile_cont(0.5|0.95) over ttft_ms / total_ms
+                           FILTER (WHERE NOT refused)   ← same rows for both,
+                                                          or they are not
+                                                          comparable
+      groundingMetrics   message_citations JOIN messages   (citations carry no
+                         org_id — the tenant boundary is the join)
+                         count(*), count(*) filter (verdict <> 'verified'),
+                         split by unknown_chunk vs quote_not_found
+      deflectionMetrics  conversations WHERE EXISTS(an assistant message)
+                         count(*), count(*) filter (EXISTS a handoff)
+                         + handoff_sessions JOIN messages(role='agent')
+                           percentile over (first agent turn − requested_at)
+      modelMetrics       messages GROUP BY model  → the comparison table
+  → render; a rate with no denominator prints "—", never 0%
+```
+
+The three definitions, and what each rejects:
+
+| Metric | Defined as | The easier version, and why not |
+|---|---|---|
+| Deflection | conversations with an answer and **no** handoff ÷ conversations with an answer | Per *message* would let one thread that ends in escalation contribute a dozen "deflected" answers. Conversations with no answer at all are excluded — a visitor who typed nothing is neither. |
+| Time to first human response | first **agent message** − `requested_at`, earliest turn per handoff | `claimed_at` is when someone *attached*, and attaching is automatic on opening the conversation (§8.6) — a team that opens tabs fast and answers slowly would score perfectly. |
+| Latency percentiles | over **answered** messages only | A gate refusal never calls a model, so it has `total_ms` but no `ttft_ms`; mixing them made a live page show a full answer (99 ms) faster than its own first token (110 ms). |
+
+Nothing here writes. The columns were all written when the pipeline ran —
+`refused`, `model`, `ttft_ms`, `total_ms` (§5.2), every citation verdict
+(§5.2), `requested_at` (§8) — which is the whole point of instrumenting
+before there was anything to measure.

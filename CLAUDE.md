@@ -12,7 +12,14 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M4 — human handoff over WebSocket — COMPLETE.** M0–M2 are complete: the full
+**Current milestone: M5 — metrics and billing — UNDERWAY. M4 is COMPLETE.**
+M5.1 is done — the metrics layer (§9.13): deflection, refusal and claim-strip
+rates, latency percentiles, time-to-first-human-response, and a by-model
+breakdown, all computed in SQL from columns the pipeline has been writing
+since M2, with every rate null-not-zero when it has no denominator. Still
+open in M5: cost per 1k answers (needs a per-provider price list), the
+`usage_daily` counters, and Stripe test-mode billing with tier caps enforced
+before the model call. M0–M2 are complete: the full
 content pipeline in (source → crawl → parse → chunk → embed → store), back
 out (query → dense + lexical arms → RRF fusion → ranked chunks), and
 retrieval quality MEASURED — an 80-question hand-written golden set scored
@@ -2868,3 +2875,64 @@ recall is deterministic; latency on a shared runner measures the runner, and
 a flaky p95 threshold would train everyone to re-run it. CI typechecks the
 harness and runs the histogram's tests; the load run is a tool a human uses
 when the socket path changes.
+
+### §9.13 `src/lib/metrics/` + the metrics page (M5.1)
+
+The plan's "instrument from day one" bill, come due. Nothing here needed a
+migration: `messages` has carried refused/model/ttft_ms/total_ms since
+§3.3.2, `message_citations` has carried every claim's verdict verified and
+stripped alike, and `handoff_sessions` has carried requested_at since
+§3.3.4. This is the first surface that adds them up.
+
+- **queries.ts** — four aggregates rather than one heroic join, because
+  they have four grains (messages, citations, conversations, handoffs) and
+  a single query would either fan out — counting one answer once per
+  citation — or need subqueries that read worse than four honest
+  statements. Everything is computed IN SQL: `percentile_cont` over the
+  (org_id, created_at) index §3.3.2 already added for the daily cap, where
+  pulling a month of answers into Node to sort them would be megabytes to
+  produce six numbers. Every rate is `number | null`, never a silent zero
+  — a tenant with no answers has no deflection rate, and a dashboard that
+  prints "0%" for "no data yet" lies during exactly the week someone is
+  deciding whether the product works.
+
+  Three definitions carry the file, and each rejects an easier one:
+  **deflection is per CONVERSATION**, not per message (per message
+  flatters: a long thread ending in escalation would still contribute a
+  dozen "deflected" answers), and its denominator excludes conversations
+  the bot never answered in — a visitor who opened the bubble and typed
+  nothing is neither deflected nor escalated. **Time-to-first-human-
+  response measures to the first agent MESSAGE**, not to claimed_at:
+  attaching is what claims a handoff (§3.25), so measuring the easy way
+  would score a queue where agents open tabs promptly and answer slowly as
+  perfect; the query takes each handoff's earliest agent turn only, since
+  later replies are the same person still talking. And **latency
+  percentiles exclude refusals** — a gate refusal never calls a model, so
+  it has a total_ms but no ttft_ms, and mixing the two produced a live page
+  where the full answer (99 ms) was faster than its own first token
+  (110 ms). That bug was found in a browser, not by a test, and the test
+  that now pins it would have failed the old behavior.
+
+- **metrics/page.tsx** — Answering, Grounding, Latency, Handoff, and a
+  by-model table that is the provider comparison's first column (cost per
+  1k answers joins it when per-provider pricing lands). Rates with no
+  denominator render "—". The strip rate gets the same prominence as
+  deflection deliberately: a bot that deflects everything by answering
+  confidently from nothing is the failure this whole project exists to
+  prevent, so the number that would expose it sits next to the number it
+  would flatter.
+
+- **Tests** — DB-gated, over a hand-built fixture small enough that every
+  expectation is computed by reading it (3 answered conversations, 4
+  answers, 5 claims, 2 handoffs, one of them still waiting): counts and
+  percentiles; the strip rate split by failure mode; deflection ignoring
+  the conversation with no answer; first-human-response taking the first
+  agent turn and not the second; the by-model breakdown; a busier OTHER
+  tenant that must stay invisible; null-not-zero for an empty org; and a
+  zero-day window excluding everything.
+
+Verified live: seeded traffic through `npm run ask` (three grounded
+answers, one `--tamper` producing a stripped claim, one refusal) plus an
+answered handoff, and the page reported 85.7% deflection, 57.1% refusals,
+16.7% strip rate, and a 2-minute first human response — each matching the
+fixture by hand.
