@@ -98,6 +98,19 @@ async function main(): Promise<void> {
 
   console.log(`\nconversation ${result.conversationId}  (pass --conversation to continue it)`)
   console.log(`refused=${result.refused}  ttft=${result.ttftMs}ms  total=${result.totalMs}ms`)
+  // Tokens and their list-price cost (M5.2) — the cost metric drivable by
+  // hand, the same way --tamper makes the strip path observable. "unpriced"
+  // is the honest output for a self-hosted model, never $0.00; "not
+  // reported" is a provider that streamed no usage, which is a different
+  // silence and says so.
+  if (result.usage === null) {
+    console.log("tokens: not reported by this provider")
+  } else {
+    const { costUsd } = await import("@shared/pricing/models")
+    const cost = costUsd(llm.model, result.usage.inputTokens, result.usage.outputTokens)
+    const priced = cost === null ? "unpriced model" : `$${cost.toFixed(6)} at list price`
+    console.log(`tokens: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out  (${priced})`)
+  }
   console.log(`claims: ${result.claims.length} total, ${result.claims.filter((c) => c.verdict.status === "verified").length} verified\n`)
   console.log(result.content)
   await db.destroy()

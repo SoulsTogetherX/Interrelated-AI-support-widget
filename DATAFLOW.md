@@ -447,13 +447,17 @@ caller (askDev CLI | tests | M2.5 SSE route later)
            mock (tests/CI) | groq/openai-compatible (json_object mode) |
            gemini (schema enforced server-side) | ollama (native format)
            deltas collected; TTFT measured at first delta, in the
-           pipeline (not per-provider) so every provider measures alike
+           pipeline (not per-provider) so every provider measures alike,
+           and the terminal event's token usage kept (null where the
+           server reports none — never zeroed, §9)
       9. parseAnswerText                 shared/grounding/claims.ts
            as-is → fenced → first-{-to-last-} (each still fully validated)
            · invalid → buildRetryMessages: replay + EVERY validator error,
              ONE retry only; second failure → AnswerSchemaError (visitor
              message stays, NO assistant row — a transient model failure
-             is not conversation history)
+             is not conversation history). TTFT keeps the FIRST attempt's
+             value (the visitor waited from the original question);
+             tokens SUM across both, because both were billed
      10. verifyClaims                    shared/grounding/verify.ts
            each claim's quote must occur (whitespace-normalized, case-
            sensitive) in the chunk it NAMES, among the chunks the model
@@ -461,8 +465,10 @@ caller (askDev CLI | tests | M2.5 SSE route later)
      11. displayableClaims               the strip policy: verified only
      12. ONE transaction                 realtime/src/answer/pipeline.ts
            assistant message (content = shown claims joined, or the
-           nothing-verified fallback) + ALL citation verdicts (stripped
-           ones included — the strip-rate data) + recency bump
+           nothing-verified fallback; model, refused, retrieval_score,
+           ttft_ms, total_ms, input_tokens, output_tokens) + ALL citation
+           verdicts (stripped ones included — the strip-rate data) +
+           recency bump
      13. emit {claim}×N (with url + heading for the widget's citations)
            or {refusal} — then {done, claimsTotal, claimsShown}
 ```
@@ -1244,9 +1250,9 @@ table rather than a column on `conversations`.
 
 ---
 
-## §9 Metrics (M5.1)
+## §9 Metrics (M5.1, M5.2)
 
-A read path, but the definitions are the interesting part: each of the three
+A read path, but the definitions are the interesting part: each of the four
 headline numbers had an easier version that would have been wrong.
 
 ```
@@ -1270,18 +1276,42 @@ GET /dashboard/[orgId]/metrics          web/src/app/dashboard/[orgId]/metrics/pa
                          + handoff_sessions JOIN messages(role='agent')
                            percentile over (first agent turn − requested_at)
       modelMetrics       messages GROUP BY model  → the comparison table
+                         count(*), count(*) filter (input_tokens IS NOT NULL),
+                         sum(input_tokens), sum(output_tokens), latency p50s
+  → costMetrics(byModel)                web/src/lib/metrics/queries.ts (pure)
+      per row: costUsd(model, in, out)  shared/pricing/models.ts
+                         exact model match, null for anything unlisted
+      fold:    priced rows → total + pricedAnswers
+               everything else → unpricedAnswers   ← shown, not hidden
   → render; a rate with no denominator prints "—", never 0%
 ```
 
-The three definitions, and what each rejects:
+The four definitions, and what each rejects:
 
 | Metric | Defined as | The easier version, and why not |
 |---|---|---|
 | Deflection | conversations with an answer and **no** handoff ÷ conversations with an answer | Per *message* would let one thread that ends in escalation contribute a dozen "deflected" answers. Conversations with no answer at all are excluded — a visitor who typed nothing is neither. |
 | Time to first human response | first **agent message** − `requested_at`, earliest turn per handoff | `claimed_at` is when someone *attached*, and attaching is automatic on opening the conversation (§8.6) — a team that opens tabs fast and answers slowly would score perfectly. |
 | Latency percentiles | over **answered** messages only | A gate refusal never calls a model, so it has `total_ms` but no `ttft_ms`; mixing them made a live page show a full answer (99 ms) faster than its own first token (110 ms). |
+| Cost per 1k answers | list price × measured tokens, over **generated** answers whose model is priced *and* whose provider reported usage | Including refusals in the denominator would make a bot that refuses more look cheaper rather than more cautious. Treating an unlisted model as free would state a specific falsehood about a self-hosted tenant's real bill; prefix-matching one onto a cheaper sibling would understate it ~10× and be believed. |
 
-Nothing here writes. The columns were all written when the pipeline ran —
-`refused`, `model`, `ttft_ms`, `total_ms` (§5.2), every citation verdict
-(§5.2), `requested_at` (§8) — which is the whole point of instrumenting
-before there was anything to measure.
+Where the token numbers come from (M5.2), since this is the one metric that
+needed a column the pipeline was not already writing:
+
+```
+answerQuestion                          realtime/src/answer/pipeline.ts
+  → collectStream(...)                  keeps the terminal event's `usage`
+       LLMStreamEvent {type:"done", usage}     providers/llm/* — every real
+                                               adapter reports it; null where
+                                               a server omits it on streams
+  → (schema violation) collectStream again
+       usage = addUsage(first, retry)   SUMMED — both calls were billed, so
+                                        a retried answer really did cost twice
+  → persistAssistantMessage             messages.input_tokens / .output_tokens
+       gate refusal  → NULL, NULL       no model ran; null ≠ 0
+```
+
+Nothing on the read path writes. Every column it reads was written when the
+pipeline ran — `refused`, `model`, `ttft_ms`, `total_ms` (§5.2), every
+citation verdict (§5.2), `requested_at` (§8), and now the token pair — which
+is the whole point of instrumenting before there was anything to measure.

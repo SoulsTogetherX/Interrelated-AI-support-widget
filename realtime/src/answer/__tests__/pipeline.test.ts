@@ -197,6 +197,81 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
     expect(Number(assistant.retrieval_score)).toBeGreaterThan(0.75)
   })
 
+  it("records the provider's reported token usage on the answer", async () => {
+    // M5.2: cost per 1k answers is built on these two columns, so the
+    // pipeline must carry the provider's own numbers through rather than
+    // estimating from text length. The mock reports usage the way a real
+    // provider does.
+    const llm = new MockLLMProvider([{
+      text: scriptedAnswer([
+        { text: "Metered.", chunkId: refundChunkId, quote: "within five business days" },
+      ]),
+      usage: { inputTokens: 1234, outputTokens: 56 },
+    }])
+    const result = await answerQuestion({
+      db, embedder, llm, orgId, visitorId: "vis-usage", question: REFUND_TEXT,
+    })
+
+    expect(result.usage).toEqual({ inputTokens: 1234, outputTokens: 56 })
+    const assistant = await db.selectFrom("messages")
+      .selectAll().where("id", "=", result.messageId).executeTakeFirstOrThrow()
+    expect(assistant.input_tokens).toBe(1234)
+    expect(assistant.output_tokens).toBe(56)
+  })
+
+  it("SUMS tokens across the retry — a retried answer really did cost twice", async () => {
+    // The interesting half of the cost story. Recording only the successful
+    // attempt would make schema violations look free, which is exactly
+    // backwards: the reason the violation rate is a metric at all is that
+    // failing the contract costs the tenant money.
+    const llm = new MockLLMProvider([
+      { text: "prose, not JSON", usage: { inputTokens: 1000, outputTokens: 20 } },
+      {
+        text: scriptedAnswer([
+          { text: "Recovered.", chunkId: refundChunkId, quote: "within five business days" },
+        ]),
+        usage: { inputTokens: 1100, outputTokens: 40 },
+      },
+    ])
+    const result = await answerQuestion({
+      db, embedder, llm, orgId, visitorId: "vis-usage-retry", question: REFUND_TEXT,
+    })
+
+    expect(result.usage).toEqual({ inputTokens: 2100, outputTokens: 60 })
+    const assistant = await db.selectFrom("messages")
+      .selectAll().where("id", "=", result.messageId).executeTakeFirstOrThrow()
+    expect(assistant.input_tokens).toBe(2100)
+  })
+
+  it("leaves tokens NULL when the provider reports none, and on a refusal", async () => {
+    // Two different silences, both of which must stay null rather than
+    // becoming a zero the cost metric would average in as free: a provider
+    // that omits usage on streams, and a gate refusal that never ran a
+    // model at all.
+    const quiet = new MockLLMProvider([{
+      text: scriptedAnswer([
+        { text: "Unmetered.", chunkId: refundChunkId, quote: "within five business days" },
+      ]),
+    }])
+    const answered = await answerQuestion({
+      db, embedder, llm: quiet, orgId, visitorId: "vis-unmetered", question: REFUND_TEXT,
+    })
+    expect(answered.usage).toBeNull()
+    const unmetered = await db.selectFrom("messages")
+      .selectAll().where("id", "=", answered.messageId).executeTakeFirstOrThrow()
+    expect(unmetered.input_tokens).toBeNull()
+    expect(unmetered.output_tokens).toBeNull()
+
+    const refused = await answerQuestion({
+      db, embedder, llm: new MockLLMProvider([]), orgId,
+      visitorId: "vis-refuse-usage", question: "Who won the 1994 world cup?",
+    })
+    expect(refused.refused).toBe(true)
+    const refusalRow = await db.selectFrom("messages")
+      .selectAll().where("id", "=", refused.messageId).executeTakeFirstOrThrow()
+    expect(refusalRow.input_tokens).toBeNull()
+  })
+
   it("stays out of a handed-off conversation but keeps the question", async () => {
     // M4.1: once a human owns the thread, the bot must not answer over
     // them — and must not spend the tenant's tokens trying. The visitor's

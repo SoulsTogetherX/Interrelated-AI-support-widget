@@ -22,6 +22,8 @@
 //#region Imports
 import { sql } from "kysely"
 
+import { costUsd, PRICES_AS_OF } from "@shared/pricing/models"
+
 import { db } from "@/lib/db"
 //#endregion
 
@@ -67,15 +69,54 @@ export interface DeflectionMetrics {
   firstHumanResponseP95Ms: number | null
 }
 
-/** One row of the provider-comparison table the plan wants (M5.3 adds cost
- *  per 1k answers, which needs a price list this file has no business
- *  holding). */
+/**
+ * One row of the provider-comparison table the plan wants — now with the
+ * cost column that was blocked on a price list (shared/pricing/models.ts).
+ *
+ * There is deliberately no per-model refusal count. A gate refusal happens
+ * BEFORE a model is chosen (§3.15.1 decides on retrieval distance alone),
+ * so the pipeline writes model = NULL on those rows and a per-model refusal
+ * column could only ever read zero. It shipped as one in M5.1 and passed
+ * its test, because the test fixture set a model on a refused row where the
+ * pipeline never does — the fixture now matches production, and the column
+ * is gone. Refusals are counted once, at org level, where they are real.
+ */
 export interface ModelMetrics {
   model: string
   answers: number
-  refusals: number
+  /** Answers whose provider actually reported usage — the denominator of
+   *  this row's cost, and usually but not always `answers`. */
+  meteredAnswers: number
+  inputTokens: number
+  outputTokens: number
+  /** List-price cost of this row's measured tokens, or null when the model
+   *  is not in the price list (self-hosted, or newer than the table). */
+  costUsd: number | null
   ttftP50Ms: number | null
   totalP50Ms: number | null
+}
+
+/**
+ * The plan's "measured cost per 1,000 answered questions", with the two
+ * numbers that keep it honest beside it.
+ *
+ * Denominator is GENERATED answers — refusals are excluded, because a
+ * refusal never calls a model and folding it in would make a bot that
+ * refuses more look cheaper per answer rather than more cautious. The
+ * refusal count sits next to it on the page for exactly that comparison.
+ */
+export interface CostMetrics {
+  /** Total list-price cost of every answer this layer could price. */
+  costUsd: number | null
+  /** Answers behind that figure: a priced model AND reported usage. */
+  pricedAnswers: number
+  /** Generated answers it could NOT price — an unlisted model, or a
+   *  provider that reported no usage. Shown, not hidden: a cost figure
+   *  covering half the traffic must say so. */
+  unpricedAnswers: number
+  costPer1kAnswersUsd: number | null
+  /** When the price table was last checked (shared/pricing/models.ts). */
+  pricesAsOf: string
 }
 
 export interface OrgMetrics {
@@ -83,6 +124,7 @@ export interface OrgMetrics {
   answers: AnswerMetrics
   grounding: GroundingMetrics
   deflection: DeflectionMetrics
+  cost: CostMetrics
   byModel: ModelMetrics[]
 }
 //#endregion
@@ -129,7 +171,10 @@ export async function getOrgMetrics(orgId: string, windowDays = 30): Promise<Org
     deflectionMetrics(orgId, since),
     modelMetrics(orgId, since),
   ])
-  return { windowDays, answers, grounding, deflection, byModel }
+  // Cost is DERIVED from the by-model rows rather than queried: prices are
+  // per model, so any total is a sum over exactly those groups, and a fifth
+  // query would have to re-group the same rows to produce the same numbers.
+  return { windowDays, answers, grounding, deflection, cost: costMetrics(byModel), byModel }
 }
 
 async function answerMetrics(orgId: string, since: Date): Promise<AnswerMetrics> {
@@ -273,16 +318,22 @@ async function deflectionMetrics(orgId: string, since: Date): Promise<Deflection
 }
 
 async function modelMetrics(orgId: string, since: Date): Promise<ModelMetrics[]> {
-  // The seed of the provider-comparison table: same corpus, same questions,
-  // different models. Refusals are per-model on purpose — a model that
-  // refuses more often is not necessarily worse, and the number belongs
-  // beside its latency rather than hidden in an average.
+  // The provider-comparison table: same corpus, same questions, different
+  // models — latency and now token volume side by side. Only rows with a
+  // model, which excludes refusals by construction (the gate refuses before
+  // choosing one, so those rows carry model = NULL).
   const rows = await db
     .selectFrom("messages")
     .select([
       "model",
       sql<string>`count(*)`.as("answers"),
-      sql<string>`count(*) filter (where refused)`.as("refusals"),
+      sql<string>`count(*) filter (where input_tokens is not null)`.as("metered"),
+      // coalesce so an entirely unmetered model reports 0 tokens rather
+      // than null — "no tokens measured" is carried by `metered`, and two
+      // different nulls meaning two different things is how a cost figure
+      // becomes unreadable.
+      sql<string>`coalesce(sum(input_tokens), 0)`.as("input_tokens"),
+      sql<string>`coalesce(sum(output_tokens), 0)`.as("output_tokens"),
       sql<number | null>`percentile_cont(0.5) within group (order by ttft_ms)`.as("ttft_p50"),
       sql<number | null>`percentile_cont(0.5) within group (order by total_ms)`.as("total_p50"),
     ])
@@ -294,12 +345,49 @@ async function modelMetrics(orgId: string, since: Date): Promise<ModelMetrics[]>
     .orderBy(sql`count(*)`, "desc")
     .execute()
 
-  return rows.map((row) => ({
-    model: row.model ?? "unknown",
-    answers: num(row.answers),
-    refusals: num(row.refusals),
-    ttftP50Ms: maybeNum(row.ttft_p50),
-    totalP50Ms: maybeNum(row.total_p50),
-  }))
+  return rows.map((row) => {
+    const model = row.model ?? "unknown"
+    const inputTokens = num(row.input_tokens)
+    const outputTokens = num(row.output_tokens)
+    return {
+      model,
+      answers: num(row.answers),
+      meteredAnswers: num(row.metered),
+      inputTokens,
+      outputTokens,
+      costUsd: costUsd(model, inputTokens, outputTokens),
+      ttftP50Ms: maybeNum(row.ttft_p50),
+      totalP50Ms: maybeNum(row.total_p50),
+    }
+  })
+}
+
+/** Folds the per-model rows into one cost figure, keeping track of what it
+ *  could not account for. Pure — no query — so the arithmetic is unit
+ *  testable without a database. */
+function costMetrics(byModel: readonly ModelMetrics[]): CostMetrics {
+  let total = 0
+  let priced = 0
+  let unpriced = 0
+  for (const row of byModel) {
+    // A row contributes only when BOTH hold: we know the model's price and
+    // the provider told us what it used. Everything else lands in
+    // `unpriced`, where the page can show it — a cost that silently covered
+    // 40% of the traffic would be worse than no cost at all.
+    if (row.costUsd !== null) {
+      total += row.costUsd
+      priced += row.meteredAnswers
+      unpriced += row.answers - row.meteredAnswers
+    } else {
+      unpriced += row.answers
+    }
+  }
+  return {
+    costUsd: priced > 0 ? total : null,
+    pricedAnswers: priced,
+    unpricedAnswers: unpriced,
+    costPer1kAnswersUsd: priced > 0 ? (total / priced) * 1000 : null,
+    pricesAsOf: PRICES_AS_OF,
+  }
 }
 //#endregion

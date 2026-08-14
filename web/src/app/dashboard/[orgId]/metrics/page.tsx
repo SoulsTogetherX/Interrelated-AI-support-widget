@@ -25,6 +25,19 @@ function ms(value: number | null): string {
   return value >= 1000 ? `${(value / 1000).toFixed(1)} s` : `${Math.round(value)} ms`
 }
 
+/** USD at the precision the number deserves. Fractions of a cent are the
+ *  normal case here (a Groq answer is ~$0.0004), so a plain 2-decimal
+ *  currency format would render an entire day's traffic as "$0.00" and read
+ *  as broken. Four decimals below a dollar, two above. */
+function usd(value: number | null): string {
+  if (value === null) return "—"
+  return value >= 1 ? `$${value.toFixed(2)}` : `$${value.toFixed(4)}`
+}
+
+function tokens(value: number): string {
+  return value.toLocaleString("en-US")
+}
+
 function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
   return (
     <div className="metrics-stat">
@@ -39,7 +52,7 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
   const { orgId } = await params
   const { org } = await requireOrgMember(orgId)
   const metrics = await getOrgMetrics(org.id)
-  const { answers, grounding, deflection, byModel } = metrics
+  const { answers, grounding, deflection, cost, byModel } = metrics
 
   return (
     <div className="metrics">
@@ -140,6 +153,36 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
       </section>
 
       <section className="metrics-section">
+        <h2>Cost</h2>
+        <div className="metrics-grid">
+          <Stat
+            label="Per 1,000 answers"
+            value={usd(cost.costPer1kAnswersUsd)}
+            hint={`at ${cost.pricesAsOf} list prices, over ${cost.pricedAnswers} priced answers`}
+          />
+          <Stat
+            label="Window total"
+            value={usd(cost.costUsd)}
+            hint={`${tokens(byModel.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0))} tokens across every model`}
+          />
+          <Stat
+            label="Not priced"
+            value={String(cost.unpricedAnswers)}
+            hint="answers on a self-hosted or unlisted model, or whose provider reported no usage"
+          />
+        </div>
+        <p className="metrics-note">
+          What this usage <em>would</em> cost at the provider&rsquo;s published list price — not
+          what you were billed. Every provider here has a free tier, so a demo org&rsquo;s real
+          spend is $0 while this number is positive; read it as &ldquo;what does this cost at
+          scale?&rdquo;. Refusals are excluded from the denominator, because a refusal never calls
+          a model — otherwise a bot that refuses more would look cheaper rather than more cautious.
+          Generation only: query embeddings are not metered, so folding a guess at them in would
+          trade a known-partial number for an unknown-wrong one.
+        </p>
+      </section>
+
+      <section className="metrics-section">
         <h2>By model</h2>
         {byModel.length === 0 ? (
           <p className="metrics-empty">No answers yet — connect a provider and ask something.</p>
@@ -149,7 +192,9 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
               <tr>
                 <th>Model</th>
                 <th>Answers</th>
-                <th>Refused</th>
+                <th>Tokens in</th>
+                <th>Tokens out</th>
+                <th>Cost</th>
                 <th>TTFT p50</th>
                 <th>Total p50</th>
               </tr>
@@ -159,7 +204,9 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
                 <tr key={row.model}>
                   <td><code>{row.model}</code></td>
                   <td>{row.answers}</td>
-                  <td>{percent(row.answers > 0 ? row.refusals / row.answers : null)}</td>
+                  <td>{tokens(row.inputTokens)}</td>
+                  <td>{tokens(row.outputTokens)}</td>
+                  <td>{usd(row.costUsd)}</td>
                   <td>{ms(row.ttftP50Ms)}</td>
                   <td>{ms(row.totalP50Ms)}</td>
                 </tr>
@@ -169,8 +216,9 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
         )}
         <p className="metrics-note">
           Switching provider changes this table, not the schema: the model is recorded per answer,
-          so a comparison is a query rather than a migration. Cost per 1,000 answers joins this
-          table once per-provider pricing lands.
+          so a comparison is a query rather than a migration. There is no refusal column here on
+          purpose — the groundedness gate refuses before a model is chosen, so those answers have
+          no model to attribute, and the refusal rate above is where they are counted.
         </p>
       </section>
     </div>

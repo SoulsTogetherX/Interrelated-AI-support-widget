@@ -21,6 +21,14 @@ import type { MockLLMResponse } from "@providers/llm/mock"
  * `tamper` corrupts the first quote so the strip path is observable on
  * demand: the tampered claim must be stored quote_not_found and never
  * displayed.
+ *
+ * It also REPORTS USAGE (M5.2), like every real provider does, so the token
+ * columns and the cost metric are exercised end to end in the keyless
+ * stacks rather than only in scripted tests. The counts are the chunker's
+ * ceil(chars/4) approximation (§2.4.0) rather than an invented number, and
+ * the mock's price is a true 0.00 in the price list — so a keyless demo
+ * shows real token volume against an honestly free bill, attributed to
+ * "mock-llm" in the by-model table where nobody can mistake it for Groq.
  */
 function groundedMockResponder(tamper = false): (request: LLMRequest) => MockLLMResponse {
   return (request) => {
@@ -34,7 +42,15 @@ function groundedMockResponder(tamper = false): (request: LLMRequest) => MockLLM
         quote: tamper && i === 0 ? `${quote} (embellished)` : quote,
       }
     })
-    return { text: JSON.stringify({ claims }) }
+    const text = JSON.stringify({ claims })
+    const promptChars = request.messages.reduce((sum, message) => sum + message.content.length, 0)
+    return {
+      text,
+      usage: {
+        inputTokens: Math.ceil(promptChars / 4),
+        outputTokens: Math.ceil(text.length / 4),
+      },
+    }
   }
 }
 //#endregion

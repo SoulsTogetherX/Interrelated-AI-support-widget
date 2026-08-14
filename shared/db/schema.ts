@@ -267,6 +267,16 @@ interface MessagesTable {
    *  up with none. */
   ttft_ms: number | null
   total_ms: number | null
+  /** The provider's reported token usage for this answer (LLMUsage, whose
+   *  field names these mirror), SUMMED across the retry when the model
+   *  failed the contract once — a retried answer really did cost twice.
+   *  NULL means "not reported": a gate refusal ran no model, and some
+   *  OpenAI-compatible servers omit usage on streams. Never 0 for those,
+   *  which is why the cost metric reports unpriced answers separately
+   *  instead of averaging them in as free. Paired by CHECK — half a usage
+   *  record is a parsing bug, not a partial measurement. */
+  input_tokens: number | null
+  output_tokens: number | null
   created_at: ColumnType<Date, string | Date | undefined, never>
 }
 

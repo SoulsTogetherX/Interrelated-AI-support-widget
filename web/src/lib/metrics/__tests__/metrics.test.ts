@@ -12,9 +12,9 @@ import { newId } from "@shared/utils/ids"
 // steps run.
 //
 // The fixture is hand-built and small enough that every expected number can
-// be computed by reading it: 3 conversations, 4 answers, 5 claims, 2
-// handoffs. A metrics layer whose expectations are themselves computed by
-// the code under test would prove nothing.
+// be computed by reading it: 4 conversations, 5 answers, 5 claims, 2
+// handoffs, three different models. A metrics layer whose expectations are
+// themselves computed by the code under test would prove nothing.
 const DB_CONFIGURED = Boolean(process.env.POSTGRES_PASSWORD)
 
 let orgId: string
@@ -41,19 +41,29 @@ async function answer(
     ttft?: number
     total?: number
     content?: string
+    inputTokens?: number
+    outputTokens?: number
   },
 ): Promise<string> {
   const id = newId("msg")
+  // A refusal carries NO model and no tokens, because that is what the
+  // pipeline writes: the groundedness gate decides before a model is
+  // chosen, so the row has nothing to attribute. The fixture used to set a
+  // model on refused rows, which let a per-model refusal column pass a test
+  // it could never pass in production.
+  const refused = fields.refused ?? false
   await db.insertInto("messages").values({
     id,
     conversation_id: conversationId,
     org_id: org,
     role: "assistant",
     content: fields.content ?? "an answer",
-    model: fields.model ?? "mock-llm",
-    refused: fields.refused ?? false,
+    model: refused ? null : fields.model ?? "mock-llm",
+    refused,
     ttft_ms: fields.ttft ?? null,
     total_ms: fields.total ?? null,
+    input_tokens: refused ? null : fields.inputTokens ?? null,
+    output_tokens: refused ? null : fields.outputTokens ?? null,
     created_at: fields.at,
   }).execute()
   return id
@@ -90,12 +100,23 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
       .values({ org_id: orgId, user_id: agentId, role: "agent" })
       .execute()
 
-    // ── Conversation A: answered twice, never escalated → a deflection.
+    // ── Conversation A: answered three times, never escalated → a
+    // deflection. Its answers cover the three cost cases: a priced model
+    // with usage, a priced model whose provider reported none, and a
+    // self-hosted model nobody can price.
     const a = await conversation(orgId, "vis_a", minutesAgo(60))
-    const a1 = await answer(orgId, a, { at: minutesAgo(59), ttft: 100, total: 400 })
+    const a1 = await answer(orgId, a, {
+      at: minutesAgo(59), ttft: 100, total: 400, inputTokens: 1000, outputTokens: 100,
+    })
     await claim(a1, "verified", 0)
     await claim(a1, "verified", 1)
-    await answer(orgId, a, { at: minutesAgo(58), ttft: 200, total: 800 })
+    await answer(orgId, a, {
+      at: minutesAgo(58), model: "qwen2.5:7b", ttft: 200, total: 800,
+      inputTokens: 5000, outputTokens: 500,
+    })
+    // A priced model that reported no usage — metered separately from the
+    // ones that did, so the cost figure can say what it left out.
+    await answer(orgId, a, { at: minutesAgo(57), model: "gemini-2.5-flash", ttft: 200, total: 800 })
 
     // ── Conversation B: one refusal, then escalated and answered by a
     // person 5 minutes later.
@@ -128,7 +149,10 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
     // ── Conversation C: answered by a different model, with one fabricated
     // citation, escalated but never answered by a person (still waiting).
     const c = await conversation(orgId, "vis_c", minutesAgo(30))
-    const c1 = await answer(orgId, c, { at: minutesAgo(29), model: "llama-3.3-70b", ttft: 400, total: 1600 })
+    const c1 = await answer(orgId, c, {
+      at: minutesAgo(29), model: "gemini-2.5-flash", ttft: 400, total: 1600,
+      inputTokens: 3000, outputTokens: 200,
+    })
     await claim(c1, "unknown_chunk", 0)
     await claim(c1, "verified", 1)
     await db.insertInto("handoff_sessions").values({
@@ -160,16 +184,16 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
 
   it("counts answers, refusals, and latency percentiles for THIS org only", async () => {
     const { answers } = await getOrgMetrics(orgId)
-    // 4 assistant messages: A×2, B×1, C×1. The other tenant's 5 are absent.
-    expect(answers.answers).toBe(4)
+    // 5 assistant messages: A×3, B×1, C×1. The other tenant's 5 are absent.
+    expect(answers.answers).toBe(5)
     expect(answers.refusals).toBe(1)
-    expect(answers.refusalRate).toBeCloseTo(0.25, 5)
+    expect(answers.refusalRate).toBeCloseTo(0.2, 5)
     // Latency covers ANSWERED rows only: the refusal (ttft 300 / total 1200)
     // is excluded, because a gate refusal never called a model and has no
-    // first token to time. So 100/200/400 → median 200, and 400/800/1600 →
-    // median 800. (percentile_cont interpolates, which is right for a
-    // continuous quantity like latency.) Including it made a live page show
-    // a full answer that was faster than its own first token.
+    // first token to time. So 100/200/200/400 → median 200, and
+    // 400/800/800/1600 → median 800. (percentile_cont interpolates, which is
+    // right for a continuous quantity like latency.) Including it made a
+    // live page show a full answer that was faster than its own first token.
     expect(answers.ttftP50Ms).toBeCloseTo(200, 5)
     expect(answers.totalP50Ms).toBeCloseTo(800, 5)
   })
@@ -204,13 +228,55 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
 
   it("breaks answers down by model — a comparison is a query, not a migration", async () => {
     const { byModel } = await getOrgMetrics(orgId)
-    expect(byModel.map((row) => row.model).sort()).toEqual(["llama-3.3-70b", "mock-llm"])
-    const mock = byModel.find((row) => row.model === "mock-llm")
-    expect(mock?.answers).toBe(3)
-    expect(mock?.refusals).toBe(1)
-    const llama = byModel.find((row) => row.model === "llama-3.3-70b")
-    expect(llama?.answers).toBe(1)
-    expect(llama?.ttftP50Ms).toBeCloseTo(400, 5)
+    // The refusal is absent entirely: it has no model, because the gate
+    // refuses before one is chosen. That is also why there is no per-model
+    // refusal column — it could only ever read zero.
+    expect(byModel.map((row) => row.model).sort()).toEqual(["gemini-2.5-flash", "mock-llm", "qwen2.5:7b"])
+    const gemini = byModel.find((row) => row.model === "gemini-2.5-flash")
+    expect(gemini?.answers).toBe(2)
+    // Two answers, one of which reported usage. Both numbers are needed:
+    // the tokens are real, and so is the fact that they cover half the row.
+    expect(gemini?.meteredAnswers).toBe(1)
+    expect(gemini?.inputTokens).toBe(3000)
+    expect(gemini?.outputTokens).toBe(200)
+    // 3000 × $0.30/M + 200 × $2.50/M.
+    expect(gemini?.costUsd).toBeCloseTo(0.0014, 10)
+    expect(gemini?.ttftP50Ms).toBeCloseTo(300, 5)
+  })
+
+  it("prices what it can and says how much it could not", async () => {
+    const { cost } = await getOrgMetrics(orgId)
+    // Priced: the mock answer ($0, truthfully — it never leaves the
+    // process) and the metered Gemini one ($0.0014).
+    expect(cost.costUsd).toBeCloseTo(0.0014, 10)
+    expect(cost.pricedAnswers).toBe(2)
+    // Not priced: the self-hosted qwen answer (unknown price) and the
+    // Gemini answer whose provider reported no usage (unknown tokens). Two
+    // different silences, both shown rather than averaged in as free.
+    expect(cost.unpricedAnswers).toBe(2)
+    expect(cost.costPer1kAnswersUsd).toBeCloseTo(0.7, 8)
+    expect(cost.pricesAsOf).toMatch(/^\d{4}-\d{2}$/)
+  })
+
+  it("reports no cost at all when nothing is priceable, rather than $0.00", async () => {
+    // An org running entirely on a self-hosted model. Its bill is real —
+    // electricity and a GPU — and we cannot see it, so the honest output is
+    // "—", not a zero that would read as "this costs nothing".
+    const selfHosted = newId("org")
+    await db.insertInto("organizations").values({ id: selfHosted, name: "Self Hosted Co" }).execute()
+    try {
+      const conv = await conversation(selfHosted, "vis_s", minutesAgo(10))
+      await answer(selfHosted, conv, {
+        at: minutesAgo(9), model: "qwen2.5:7b", inputTokens: 900, outputTokens: 90,
+      })
+      const { cost } = await getOrgMetrics(selfHosted)
+      expect(cost.costUsd).toBeNull()
+      expect(cost.costPer1kAnswersUsd).toBeNull()
+      expect(cost.pricedAnswers).toBe(0)
+      expect(cost.unpricedAnswers).toBe(1)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", selfHosted).execute()
+    }
   })
 
   it("returns NULL rates for an org with no data, never a flattering zero", async () => {
@@ -226,6 +292,7 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
       expect(metrics.deflection.deflectionRate).toBeNull()
       expect(metrics.answers.ttftP50Ms).toBeNull()
       expect(metrics.deflection.firstHumanResponseP50Ms).toBeNull()
+      expect(metrics.cost.costPer1kAnswersUsd).toBeNull()
       expect(metrics.byModel).toEqual([])
     } finally {
       await db.deleteFrom("organizations").where("id", "=", emptyOrg).execute()

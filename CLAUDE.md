@@ -16,10 +16,17 @@ Companion documents:
 M5.1 is done — the metrics layer (§9.13): deflection, refusal and claim-strip
 rates, latency percentiles, time-to-first-human-response, and a by-model
 breakdown, all computed in SQL from columns the pipeline has been writing
-since M2, with every rate null-not-zero when it has no denominator. Still
-open in M5: cost per 1k answers (needs a per-provider price list), the
-`usage_daily` counters, and Stripe test-mode billing with tier caps enforced
-before the model call. M0–M2 are complete: the full
+since M2, with every rate null-not-zero when it has no denominator. M5.2 is
+done — **cost per 1k answers** (§2.4.8, §3.3.5, §9.13, DATAFLOW §9): the
+provider's own token counts persisted per answer and SUMMED across the retry
+because both calls were billed, a dated price list matched EXACTLY so no
+model is ever priced as a cheaper sibling, and unknown priced as null rather
+than as free — the figure says what it is (list price, generation only, not
+what a free tier billed) and reports how many answers it could not price.
+The same pass deleted a by-model refusal column that could only ever read
+zero and had passed a test whose fixture did not match the pipeline. Still
+open in M5: the `usage_daily` counters, and Stripe test-mode billing with
+tier caps enforced before the model call. M0–M2 are complete: the full
 content pipeline in (source → crawl → parse → chunk → embed → store), back
 out (query → dense + lexical arms → RRF fusion → ranked chunks), and
 retrieval quality MEASURED — an 80-question hand-written golden set scored
@@ -428,6 +435,31 @@ wrong thing meanwhile. One frame removes the ambiguity before it exists.
   typing…" on screen forever — the phantom-participant problem the
   heartbeat solves for presence, solved here without a timer per socket.
 
+#### §2.4.8 `shared/pricing/models.ts`
+The per-provider price list — the one thing M5's cost metric was blocked
+on. Token COUNTS are a measurement the pipeline stores; token PRICES are
+published third-party facts with a date on them, which is why they live in
+their own file behind `PRICES_AS_OF` rather than inline in a query: a price
+list without a date is a rumor, and Google cut Gemini's free quotas 50–80%
+in December 2025.
+
+In shared/ even though pricing is a provider fact, because web/ renders the
+number and resolves only `@/*` and `@shared/*` by design — an alias into
+providers/ would let a Server Component import an adapter that opens
+sockets, in order to read a constant. The file has no imports at all.
+
+Two rules carry it, and each prevents a plausible-looking wrong number.
+**Unknown is null, never 0**: a tenant on self-hosted Ollama pays for
+electricity and a GPU, and "$0.00" is a specific falsehood where "—" is
+correct; the only zero in the table is `mock-llm`, which really is free and
+is priced so that keyless stacks report an honest $0.00 instead of an
+unhelpful "unknown". **Matching is EXACT** — `gemini-2.5-pro` shares a
+prefix with the Flash entries and costs an order of magnitude more, so a
+helpful prefix match would report a tenant's bill at a tenth of its size
+and be believed, because it looks like a real number. The unit-testable
+half is exactly those refusals; whether Groq really charges $0.59/MTok is
+checked by reading their pricing page on the date in the file.
+
 #### §2.4.6 `shared/db/schema.ts`
 The hand-written Kysely types for every table — MOVED here from
 realtime/src/db/ in M3.2, when the dashboard started querying the same
@@ -807,7 +839,7 @@ dashboard (§9.10) reads.
 | Table | Purpose | Notable decision |
 |---|---|---|
 | `conversations` | one widget chat thread | `status` carries `'escalated'` from day one (M4 adds the mechanism; the M2 widget must already render the state, and enum growth is a migration); `(org_id, last_message_at DESC)` index IS the dashboard's conversation list |
-| `messages` | one turn | `org_id` denormalized (M5's pre-flight usage cap counts answers per org per day — the hot path can't afford a join); three role CHECKs pin model/refused/score/latency to the assistant role, making mismatches unrepresentable (the api_keys pattern); `ttft_ms`/`total_ms` instrumented from day one |
+| `messages` | one turn | `org_id` denormalized (M5's pre-flight usage cap counts answers per org per day — the hot path can't afford a join); three role CHECKs pin model/refused/score/latency to the assistant role, making mismatches unrepresentable (the api_keys pattern); `ttft_ms`/`total_ms` instrumented from day one, `input_tokens`/`output_tokens` added by 003 (§3.3.5) |
 | `message_citations` | one verdict per claim | see below — the snapshot decision |
 
 The load-bearing decision: **`message_citations` snapshots what it cites
@@ -881,6 +913,27 @@ account, which can be deleted). `claimed_by` is `ON DELETE SET NULL` so
 history outlives employment; tying the CHECK to it instead would have made
 that self-contradictory, and deleting a departing employee would fail on a
 constraint in a table nobody remembers exists.
+
+### §3.3.5 `src/db/migrations/003_answer_tokens.ts` — what an answer cost
+Two columns on `messages`: `input_tokens` and `output_tokens`, the persisted
+form of `LLMUsage` (§2.4.5d) and the input to cost per 1k answers (§9.13).
+Columns rather than a usage table because they are facts ABOUT one answer,
+at exactly its grain, written in the same transaction — a side table would
+need its own key, a join on every cost query, and would make "an answer
+whose tokens went missing" representable. `usage_daily` is a different
+thing (a rolled-up counter read pre-flight) and is derived from these.
+
+Nullable on purpose, and the null is load-bearing: some OpenAI-compatible
+servers omit usage on streamed responses, and a gate refusal never calls a
+model at all. NULL means "not reported"; 0 would mean "a model ran and
+consumed nothing", and the cost metric would average that in as free. Named
+`input_`/`output_` after the provider interface rather than OpenAI's
+`prompt_`/`completion_` dialect, which the adapter already translated. Three
+CHECKs in the 001 style: non-negative, assistant-only (a visitor turn with
+token counts would be a pipeline bug that doubled every cost figure), and
+PAIRED — a provider reports usage as one object or not at all, so half a
+record is a parsing bug, and storing it would quietly under-report output
+tokens, the expensive half on every model in the price list.
 
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
@@ -1186,7 +1239,13 @@ force-exits.
   script proves zero calls); the one-retry path (errors fed back verbatim,
   second response accepted); double failure (AnswerSchemaError, visitor
   message survives, NO assistant row); conversation continuation and the
-  cross-tenant append rejection; blank-question rejection.
+  cross-tenant append rejection; blank-question rejection. The M5.2 block
+  covers what an answer cost: the provider's reported usage landing on the
+  row verbatim, the RETRY summing both attempts (recording only the
+  successful one would make schema violations look free, which is exactly
+  backwards), and the two silences staying NULL rather than becoming a
+  zero the cost metric would average in as free — a provider that reports
+  no usage, and a gate refusal that ran no model.
 - `ingest/__tests__/worker.test.ts` — DB-gated. **Run-book note: bring up
   ONLY the compose database (`docker compose up -d database`) for test
   runs.** A running realtime container polls this same Postgres with its
@@ -1528,13 +1587,22 @@ shapes are enumerated in DATAFLOW §5.2; the notable ones: gate refusal
 persists refused=true with model=NULL and zero citations, total
 verification failure persists refused=false with the fallback text and a
 100% strip rate on record, and a double schema failure throws
-AnswerSchemaError leaving no assistant row at all.
+AnswerSchemaError leaving no assistant row at all. Since M5.2 the stream
+collector also keeps the terminal event's token usage, and the retry ADDS
+to it rather than replacing it — TTFT keeps the first attempt's value
+because the visitor has been waiting since the original question, while
+tokens accumulate because the tenant paid for both calls.
 
 #### §3.15.4 `src/answer/mockResponder.ts` + `src/answer/buildLLM.ts`
 The context-quoting mock responder lives in answer/ (not providers/)
 because it knows the prompt format — formatChunk is the other half of its
 contract and the two must change together. It is what lets every stack
-and the CI e2e job drive the REAL chat route keylessly. buildLLM maps a
+and the CI e2e job drive the REAL chat route keylessly. Since M5.2 it also
+REPORTS USAGE the way a real provider does — the chunker's ceil(chars/4)
+approximation over the actual prompt and response, not an invented number
+— so the token columns and the cost path are exercised end to end in the
+keyless stacks; `mock-llm` is priced at a true 0.00 (§2.4.8), so a keyless
+demo shows real token volume against an honestly free bill. buildLLM maps a
 provider name to a configured instance — ONE selection table shared by
 server boot (LLM_PROVIDER env) and the askDev CLI (--llm flag); a missing
 key throws a one-line usage error. Since M3.5 the env selection is the
@@ -1556,7 +1624,10 @@ claim is stored quote_not_found and never displayed. `--llm` swaps in a
 real provider (§2.4.5f–i), configured by the GROQ_/GEMINI_/OLLAMA_ vars
 in .env.example — the first place real model output meets the verifier,
 ahead of the M2.5 route; a missing key is a one-line usage error and a
-provider 429 prints as a human sentence with the retry delay.
+provider 429 prints as a human sentence with the retry delay. Since M5.2
+it prints the answer's token counts and their list-price cost too — the
+cost metric drivable by hand — and distinguishes "not reported by this
+provider" from "unpriced model", which are different silences (§2.4.8).
 
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 
@@ -2896,7 +2967,7 @@ stripped alike, and `handoff_sessions` has carried requested_at since
   prints "0%" for "no data yet" lies during exactly the week someone is
   deciding whether the product works.
 
-  Three definitions carry the file, and each rejects an easier one:
+  Four definitions carry the file, and each rejects an easier one:
   **deflection is per CONVERSATION**, not per message (per message
   flatters: a long thread ending in escalation would still contribute a
   dozen "deflected" answers), and its denominator excludes conversations
@@ -2913,23 +2984,52 @@ stripped alike, and `handoff_sessions` has carried requested_at since
   (110 ms). That bug was found in a browser, not by a test, and the test
   that now pins it would have failed the old behavior.
 
-- **metrics/page.tsx** — Answering, Grounding, Latency, Handoff, and a
-  by-model table that is the provider comparison's first column (cost per
-  1k answers joins it when per-provider pricing lands). Rates with no
-  denominator render "—". The strip rate gets the same prominence as
-  deflection deliberately: a bot that deflects everything by answering
-  confidently from nothing is the failure this whole project exists to
-  prevent, so the number that would expose it sits next to the number it
-  would flatter.
+  The fourth arrived with M5.2: **cost per 1k answers is over GENERATED
+  answers** — refusals excluded, because a refusal never calls a model and
+  folding it into the denominator would make a bot that refuses more look
+  cheaper rather than more cautious. It is derived from the by-model rows
+  (`costMetrics`, pure and testable without a database) rather than
+  queried, since prices are per model and any total is a sum over exactly
+  those groups. A row contributes only when BOTH its model is priced and
+  its provider reported usage; everything else lands in `unpricedAnswers`,
+  which the page shows — a cost figure silently covering 40% of the
+  traffic is worse than no cost figure.
+
+  M5.2 also DELETED a column that could only ever read zero. The by-model
+  breakdown carried a per-model refusal count, and it passed its test —
+  because the fixture set a model on a refused row where the pipeline never
+  does: the gate refuses before a model is chosen (§3.15.1), so those rows
+  carry `model = NULL` and never reach a model group at all. The fixture
+  now matches production and the column is gone; refusals are counted once,
+  at org level, where they are real.
+
+- **metrics/page.tsx** — Answering, Grounding, Latency, Handoff, Cost, and
+  a by-model table that is the provider comparison made concrete: answers,
+  tokens in and out, cost, and both latency medians per model. Rates with
+  no denominator render "—", and USD renders to four decimals below a
+  dollar, because a Groq answer costs ~$0.0004 and a 2-decimal currency
+  format would print an entire day's traffic as "$0.00" and read as broken.
+  The strip rate gets the same prominence as deflection deliberately: a bot
+  that deflects everything by answering confidently from nothing is the
+  failure this whole project exists to prevent, so the number that would
+  expose it sits next to the number it would flatter. The cost section
+  states what the figure IS in as many words — what this usage would cost
+  at list price, not what the tenant was billed (every provider here has a
+  free tier, so a demo org's real spend is $0 while the number is
+  positive), and generation only, since query embeddings are not metered.
 
 - **Tests** — DB-gated, over a hand-built fixture small enough that every
-  expectation is computed by reading it (3 answered conversations, 4
-  answers, 5 claims, 2 handoffs, one of them still waiting): counts and
-  percentiles; the strip rate split by failure mode; deflection ignoring
-  the conversation with no answer; first-human-response taking the first
-  agent turn and not the second; the by-model breakdown; a busier OTHER
-  tenant that must stay invisible; null-not-zero for an empty org; and a
-  zero-day window excluding everything.
+  expectation is computed by reading it (3 answered conversations, 5
+  answers across three models, 5 claims, 2 handoffs, one of them still
+  waiting): counts and percentiles; the strip rate split by failure mode;
+  deflection ignoring the conversation with no answer; first-human-response
+  taking the first agent turn and not the second; the by-model breakdown
+  with its token sums; a busier OTHER tenant that must stay invisible;
+  null-not-zero for an empty org; and a zero-day window excluding
+  everything. The cost cases cover all three states one fixture can hold at
+  once — a priced model with usage, a priced model whose provider reported
+  none, and a self-hosted model nobody can price — plus an org running
+  ENTIRELY self-hosted, whose cost must be "—" rather than $0.00.
 
 Verified live: seeded traffic through `npm run ask` (three grounded
 answers, one `--tamper` producing a stripped claim, one refusal) plus an

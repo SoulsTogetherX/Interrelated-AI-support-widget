@@ -7,7 +7,7 @@ import { verifyClaims, displayableClaims } from "@shared/grounding/verify"
 import type { VerifiedClaim } from "@shared/grounding/verify"
 import type { AnswerEvent } from "@shared/grounding/events"
 import type { EmbeddingProvider } from "@providers/embedding/types"
-import type { LLMProvider } from "@providers/llm/types"
+import type { LLMProvider, LLMUsage } from "@providers/llm/types"
 
 import type { Database } from "@/db/schema"
 import { hybridSearch } from "@/retrieval/search"
@@ -64,6 +64,12 @@ interface AnswerResult {
   claims: VerifiedClaim[]
   ttftMs: number | null
   totalMs: number
+  /** What the provider said this answer cost in tokens, summed across the
+   *  retry; null when it reported nothing or no model ran. Exposed (rather
+   *  than left in the row) so `npm run ask` can print the token count and
+   *  its list-price cost — the cost metric drivable by hand, the same way
+   *  --tamper makes the strip path observable. */
+  usage: LLMUsage | null
   /** Set when a human already owns the conversation (M4.1): the question
    *  was persisted for the agent and nothing was generated. Absent on every
    *  normal answer, so a caller cannot mistake one for the other. */
@@ -99,22 +105,45 @@ const MAX_ANSWER_TOKENS = 1024
 
 //#region Helpers
 /** Collects a provider stream into its full text, recording time-to-first-
- *  delta. TTFT is measured HERE (not in providers) so every provider is
- *  measured identically — it is a headline metric and must be comparable. */
+ *  delta and the terminal event's token usage. TTFT is measured HERE (not in
+ *  providers) so every provider is measured identically — it is a headline
+ *  metric and must be comparable. Usage, by contrast, is reported by the
+ *  provider or not at all (null), and null is carried through rather than
+ *  zeroed: see the columns' comment in shared/db/schema.ts. */
 async function collectStream(
   llm: LLMProvider,
   request: Parameters<LLMProvider["stream"]>[0],
   startedAt: number,
-): Promise<{ text: string; ttftMs: number | null }> {
+): Promise<{ text: string; ttftMs: number | null; usage: LLMUsage | null }> {
   let text = ""
   let ttftMs: number | null = null
+  let usage: LLMUsage | null = null
   for await (const event of llm.stream(request)) {
     if (event.type === "delta") {
       if (ttftMs === null && event.text.length > 0) ttftMs = Date.now() - startedAt
       text += event.text
+    } else {
+      usage = event.usage
     }
   }
-  return { text, ttftMs }
+  return { text, ttftMs, usage }
+}
+
+/** Adds a retry's usage to the first attempt's. Both calls were BILLED, so
+ *  the answer's cost is their sum — recording only the successful attempt
+ *  would make schema violations look free, which is precisely backwards:
+ *  the whole reason the schema-violation rate is a metric is that failing
+ *  the contract costs money. Null is absorbed, not propagated: one attempt
+ *  reporting usage and the other not is still better information than
+ *  discarding both, and the CHECK pairs the columns so a partial sum is
+ *  still a well-formed pair. */
+function addUsage(a: LLMUsage | null, b: LLMUsage | null): LLMUsage | null {
+  if (a === null) return b
+  if (b === null) return a
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+  }
 }
 //#endregion
 
@@ -186,6 +215,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
       claims: [],
       ttftMs: null,
       totalMs: Date.now() - startedAt,
+      usage: null,
       handoff: openHandoff.status,
     }
   }
@@ -213,14 +243,17 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     await persistAssistantMessage(db, {
       messageId, conversationId, orgId,
       content: REFUSAL_TEXT, model: null, refused: true,
-      retrievalScore: gate.signal, ttftMs: null, totalMs,
+      // No model ran, so there is no usage to report — null, not zero, and
+      // the distinction is load-bearing for cost: refusals are excluded
+      // from the per-answer average rather than dragging it toward free.
+      retrievalScore: gate.signal, ttftMs: null, totalMs, usage: null,
       citations: [], retrieved,
     })
     emit({ type: "refusal", text: REFUSAL_TEXT })
     emit({ type: "done", claimsTotal: 0, claimsShown: 0 })
     return {
       conversationId, messageId, refused: true,
-      content: REFUSAL_TEXT, claims: [], ttftMs: null, totalMs,
+      content: REFUSAL_TEXT, claims: [], ttftMs: null, totalMs, usage: null,
     }
   }
 
@@ -239,17 +272,20 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
 
   const first = await collectStream(llm, { ...baseRequest, messages }, startedAt)
   let ttftMs = first.ttftMs
+  let usage = first.usage
   let parsed = parseAnswerText(first.text)
   if (!parsed.ok) {
     // One retry with the full error list (see prompt.ts for why exactly
     // one). TTFT keeps the FIRST attempt's value: the visitor has been
     // waiting since the original question, and that is the honest number.
+    // Tokens, unlike TTFT, ACCUMULATE — the tenant paid for both calls.
     const retry = await collectStream(
       llm,
       { ...baseRequest, messages: buildRetryMessages(messages, first.text, parsed.errors) },
       startedAt,
     )
     ttftMs = ttftMs ?? retry.ttftMs
+    usage = addUsage(usage, retry.usage)
     parsed = parseAnswerText(retry.text)
     if (!parsed.ok) throw new AnswerSchemaError(parsed.errors)
   }
@@ -268,7 +304,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   await persistAssistantMessage(db, {
     messageId, conversationId, orgId,
     content, model: llm.model, refused: false,
-    retrievalScore: gate.signal, ttftMs, totalMs,
+    retrievalScore: gate.signal, ttftMs, totalMs, usage,
     citations: verified, retrieved,
   })
 
@@ -288,7 +324,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
 
   return {
     conversationId, messageId, refused: false,
-    content, claims: verified, ttftMs, totalMs,
+    content, claims: verified, ttftMs, totalMs, usage,
   }
 }
 
@@ -307,6 +343,7 @@ async function persistAssistantMessage(db: Kysely<Database>, row: {
   retrievalScore: number | null
   ttftMs: number | null
   totalMs: number
+  usage: LLMUsage | null
   citations: readonly VerifiedClaim[]
   retrieved: readonly RetrievedChunk[]
 }): Promise<void> {
@@ -323,6 +360,8 @@ async function persistAssistantMessage(db: Kysely<Database>, row: {
       retrieval_score: row.retrievalScore,
       ttft_ms: row.ttftMs,
       total_ms: row.totalMs,
+      input_tokens: row.usage?.inputTokens ?? null,
+      output_tokens: row.usage?.outputTokens ?? null,
     }).execute()
 
     if (row.citations.length > 0) {
