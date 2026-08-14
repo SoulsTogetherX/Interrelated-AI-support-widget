@@ -59,7 +59,10 @@ token counts the answer path now records and a dated price list. M5.3 added
 the one number that is enforced rather than reported (§10): the day's usage
 counters, written inside the transactions that create the answers and
 escalations they count, and read as one primary-key lookup against the
-org's plan before any model call.
+org's plan before any model call. M5.4 closed the milestone with billing
+(§11): Stripe Checkout out, a signature-verified webhook back, and an event
+ledger keyed by Stripe's own event id so a redelivery applies exactly once.
+**M5 COMPLETE.**
 
 ---
 
@@ -1399,3 +1402,112 @@ already in front of it. The dashboard's meter clamps at 100% for the same
 reason (§9.7): the overshoot is real, small, and not worth a distributed
 lock. What is guaranteed is the property the plan actually promises — the
 worst case is a stopped widget, never an unbounded bill.
+
+---
+
+## §11 Billing — checkout, webhook, entitlement (M5.4)
+
+Two paths that never touch each other directly: a browser goes to Stripe,
+and — later, from a different machine — Stripe comes to us. Nothing about
+the first is trusted to make the second true.
+
+### §11.1 Upgrading
+
+```
+POST (Server Action) from /dashboard/[orgId]/billing
+  → startCheckoutAction                 web/src/lib/billing/actions.ts
+      currentUser() → getOrgForMember → role === "owner"
+        ↑ a Server Action is reachable as a direct POST, so the ladder
+          lives IN it; billing is the owner's, and the page 404s an agent
+      plan must be a paid catalog id     "free" is the absence of a
+                                         subscription, not a $0 one
+      getSubscription(orgId)             reuse an existing customer id, so
+                                         a returning tenant has ONE billing
+                                         history rather than three strangers
+      → createCheckoutSession            web/src/lib/stripe/client.ts
+          POST https://api.stripe.com/v1/checkout/sessions
+          mode=subscription
+          line_items[0][price]=<STRIPE_PRICE_*>
+          metadata[orgId|planId]                     ← on the session
+          subscription_data[metadata][orgId|planId]  ← on the SUBSCRIPTION,
+            which is what makes every later customer.subscription.* event
+            already say which tenant and tier it is about
+          success_url / cancel_url from NEXT_PUBLIC_APP_URL, never from the
+            request's Host header (open-redirect hygiene: this URL is handed
+            to a third party to bounce a user through)
+  → redirect(session.url)                the browser leaves for stripe.com
+```
+
+Nothing is written here. A completed checkout is not a fact this process
+observes — it is a fact Stripe reports, over the path below.
+
+### §11.2 The webhook
+
+```
+POST /api/stripe/webhook            web/src/app/api/stripe/webhook/route.ts
+  stripeConfig()                    unset → 404 (the route may as well not
+                                    exist; a LIVE key throws by name)
+  rawBody = await req.text()        NEVER req.json(): the signature covers
+                                    the exact bytes Stripe sent
+  → verifyStripeSignature           web/src/lib/stripe/signature.ts
+      parse `t=…,v1=…[,v1=…]`
+      HMAC-SHA256 over `${t}.${rawBody}`, timingSafeEqual
+        · any v1 may match — that is how secret ROTATION works
+      then |now − t| ≤ 300s         signature first, because the timestamp
+                                    only means something once the MAC has
+                                    proven nobody chose it
+      then JSON with an id + type
+      · fail → 400, reason LOGGED not returned (an oracle otherwise)
+  → applyStripeEvent(event)         web/src/lib/billing/apply.ts
+      BEGIN
+        INSERT stripe_events (id = Stripe's evt_…)
+          ON CONFLICT DO NOTHING
+          · 0 rows → duplicate → COMMIT, nothing applied
+        type not customer.subscription.* → recorded, ignored
+        metadata → {orgId, planId}   missing/unknown → malformed, no guess
+        org exists?                  no → unknown_org (it was deleted)
+        row cancelled with this same subscription id, and this is not a
+          delete? → terminal (a late `updated` must not resurrect it)
+        UPSERT subscriptions         what STRIPE knows: ids, status,
+                                     cancel_at_period_end, period end
+        UPDATE organizations.plan    what the PRODUCT ALLOWS
+          entitlementFor(status):
+            trialing|active|past_due → the purchased plan
+            everything else          → free
+      COMMIT
+  → 200 {received:true}             for EVERY outcome above
+  → 500 only on a database failure  the one case where a retry is wanted
+```
+
+Four properties, and what each rejects:
+
+| Property | How | The easier version, and why not |
+|---|---|---|
+| Applied exactly once | Stripe's event id is the PRIMARY KEY of the ledger, inserted first inside the same transaction as the effect | A check-then-act read races itself under exactly the retry storm it exists to survive. Stripe redelivers by design, and more often when a response is slow. |
+| A payment outage cannot break answering | `organizations.plan` is the entitlement, read with no join and no third-party dependency; `subscriptions` is the record | Deriving entitlement from a join on Stripe state would put a billing outage on the answer path. |
+| Dunning does not cut a customer off mid-cycle | `past_due` keeps the plan; `unpaid`/`canceled` do not | Dropping on the first failed charge breaks a support widget the hour a card expires, while Stripe is still retrying. |
+| Out-of-order delivery cannot resurrect a cancellation | Deletion is terminal for a subscription id; a NEW id is a genuine resubscribe | The general fix — re-fetching the live object from Stripe on every webhook — costs an API call per event to order a stream that is already almost always ordered. |
+
+### §11.3 What the tenant sees
+
+```
+GET /dashboard/[orgId]/billing        web/src/app/dashboard/[orgId]/billing/page.tsx
+  → requireOrgMember → role must be "owner" (else notFound)
+  → getSubscription(orgId)            web/src/lib/billing/queries.ts — from
+                                      Postgres, never from Stripe: the row
+                                      was written by the webhook, so the
+                                      page works while Stripe is down
+  → getTodayUsage(orgId)              §10's counter, against the plan
+  → PlanCards                         one form per plan; the success path of
+                                      these actions never returns (it
+                                      redirects to stripe.com), so their
+                                      state carries only failures
+  → "Manage billing" → openPortalAction → Stripe's hosted portal
+       cards, invoices, downgrades, cancellation — every one a payment
+       surface with regulatory weight, none rebuilt here
+```
+
+The page also explains the one place its two plan values can disagree: what
+was BOUGHT (`subscriptions.plan`) versus what is currently ALLOWED
+(`organizations.plan`), which differ exactly while a subscription is
+cancelled or unpaid.

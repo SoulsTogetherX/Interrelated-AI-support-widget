@@ -365,6 +365,43 @@ interface UsageDailyTable {
   updated_at: ColumnType<Date, string | Date | undefined, string | Date>
 }
 
+/** What Stripe knows about an org's subscription (§3.3.7). Deliberately
+ *  NOT the entitlement: `organizations.plan` is what the product allows and
+ *  is read on the hot path before every model call, while this row is the
+ *  billing record. The webhook moves the first when the second changes;
+ *  between those moments they are independent, so a Stripe outage cannot
+ *  stop a tenant's widget from answering.
+ *
+ *  `status` carries STRIPE's vocabulary rather than a translation of it —
+ *  a support conversation held with their dashboard open is easier when the
+ *  words match on both screens. org_id is the primary key: one subscription
+ *  per organization, and nothing references the row individually. */
+interface SubscriptionsTable {
+  org_id: string
+  stripe_customer_id: string
+  stripe_subscription_id: string
+  plan: PlanId
+  status:
+    | "trialing" | "active" | "past_due" | "canceled"
+    | "incomplete" | "incomplete_expired" | "unpaid" | "paused"
+  cancel_at_period_end: Generated<boolean>
+  /** Null while a subscription is incomplete — it has no period yet. */
+  current_period_end: ColumnType<Date | null, string | Date | null, string | Date | null>
+  created_at: ColumnType<Date, string | Date | undefined, never>
+  updated_at: ColumnType<Date, string | Date | undefined, string | Date>
+}
+
+/** Every Stripe event this system has applied, keyed by STRIPE's event id.
+ *  The primary key IS the idempotency mechanism: the handler inserts first
+ *  and treats a conflict as "already applied", so a redelivered webhook
+ *  cannot double-apply. A check-then-act read would race itself under
+ *  exactly the retry storm it exists to survive. */
+interface StripeEventsTable {
+  id: string
+  type: string
+  received_at: ColumnType<Date, string | Date | undefined, never>
+}
+
 /** The Kysely database contract. Every query in the codebase is typed
  *  against this interface — a column typo is a compile error. */
 interface Database {
@@ -385,6 +422,8 @@ interface Database {
   message_citations: MessageCitationsTable
   handoff_sessions: HandoffSessionsTable
   usage_daily: UsageDailyTable
+  subscriptions: SubscriptionsTable
+  stripe_events: StripeEventsTable
 }
 //#endregion
 
@@ -408,5 +447,7 @@ export type {
   MessageCitationsTable,
   HandoffSessionsTable,
   UsageDailyTable,
+  SubscriptionsTable,
+  StripeEventsTable,
 }
 //#endregion

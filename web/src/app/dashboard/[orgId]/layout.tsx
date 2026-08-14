@@ -42,6 +42,13 @@ export default async function OrgLayout({
         <Link className="orgnav-link" href={`/dashboard/${orgId}/widget`}>
           Install
         </Link>
+        {/* Last, and owner-only once you arrive — the page 404s an agent,
+            rather than the nav pretending the link is not there. Hiding it
+            would need the membership query this layout deliberately does
+            not run (see the header). */}
+        <Link className="orgnav-link" href={`/dashboard/${orgId}/billing`}>
+          Billing
+        </Link>
       </nav>
       {children}
     </div>

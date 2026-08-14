@@ -12,7 +12,7 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M5 — metrics and billing — UNDERWAY. M4 is COMPLETE.**
+**Current milestone: M5 — metrics and billing — COMPLETE. M4 is COMPLETE.**
 M5.1 is done — the metrics layer (§9.13): deflection, refusal and claim-strip
 rates, latency percentiles, time-to-first-human-response, and a by-model
 breakdown, all computed in SQL from columns the pipeline has been writing
@@ -33,8 +33,17 @@ against the org's plan ceiling — the check that used to scan a day of
 messages now costs the same on a tenant's busiest day as on their first,
 and the deployment override can only TIGHTEN a plan, never widen it. The
 plan catalog has two enforcers, a compile error and a DB-gated test, because
-neither the compiler nor the test can see what the other does. Still open in
-M5: Stripe test-mode billing. M0–M2 are complete: the full
+neither the compiler nor the test can see what the other does. M5.4 is done,
+and with it **M5 IS COMPLETE**: Stripe test-mode billing (§3.3.7, §9.15,
+DATAFLOW §11) — Checkout out, a signature-verified webhook back, and an
+event ledger keyed by STRIPE's own event id, so a redelivery applies exactly
+once by SCHEMA rather than by a check-then-act read that would race the
+retry storm it exists to survive. The signature check is hand-rolled and the
+`stripe` SDK is rejected with the case FOR it written down; a live secret key
+is refused by name, because a portfolio demo that could charge a real card is
+a liability rather than a feature; and entitlement stays a column on
+`organizations` rather than a join, so a billing outage can never reach the
+answer path. M0–M2 are complete: the full
 content pipeline in (source → crawl → parse → chunk → embed → store), back
 out (query → dense + lexical arms → RRF fusion → ranked chunks), and
 retrieval quality MEASURED — an 80-question hand-written golden set scored
@@ -996,6 +1005,37 @@ an off-topic flood runs straight through. Token columns are BIGINT where
 that overflows silently corrupts a bill. Two CHECKs make a disagreement
 between writers unrepresentable rather than merely unlikely: counters never
 go negative, and `refusals <= answers`.
+
+### §3.3.7 `src/db/migrations/005_billing.ts` — subscriptions and the event ledger
+Two tables, and one separation that is the whole design: **entitlement and
+billing record are different things.** `organizations.plan` is what the
+product ALLOWS, read on the hot path before every model call (§3.18) — one
+column, no join, no dependency on a third party. `subscriptions` is what
+STRIPE knows: their customer and subscription ids, the status, when the
+period ends. The webhook moves the first when the second changes, and in
+between they are independent — so Stripe being down cannot stop a tenant's
+widget from answering, and reading a quota never requires knowing anything
+about payments. Collapsing the two would put a billing outage on the answer
+path, which is the one place it must never be.
+
+`subscriptions` is keyed by `org_id` (one per organization; nothing
+references a row individually — the natural-key argument again), with
+`stripe_subscription_id` UNIQUE so a copied checkout link or a replayed
+webhook cannot entitle a second tenant quietly. `status` carries STRIPE's
+own vocabulary rather than a translation: inventing our word for "unpaid"
+versus "past_due" would only make a support conversation held with their
+dashboard open harder.
+
+`stripe_events` has Stripe's event id as its PRIMARY KEY, and that single
+choice IS the idempotency mechanism (§9.15). Retention is stated in the
+migration rather than assumed: the table only grows, Stripe retries for
+about three days so a week-old row can never be needed again, and there is
+no cron here to prune it — the index is what a prune would use when volume
+justifies writing one.
+
+Worth noting: realtime owns these tables (it owns every migration) but has
+NO billing code at all. The dashboard writes them; realtime reads the
+entitlement column and nothing else.
 
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
@@ -2533,7 +2573,15 @@ is why it is gitignored, not committed (§9.1).
   (§9.6's instrumentation note); INTERNAL_API_SECRET matching Render's
   (§3.22) and REALTIME_INTERNAL_URL pointing at the Render service; and
   NEXT_PUBLIC_WIDGET_API_URL — the widget's PUBLIC base URL, which the
-  install page prints into the snippet (§9.11). Zero config files
+  install page prints into the snippet (§9.11). Since M5.4, optionally
+  the Stripe set (§9.15): STRIPE_SECRET_KEY (**sk_test_ only — a live key
+  is refused by name**), STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_STARTER,
+  STRIPE_PRICE_PRO, and NEXT_PUBLIC_APP_URL for the checkout return.
+  All five are OPTIONAL: unset, the webhook route 404s and the billing
+  page renders the tiers read-only, while quotas keep working — they come
+  from the plan column, not from Stripe. Locally the webhook is reached
+  with `stripe listen --forward-to localhost:3001/api/stripe/webhook`,
+  which prints the whsec_ value to use. Zero config files
   needed: `vercel.json` earns a place only when a default needs
   overriding.
 
@@ -3154,3 +3202,131 @@ answers, one `--tamper` producing a stripped claim, one refusal) plus an
 answered handoff, and the page reported 85.7% deflection, 57.1% refusals,
 16.7% strip rate, and a 2-minute first human response — each matching the
 fixture by hand.
+
+### §9.14 `src/lib/usage/` + the overview's Today card (M5.3)
+
+The dashboard's read side of the quota counters — the same `usage_daily`
+rows realtime writes on the answer path and reads before every model call
+(§3.26), shown to the tenant so the ceiling is never a surprise.
+
+- **queries.ts** — `getTodayUsage` is one primary-key read joining the org's
+  plan to today's counter; `listRecentUsage` is the trailing window, the
+  `usage_daily_recent` index's only caller. Straight from Postgres like
+  every dashboard read: a realtime outage must not blank the page whose job
+  is telling a customer whether their widget is still answering. **Zeros
+  here are honest**, unlike the rates in §9.13 — "0 answers today" is a fact
+  about a quiet morning, where "0% deflection" would be a claim about a
+  product nobody has used. The day boundary is computed by POSTGRES
+  (`(NOW() AT TIME ZONE 'UTC')::date`), matching what realtime writes, so a
+  Vercel instance's clock is never in charge of it. The deployment override
+  is deliberately NOT applied: it lives in realtime's environment, and a
+  dashboard guessing at it would state a limit the service might not
+  enforce — what this page promises is what the PLAN promises.
+
+- **The Today card** on the org overview (§9.7) renders it as a
+  `role="meter"`, clamped at 100%. The clamp is the honest handling of a
+  real thing: the check runs before an answer and the increment after it, so
+  answers in flight when the ceiling is reached can overshoot it. DATAFLOW
+  §10 states that imprecision and why closing it — a reservation before
+  every model call, released on failure, leaked on every crash — costs more
+  than the overshoot the token buckets already bound.
+
+- **Tests** — DB-gated: a quiet day reading zero against the plan's ceiling,
+  counters read and a plan change followed (the limit is the plan's, not a
+  copy taken when the counter was written), the overshoot clamped, yesterday
+  not counted against today, and one tenant's usage invisible to another.
+
+### §9.15 `src/lib/stripe/`, `src/lib/billing/`, the webhook and billing page (M5.4)
+
+Billing lives in web/ for the reason the control-plane split exists: a
+webhook is a short request/response with no stream and no socket, and it
+belongs beside the tables it writes. realtime has no billing code at all.
+
+- **stripe/signature.ts** — the only thing standing between a public URL
+  and an UPDATE on `organizations.plan`. Hand-rolled for the reason RRF and
+  the session tokens are: 40 lines of HMAC over a documented format, and
+  reading it is how someone convinces themselves it is right. Three checks
+  in a deliberate ORDER — the MAC (constant-time; length compared first,
+  because timingSafeEqual throws on a mismatch and would turn a short
+  forgery into a 500), then freshness, then shape. Signature BEFORE
+  freshness because the timestamp is only meaningful once the MAC has proven
+  nobody chose it; the timestamp is inside the signed payload, which is
+  exactly what makes it usable as a replay bound. MULTIPLE `v1` signatures
+  are accepted if ANY matches, because that is how Stripe's endpoint-secret
+  rotation works — taking only the first would break every rotation, the one
+  operation this must not discourage. Failure reasons are returned for
+  LOGGING and never for the response body: invalid-versus-stale
+  distinguishable to an unauthenticated caller is an oracle, the same stance
+  as the session token's payload-or-null.
+
+- **stripe/client.ts** — the two REST calls this product makes (Checkout
+  session, Billing Portal session), form-encoded over fetch. **The `stripe`
+  SDK was considered and rejected, with the case for it written down**:
+  retries, idempotency keys, version pinning, typed responses, a decade of
+  edge cases — against two endpoints and several megabytes in a serverless
+  bundle, when the security-critical piece is the file above. If this grew
+  invoices, refunds, or tax, that trade flips; saying so makes the reversal
+  a decision rather than a rediscovery. Two details carry the webhook side:
+  `subscription_data[metadata]` puts org and plan on the SUBSCRIPTION, so
+  every later `customer.subscription.*` event already says which tenant and
+  tier it concerns — the alternative is a price-id to plan table that must
+  stay in sync with Stripe's dashboard. And **a live secret key is REFUSED
+  by name**: this is a demo deployment that must never charge a real card,
+  and lifting the guard is a deliberate one-line act.
+
+- **billing/apply.ts** — the event applied in ONE transaction with its own
+  id, which is what makes redelivery safe: either the event is recorded AND
+  applied, or neither happened and Stripe's retry does it. Only
+  `customer.subscription.created|updated|deleted` are acted on;
+  `checkout.session.completed` is deliberately ignored, because it says a
+  checkout finished rather than what the subscription IS, and handling both
+  would put two writers on one row whose outcome depended on delivery order
+  Stripe does not promise. Three judgments worth their comments: `past_due`
+  KEEPS the plan (Stripe retries a card for days, and breaking a customer's
+  support widget the hour their card expired is the worse product) while
+  `unpaid`/`canceled` drop to free; a `deleted` event is cancellation
+  whatever the payload's status field claims; and once a subscription id is
+  cancelled, later events for the SAME id change nothing — the out-of-order
+  case that would otherwise resurrect a cancelled subscription. Everything
+  non-applied — duplicate, ignored type, unknown org, malformed — is still a
+  2xx, because anything else is redelivered forever.
+
+- **api/stripe/webhook/route.ts** — `req.text()` and never `req.json()`
+  (the signature covers the exact bytes); nodejs runtime (node:crypto);
+  404 when unconfigured, the same indistinguishable-from-absent stance as
+  realtime's internal API (§3.22); 400 on a bad signature with the reason
+  logged, not returned; 500 ONLY on a database failure, which is the one
+  case where a Stripe retry is what we want.
+
+- **billing/actions.ts + PlanCards + the billing page** — the trust ladder
+  is providers'/sources' (signed-in → member → OWNER: billing is
+  unambiguously the owner's, and the page 404s an agent rather than
+  explaining what they may not do). Return URLs are built from
+  `NEXT_PUBLIC_APP_URL`, never from the request's Host header — a redirect
+  target derived from an attacker-controllable header is how open redirects
+  happen, and this one is handed to a third party to bounce a user through.
+  Cards, invoices, downgrades and cancellation all go to Stripe's hosted
+  portal: every one is a payment surface with regulatory weight, and the
+  engineering worth showing here is the webhook that makes their outcome
+  true in our database, not a second copy of their UI. One form per plan so
+  a pending state belongs to the button that was pressed. The page says out
+  loud that it is test mode.
+
+- **Tests** — keyless for signatures (accepted; body tampered; wrong secret;
+  replay outside tolerance in BOTH directions with the boundary pinned;
+  multiple v1 signatures in either order; nine malformed headers that must
+  400 rather than throw; a correctly signed body that is not an event) and
+  for the client against a loopback fake (the live-key refusal, absence
+  reported as absence, the form Stripe actually receives including the
+  subscription metadata, customer reuse, a missing price refusing to check
+  out rather than charging for another tier, Stripe's error surfaced without
+  the key anywhere in it). DB-gated for application: the upgrade, a
+  REDELIVERED event applying exactly once (with a downgrade in between that
+  the redelivery must not undo), five CONCURRENT redeliveries producing one
+  application, the dunning path (past_due keeps the plan, unpaid drops it
+  while the row still records what was bought), cancellation ignoring a
+  contradictory status field, the late-update resurrection refused while a
+  NEW subscription id still resubscribes, the period end read from either
+  place the API version puts it, unknown types recorded and ignored, missing
+  or unknown metadata refused rather than guessed, and one tenant's
+  subscription invisible to another.

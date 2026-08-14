@@ -6,6 +6,7 @@ import * as migration001 from "@/db/migrations/001_initial_schema"
 import * as migration002 from "@/db/migrations/002_handoff"
 import * as migration003 from "@/db/migrations/003_answer_tokens"
 import * as migration004 from "@/db/migrations/004_usage_daily"
+import * as migration005 from "@/db/migrations/005_billing"
 //#endregion
 
 //#region Type Defs
@@ -37,6 +38,7 @@ const MIGRATIONS: Record<string, Migration> = {
   "002_handoff": migration002,
   "003_answer_tokens": migration003,
   "004_usage_daily": migration004,
+  "005_billing": migration005,
 }
 //#endregion
 

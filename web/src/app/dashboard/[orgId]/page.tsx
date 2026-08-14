@@ -122,9 +122,9 @@ export default async function OrgOverviewPage({
         </ol>
         <p className="orghome-cardnote">
           Every step above is live, as are the{" "}
-          <Link href={`/dashboard/${org.id}/inbox`}>agent inbox</Link> and{" "}
-          <Link href={`/dashboard/${org.id}/metrics`}>metrics</Link>. Billing is
-          what the dashboard still owes you.
+          <Link href={`/dashboard/${org.id}/inbox`}>agent inbox</Link>,{" "}
+          <Link href={`/dashboard/${org.id}/metrics`}>metrics</Link>, and{" "}
+          <Link href={`/dashboard/${org.id}/billing`}>billing</Link>.
         </p>
       </section>
     </div>
