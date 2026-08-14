@@ -3330,3 +3330,32 @@ belongs beside the tables it writes. realtime has no billing code at all.
   place the API version puts it, unknown types recorded and ignored, missing
   or unknown metadata refused rather than guessed, and one tenant's
   subscription invisible to another.
+
+**Verified live** against the running dev server, with an authenticated
+session and Stripe configured in TEST mode with fake keys (no Stripe
+account involved): an unsigned delivery, a wrong-secret signature, and an
+hour-old replay were each refused 400 by the ROUTE with the org's plan
+unchanged; a correctly signed delivery returned 200 and upgraded the org
+through the real handler; the SAME event redelivered returned 200 and
+applied nothing a second time (the org was downgraded in between to prove
+it); and a new event id applied again. The pages were then rendered in a
+browser: the overview's quota meter measured 6.85% of its track for 137 of
+2,000 answers with the correct ARIA values, and the billing page showed the
+tiers, the current-plan badge, the past-due explanation, and the renewal
+date. Two layout defects were found that way and fixed — the plan grid's
+15rem minimum wrapped the third tier onto its own row inside the
+dashboard's 720px content column (a pricing table that is not a row is not
+a comparison), and the org nav's eighth link pushed the whole dashboard
+into horizontal scroll at 375px, now wrapped. A third, pre-existing one is
+recorded rather than quietly fixed: the shell header's email does not
+shrink, so a long address still overflows a phone viewport.
+
+**What was NOT verified, and why:** a real Checkout round-trip. It needs a
+Stripe account with test-mode price ids, which this repo deliberately does
+not carry — the moment `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and
+the two price ids are in web's environment, the Upgrade buttons hit the
+real API and `stripe listen --forward-to localhost:3001/api/stripe/webhook`
+delivers genuine events to the handler proven above. There is deliberately
+no keyless substitute for that last step: a fake that satisfied it would
+have to forge Stripe's signature, which is the one thing about this surface
+that must never be made easy.

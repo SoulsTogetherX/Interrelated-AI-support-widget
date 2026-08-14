@@ -1,8 +1,13 @@
 /* PlanCards. */
 
+/* 13rem, not 15: the dashboard's content column is 720px wide, and at a
+   15rem minimum the third tier wrapped to its own row — a pricing table
+   reads as a COMPARISON, and 2 + 1 is not one. Measured in a browser, not
+   guessed. It still collapses to two columns and then one as the viewport
+   narrows. */
 .plancards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
   gap: 1rem;
 }
 
