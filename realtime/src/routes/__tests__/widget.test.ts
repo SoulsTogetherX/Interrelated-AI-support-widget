@@ -9,6 +9,8 @@ import { createApp } from "@/app"
 import { RateLimiter } from "@/widget/rateLimit"
 import { mintSessionToken } from "@/widget/sessionToken"
 import { groundedMockResponder } from "@/answer/mockResponder"
+import { utcDay } from "@/usage/daily"
+import { PLANS } from "@shared/billing/plans"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import { MockLLMProvider } from "@providers/llm/mock"
 import type { AnswerEvent } from "@shared/grounding/events"
@@ -289,19 +291,57 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
     })
 
     it("enforces the per-org daily answer cap BEFORE the model call", async () => {
+      // Since M5.3 the check reads usage_daily, and that counter is written
+      // by the answer path itself — earlier tests in this file answered
+      // questions, so it is already non-zero. Asserting that first is what
+      // makes the 429 below evidence about the counter rather than about
+      // some other coincidence.
+      const counter = await db.selectFrom("usage_daily")
+        .select("answers").where("org_id", "=", orgId).executeTakeFirst()
+      expect(Number(counter?.answers ?? 0)).toBeGreaterThan(0)
+
       const { server: cappedServer, baseUrl: cappedUrl } = await listen(buildApp({ dailyAnswerCap: 1 }))
       const previousBase = baseUrl
       baseUrl = cappedUrl
       try {
         const token = await freshToken()
-        // The org already answered earlier tests' questions today, so the
-        // cap of 1 is already exhausted — the very first ask must 429.
         const { status, json } = await chat(token, { question: CHUNK_TEXT })
         expect(status).toBe(429)
         expect(json).toEqual({ error: "daily quota reached" })
       } finally {
         baseUrl = previousBase
         await new Promise((resolve) => cappedServer.close(resolve))
+      }
+    })
+
+    it("takes the ceiling from the org's PLAN when no override is configured", async () => {
+      // No dailyAnswerCap anywhere in this test: the only number in play is
+      // the one the plan catalog states. Fill today's counter to the free
+      // tier's ceiling and the widget must stop; upgrade the org and the
+      // same traffic is under the new ceiling — a plan change taking effect
+      // on the very next question, with no cache to serve it stale.
+      const token = await freshToken()
+      await db.insertInto("usage_daily")
+        .values({ org_id: orgId, day: utcDay(), answers: PLANS.free.dailyAnswers })
+        .onConflict((oc) => oc.columns(["org_id", "day"])
+          .doUpdateSet({ answers: PLANS.free.dailyAnswers }))
+        .execute()
+      try {
+        const capped = await chat(token, { question: CHUNK_TEXT })
+        expect(capped.status).toBe(429)
+        expect(capped.json).toEqual({ error: "daily quota reached" })
+
+        await db.updateTable("organizations").set({ plan: "starter" })
+          .where("id", "=", orgId).execute()
+        const upgraded = await chat(token, { question: CHUNK_TEXT })
+        expect(upgraded.status).toBe(200)
+        expect(upgraded.events.at(-1)?.type).toBe("done")
+      } finally {
+        await db.updateTable("organizations").set({ plan: "free" })
+          .where("id", "=", orgId).execute()
+        // Drop the day's counter so the rest of the suite is not capped by
+        // the number this test invented. The next answer recreates it.
+        await db.deleteFrom("usage_daily").where("org_id", "=", orgId).execute()
       }
     })
 

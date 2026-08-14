@@ -15,6 +15,7 @@ import type { RetrievedChunk } from "@/retrieval/search"
 import { evaluateGroundedness, DEFAULT_MAX_DISTANCE } from "@/answer/gate"
 import { buildAnswerMessages, buildRetryMessages } from "@/answer/prompt"
 import { getOpenHandoff } from "@/handoff/escalate"
+import { recordAnswer } from "@/usage/daily"
 //#endregion
 
 //#region Type Defs
@@ -329,10 +330,12 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
 }
 
 /** One transaction for the assistant message, ALL its citation verdicts
- *  (stripped ones included — they are the strip-rate's raw data), and the
- *  conversation's recency bump. Atomic so a crash can never persist an
- *  answer without its verdicts — the verdicts are the audit trail that
- *  makes the answer trustworthy. */
+ *  (stripped ones included — they are the strip-rate's raw data), the
+ *  conversation's recency bump, and the day's usage counter. Atomic so a
+ *  crash can never persist an answer without its verdicts — the verdicts
+ *  are the audit trail that makes the answer trustworthy — and so the
+ *  counter the next question's quota check reads can never disagree with
+ *  the rows it counts. */
 async function persistAssistantMessage(db: Kysely<Database>, row: {
   messageId: string
   conversationId: string
@@ -392,6 +395,16 @@ async function persistAssistantMessage(db: Kysely<Database>, row: {
       .set({ last_message_at: new Date() })
       .where("id", "=", row.conversationId)
       .execute()
+
+    // The quota counter (M5.3), inside the same transaction as the answer
+    // it counts. A refusal counts too: it spent an embedding call and a
+    // retrieval query, and a ceiling that exempted the cheapest questions
+    // would be one an off-topic flood runs straight through.
+    await recordAnswer(trx, {
+      orgId: row.orgId,
+      refused: row.refused,
+      usage: row.usage,
+    })
   })
 }
 //#endregion

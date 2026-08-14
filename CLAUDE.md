@@ -24,9 +24,17 @@ model is ever priced as a cheaper sibling, and unknown priced as null rather
 than as free — the figure says what it is (list price, generation only, not
 what a free tier billed) and reports how many answers it could not price.
 The same pass deleted a by-model refusal column that could only ever read
-zero and had passed a test whose fixture did not match the pipeline. Still
-open in M5: the `usage_daily` counters, and Stripe test-mode billing with
-tier caps enforced before the model call. M0–M2 are complete: the full
+zero and had passed a test whose fixture did not match the pipeline. M5.3
+is done — **plan quotas, enforced pre-flight** (§2.4.9, §3.3.6, §3.26,
+§3.18, §9.7, DATAFLOW §10): migration 004's `usage_daily` counters, written
+in the same transaction as the answers and escalations they count so they
+cannot drift, and read as ONE primary-key lookup before every model call
+against the org's plan ceiling — the check that used to scan a day of
+messages now costs the same on a tenant's busiest day as on their first,
+and the deployment override can only TIGHTEN a plan, never widen it. The
+plan catalog has two enforcers, a compile error and a DB-gated test, because
+neither the compiler nor the test can see what the other does. Still open in
+M5: Stripe test-mode billing. M0–M2 are complete: the full
 content pipeline in (source → crawl → parse → chunk → embed → store), back
 out (query → dense + lexical arms → RRF fusion → ranked chunks), and
 retrieval quality MEASURED — an 80-question hand-written golden set scored
@@ -434,6 +442,29 @@ wrong thing meanwhile. One frame removes the ambiguity before it exists.
   than lie, and a socket that dies mid-sentence cannot leave "an agent is
   typing…" on screen forever — the phantom-participant problem the
   heartbeat solves for presence, solved here without a timer per socket.
+
+#### §2.4.9 `shared/billing/plans.ts`
+The plan catalog (M5.3) — what each tier is called, costs, and allows. One
+table read by three surfaces that must agree: realtime enforces the answer
+ceiling before every model call (§3.18), the dashboard shows a tenant where
+they stand against it (§9.7), and M5.4's checkout turns a plan id into a
+Stripe price. Three copies of "the free tier stops at 200" would eventually
+disagree on the number a customer was charged against.
+
+The ids are the same three the schema's CHECK allows, and that coupling has
+TWO enforcers because neither alone is enough: `shared/db/schema.ts` types
+`organizations.plan` as `PlanId`, so a plan the catalog does not know is a
+compile error at every query — and a DB-gated test inserts an org at every
+catalog id, so a plan the CHECK does not know fails loudly in CI instead of
+at a customer's upgrade. The compiler cannot read SQL; the test cannot
+catch the typo the compiler catches first.
+
+Deliberately three tiers with ONE axis that bites (answers per day): a
+portfolio product with five tiers and eleven feature flags is inventing a
+business, and the engineering worth showing is enforcing one quota
+correctly before the model call rather than modelling many. `sources` is
+stated and not yet enforced, and the file says so — a limit we advertise
+and do not check would be worse than none.
 
 #### §2.4.8 `shared/pricing/models.ts`
 The per-provider price list — the one thing M5's cost metric was blocked
@@ -935,6 +966,37 @@ PAIRED — a provider reports usage as one object or not at all, so half a
 record is a parsing bug, and storing it would quietly under-report output
 tokens, the expensive half on every model in the price list.
 
+### §3.3.6 `src/db/migrations/004_usage_daily.ts` — the counters
+One row per org per UTC day: `answers`, `refusals`, `escalations`, and the
+day's token totals. What the pre-flight quota check reads (§3.18) and what
+a billing period sums (M5.4).
+
+The objection first, because it is the right one: `messages` already holds
+every one of these facts, and M2.5's cap counted them with a range scan
+over the (org_id, created_at) index. That works. What it is not is
+CONSTANT — the cost of the check grows with the tenant's traffic, and it
+runs before every question, including ones that get refused or rate-limited.
+A counter makes the most frequent query on the hot path a single
+primary-key lookup whose cost does not depend on how successful the
+customer is; the same row is also what a billing period sums, where
+re-deriving a month from `messages` on every page load is that scan
+repeated.
+
+The counters are written in the SAME transaction as the rows they count
+(§3.15.3's persist step, §3.23's insert), which is why this is not a
+nightly rollup: a cap enforced against a number up to a day stale is not a
+cap. UTC days, not org-local — a per-org timezone would make the primary
+key depend on a setting a tenant can change, silently re-bucketing history
+the moment they moved offices; the boundary being arbitrary but FIXED is
+what keeps yesterday's number true tomorrow. `answers` counts refusals: a
+refusal spends no generation tokens but does spend an embedding call and a
+retrieval query, and a ceiling that exempted the cheapest questions is one
+an off-topic flood runs straight through. Token columns are BIGINT where
+`messages` uses INT, because one row here sums a whole day and a counter
+that overflows silently corrupts a bill. Two CHECKs make a disagreement
+between writers unrepresentable rather than merely unlikely: counters never
+go negative, and `refusals <= answers`.
+
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
 `MIGRATIONS` record, not discovered from disk. Kysely's stock
@@ -1090,15 +1152,33 @@ force-exits.
   wrong-secret tokens, token replay from a different origin, question
   length edges, own-conversation continuation vs the cross-visitor
   hijack probe (opaque error event, nothing to learn), malformed
-  conversation ids, the daily cap 429 BEFORE the model call, and a
+  conversation ids, the daily cap 429 BEFORE the model call — with the
+  M5.3 case that pins where the number comes from: fill today's counter to
+  the FREE plan's ceiling with no override configured, watch the widget
+  stop, upgrade the org, and watch the very next question be answered — and a
   rate-limit 429 that still carries CORS. Escalate (M4.1): the queue place
   taken once and reported idempotently with CORS on the real response, the
   bot falling silent on the next question, the cross-visitor hijack and a
   fabricated id both 404 with nothing written, and bad token / malformed
   id / replayed origin all rejected before any write.
+- `usage/__tests__/daily.test.ts` — DB-gated (M5.3). The counters: a row
+  created on the first answer and ADDED to after; ten CONCURRENT answers
+  producing exactly ten (the reason it is an upsert, not a read-then-write);
+  a refusal counted as an answer with zero tokens; days kept apart, so
+  yesterday's quota does not follow a tenant into today; escalations
+  counted without touching the answer count; and the CHECKs refusing a
+  state that would mean two writers disagreed (`refusals > answers`, a
+  negative counter, a second row for one org-day). The quota: the PLAN's
+  ceiling, following a plan change, a deployment override that TIGHTENS but
+  never widens, `exceeded` flipping AT the limit rather than past it, null
+  for an org that does not exist — and the plan-catalog lockstep, which
+  inserts an org at EVERY catalog id, so a tier added without a migration
+  fails here instead of at a customer's upgrade.
 - `handoff/__tests__/escalate.test.ts` — DB-gated. The transition and its
   record moving together; idempotence (a second request reports the first,
-  and does not rewrite why the visitor is waiting); the CONCURRENT
+  and does not rewrite why the visitor is waiting, and adds NOTHING to the
+  day's escalation counter — while a genuine re-escalation after a close
+  does count); the CONCURRENT
   double-escalation — five simultaneous requests must yield one row, one
   `created: true`, and no error — which is the only way to show that
   idempotence comes from the index rather than from the read above it; the
@@ -1629,6 +1709,34 @@ it prints the answer's token counts and their list-price cost too — the
 cost metric drivable by hand — and distinguishes "not reported by this
 provider" from "unpriced model", which are different silences (§2.4.8).
 
+### §3.26 `src/usage/daily.ts` — the counters, written and read (M5.3)
+
+Three functions over `usage_daily` (§3.3.6), and the shape of each is
+argued in the file. `recordAnswer` and `recordEscalation` are upserts whose
+increment amounts travel in the VALUES so the conflict branch can add
+`excluded` to the stored row — the numbers appear once instead of once per
+branch — and both take a Kysely OR a Transaction because every caller
+passes a transaction: the counter is incremented alongside the row it
+counts, so the two cannot disagree. Ten concurrent answers produce ten,
+which application-side arithmetic would not; a test fires them together.
+`recordEscalation` is called ONLY where a handoff row was actually created
+(§3.23), because a visitor mashing the button must not inflate the number
+the deflection rate is measured against.
+
+`getDailyQuota` is the read the chat route makes before every question: one
+LEFT JOIN from `organizations` to today's counter row, both sides
+primary-key lookups, returning the plan, what has been spent, the effective
+limit, and whether it is exceeded. A missing counter row is a quiet day —
+0, not an error. The deployment override can only TIGHTEN the plan's cap
+(the effective limit is the minimum of the two), which is the direction
+that fails safe: one mistyped environment variable must not be able to hand
+every tenant on every plan an unlimited allowance, and a test pins both
+directions.
+
+`utcDay` owns the day boundary that the widget route's `utcDayStart` used
+to compute inline, so exactly one function decides what "today" means for
+the quota.
+
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 
 #### §3.17.1 `src/widget/sessionToken.ts`
@@ -1672,9 +1780,12 @@ visitor types (the free-tier design's DB-warming path). `POST
 /v1/widget/chat`: token verify (uniform 401), live-Origin-vs-token-origin
 re-check (kills replay from another site), rate limits AFTER auth (their
 429s carry CORS so the widget can render "one moment") and BEFORE work,
-then the daily ceiling counted from messages via the (org_id,
-created_at) index — model spend, not conversation length, refusals
-included — then SSE. Since M3.5 the answer's LLM is resolved per request
+then the daily ceiling — since M5.3 the org's PLAN cap (§2.4.9) against
+the `usage_daily` counter (§3.26), one primary-key-shaped read instead of
+a scan over the day's messages, so the most frequent query on this path
+stops getting slower as the customer succeeds; refusals count, because
+they still spend a retrieval, and the WIDGET_DAILY_ANSWER_CAP env can
+only TIGHTEN a plan, never widen it — then SSE. Since M3.5 the answer's LLM is resolved per request
 from the org's BYO credential (credentials/resolve.ts) with the
 app-level provider as fallback, and since M3.6b the query EMBEDDER is
 resolved the same way — not as a preference but as a requirement, since
@@ -2582,7 +2693,14 @@ the page guard.
   the origin allowlist and rate limits, and saying so on the page is the
   product teaching its own security model), an other-orgs switcher, and
   an honest next-steps map naming which increments unlock providers,
-  sources, and the snippet.
+  sources, and the snippet. Since M5.3 it also carries **Today** — the
+  same `usage_daily` counter realtime checks before every model call
+  (§3.26), against the plan's ceiling, as a `role="meter"` because a quota
+  is a measurement within a known range and a screen reader then reads
+  "37 of 200" without the numbers being duplicated in a label. The bar
+  clamps at 100%: a counter can overshoot by the answers in flight when
+  the ceiling was reached, and a bar wider than its track reads as a
+  rendering bug rather than as the honest overshoot it is.
 - **Tests** — keyless: org-name boundaries (1/2, 64/65), pk format and
   its never-an-entity-id property (in shared's ids suite). DB-gated:
   the atomic create (all three rows, DB-default plan), member access vs

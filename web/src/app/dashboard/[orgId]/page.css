@@ -73,3 +73,32 @@
   gap: 0.5rem;
   font-size: 0.9375rem;
 }
+
+.orghome-usage {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.orghome-usage strong {
+  font-size: 1.25rem;
+}
+
+/* A meter rather than a bare div: the quota is a measurement within a known
+   range, which is exactly what role="meter" describes, and a screen reader
+   then reads "37 of 200" without the numbers being duplicated in a label. */
+.orghome-meter {
+  margin-top: 0.5rem;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.orghome-meterfill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  /* No transition: this is a server-rendered snapshot, and animating a
+     number that only changes on reload would suggest it is live. */
+}

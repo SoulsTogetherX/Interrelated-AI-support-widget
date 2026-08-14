@@ -102,6 +102,35 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     expect(await openRows(conversationId)).toHaveLength(1)
   })
 
+  it("counts each real escalation once, and an impatient repeat not at all", async () => {
+    // M5.3: the day's escalation counter is what the deflection rate is
+    // measured against, so a visitor mashing the button must not inflate
+    // it. Only the request that actually created a handoff increments —
+    // which is also why the increment lives INSIDE the transaction that
+    // does the creating, rather than beside the call.
+    const org = newId("org")
+    await db.insertInto("organizations").values({ id: org, name: "Counted Co" }).execute()
+    try {
+      const conversationId = await makeConversation(org, "vis_count")
+      await requestHandoff(db, { orgId: org, conversationId, visitorId: "vis_count", reason: "visitor_request" })
+      await requestHandoff(db, { orgId: org, conversationId, visitorId: "vis_count", reason: "visitor_request" })
+
+      const counter = await db.selectFrom("usage_daily")
+        .select("escalations").where("org_id", "=", org).executeTakeFirst()
+      expect(counter?.escalations).toBe(1)
+
+      // A second, genuine escalation of the same conversation — after the
+      // first is closed — DOES count: it is a second visitor waiting.
+      await closeHandoff(db, { orgId: org, conversationId, closedBy: await makeAgent() })
+      await requestHandoff(db, { orgId: org, conversationId, visitorId: "vis_count", reason: "low_confidence" })
+      const after = await db.selectFrom("usage_daily")
+        .select("escalations").where("org_id", "=", org).executeTakeFirst()
+      expect(after?.escalations).toBe(2)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
   it("survives a concurrent double-escalation with exactly one row", async () => {
     // The claim under test: idempotence comes from the index, not from the
     // read above it. Fired together, one insert must lose on the unique

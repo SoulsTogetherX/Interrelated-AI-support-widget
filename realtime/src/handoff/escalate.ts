@@ -20,6 +20,7 @@ import { newId } from "@shared/utils/ids"
 import { sql } from "kysely"
 import type { Kysely, Transaction } from "kysely"
 import type { Database } from "@/db/schema"
+import { recordEscalation } from "@/usage/daily"
 //#endregion
 
 //#region Types
@@ -158,6 +159,13 @@ export async function requestHandoff(
         .set({ status: "escalated" })
         .where("id", "=", request.conversationId)
         .execute()
+      // The day's escalation counter (M5.3), in the same transaction as the
+      // handoff it counts. Only here — the two paths that return an
+      // EXISTING handoff (the read above, and the unique-violation loser
+      // below) add nothing, because a visitor mashing the button must not
+      // inflate the escalation rate the deflection metric is measured
+      // against.
+      await recordEscalation(trx, { orgId: request.orgId })
       const handoff = await selectOpen(trx, request.conversationId)
       if (!handoff) throw new Error("handoff vanished inside its own transaction")
       return { ok: true, handoff, created: true } as const

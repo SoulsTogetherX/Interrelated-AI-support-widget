@@ -12,6 +12,7 @@ import { answerQuestion } from "@/answer/pipeline"
 import { resolveEmbeddingProvider, resolveGenerationProvider } from "@/credentials/resolve"
 import { requestHandoff } from "@/handoff/escalate"
 import { mintHandoffTicket } from "@/handoff/ticket"
+import { getDailyQuota } from "@/usage/daily"
 import { RateLimiter } from "@/widget/rateLimit"
 import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
 import type { SessionTokenPayload } from "@/widget/sessionToken"
@@ -56,8 +57,11 @@ interface WidgetRouteOptions {
   tokenSecret: string
   /** Groundedness threshold override (ANSWER_MAX_DISTANCE env at boot). */
   maxDistance?: number
-  /** Per-org answers per UTC day. Flat default until per-plan caps arrive
-   *  with M5 billing. */
+  /** A deployment-wide ceiling on answers per org per UTC day
+   *  (WIDGET_DAILY_ANSWER_CAP). Since M5.3 the cap normally comes from the
+   *  org's PLAN (shared/billing/plans.ts); this can only TIGHTEN it, never
+   *  widen it — see the chat route for why that direction is the only safe
+   *  one. Unset means the plan alone decides. */
   dailyAnswerCap?: number
   /** Injectable for tests; production uses the defaults below. */
   mintLimiter?: RateLimiter
@@ -67,7 +71,6 @@ interface WidgetRouteOptions {
 //#endregion
 
 //#region Constants
-const DEFAULT_DAILY_ANSWER_CAP = 200
 /** Mint: 10 burst / ~10 per minute per IP — a human opens one bubble. */
 const MINT_CAPACITY = 10
 const MINT_REFILL_PER_SECOND = 10 / 60
@@ -107,18 +110,11 @@ function sseWrite(res: Response, event: AnswerEvent): void {
   res.write(`data: ${JSON.stringify(event)}\n\n`)
 }
 
-/** Start of the current UTC day — the daily cap's window. UTC (not org
- *  timezone) so the boundary is deterministic and cheap; M5 can refine. */
-function utcDayStart(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-}
-
 const VISITOR_ID_SHAPE = /^[A-Za-z0-9_-]{1,100}$/
 //#endregion
 
 //#region Routes
 function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void {
-  const dailyCap = options.dailyAnswerCap ?? DEFAULT_DAILY_ANSWER_CAP
   const mintLimiter = options.mintLimiter
     ?? new RateLimiter({ capacity: MINT_CAPACITY, refillPerSecond: MINT_REFILL_PER_SECOND })
   const chatIpLimiter = options.chatIpLimiter
@@ -244,17 +240,21 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         return
       }
 
-      // The daily ceiling, checked BEFORE the model call. Counting
-      // assistant rows (refusals included) makes the cap about model
-      // spend, not conversation length.
-      const dayStart = utcDayStart(new Date())
-      const answered = await options.db.selectFrom("messages")
-        .select(({ fn }) => fn.countAll<string>().as("n"))
-        .where("org_id", "=", session.org)
-        .where("role", "=", "assistant")
-        .where("created_at", ">=", dayStart)
-        .executeTakeFirst()
-      if (Number(answered?.n ?? 0) >= dailyCap) {
+      // The daily ceiling, checked BEFORE the model call — the plan's
+      // promise that the worst case is a stopped widget, never a surprise
+      // bill. Since M5.3 the number comes from the org's PLAN and the count
+      // from usage_daily, so this is one primary-key-shaped read whose cost
+      // does not grow with the tenant's traffic (it used to scan the day's
+      // messages, which ran before EVERY question and got slower the more
+      // successful the customer became).
+      //
+      // The env override can only TIGHTEN the plan's cap, never widen it:
+      // one mistyped variable that handed every tenant an unlimited
+      // allowance is precisely the failure a quota exists to prevent.
+      const quota = await getDailyQuota(options.db, session.org, {
+        overrideLimit: options.dailyAnswerCap,
+      })
+      if (quota?.exceeded) {
         res.status(429).json({ error: "daily quota reached" })
         return
       }
@@ -432,6 +432,6 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
 //#endregion
 
 //#region Exports
-export { configureWidgetRoutes, DEFAULT_DAILY_ANSWER_CAP }
+export { configureWidgetRoutes }
 export type { WidgetRouteOptions }
 //#endregion

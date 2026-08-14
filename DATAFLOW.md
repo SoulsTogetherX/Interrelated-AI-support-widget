@@ -54,7 +54,12 @@ loop (§8.7): an agent finishes the conversation, the room is TOLD, and the
 bot takes the thread back. **M4 COMPLETE.** M5 is underway: as of M5.1 the
 tenant can see what the product is doing (§9) — deflection, strip rate,
 latency, and time-to-first-human-response, all read from columns the
-pipeline has been writing since M2.
+pipeline has been writing since M2 — and as of M5.2 what it costs, from
+token counts the answer path now records and a dated price list. M5.3 added
+the one number that is enforced rather than reported (§10): the day's usage
+counters, written inside the transactions that create the answers and
+escalations they count, and read as one primary-key lookup against the
+org's plan before any model call.
 
 ---
 
@@ -510,9 +515,10 @@ widget (M2.6) or curl-with-headers
                                        site dies even before rate limits)
       per-IP + per-visitor buckets     429 WITH CORS — the widget renders
                                        a "one moment" state
-      per-org daily ceiling            COUNT assistant messages today via
-                                       the (org_id, created_at) index,
-                                       BEFORE any model call
+      per-org daily ceiling            getDailyQuota (§10): the org's PLAN
+                                       cap against today's usage_daily
+                                       counter, ONE primary-key read,
+                                       BEFORE any model call → 429
       validate question (≤2000 chars) and conversationId shape
       → SSE headers flush              TTFB paid before retrieval starts
       → resolveGenerationProvider      realtime/src/credentials/resolve.ts
@@ -1315,3 +1321,81 @@ Nothing on the read path writes. Every column it reads was written when the
 pipeline ran — `refused`, `model`, `ttft_ms`, `total_ms` (§5.2), every
 citation verdict (§5.2), `requested_at` (§8), and now the token pair — which
 is the whole point of instrumenting before there was anything to measure.
+
+---
+
+## §10 Quotas — the counter, and the check before the model call (M5.3)
+
+The one metric-shaped number that is not only reported: it is ENFORCED, so
+it runs on the hot path and its cost matters.
+
+### §10.1 Writing the counters
+
+Both writes ride inside a transaction that was already happening, which is
+what makes drift impossible rather than unlikely:
+
+```
+answerQuestion → persistAssistantMessage       realtime/src/answer/pipeline.ts
+  BEGIN
+    INSERT messages (…, input_tokens, output_tokens)
+    INSERT message_citations × N                 every verdict, stripped too
+    UPDATE conversations.last_message_at
+    recordAnswer(trx, {orgId, refused, usage})   realtime/src/usage/daily.ts
+      INSERT usage_daily (org_id, day=utcDay(), answers=1,
+                          refusals=0|1, input_tokens, output_tokens)
+      ON CONFLICT (org_id, day) DO UPDATE
+        SET answers = usage_daily.answers + excluded.answers, …
+  COMMIT
+
+requestHandoff                                  realtime/src/handoff/escalate.ts
+  BEGIN
+    INSERT handoff_sessions                      the partial unique index
+    UPDATE conversations.status = 'escalated'    decides the race
+    recordEscalation(trx, {orgId})               escalations + 1
+  COMMIT
+  ↑ ONLY on the branch that creates. The read-first hit and the
+    unique-violation loser both return the existing handoff and count
+    nothing — a visitor mashing the button must not inflate the number the
+    deflection rate is measured against.
+```
+
+Ten answers landing together produce ten, because the arithmetic is
+Postgres's (`ON CONFLICT DO UPDATE`), not the application's. A
+read-then-write would lose most of them under exactly the load a quota
+exists for.
+
+### §10.2 Reading it, before the model call
+
+```
+POST /v1/widget/chat                    realtime/src/routes/widget.ts
+  … token verify, origin re-check, token buckets …
+  → getDailyQuota(db, org, {overrideLimit})     realtime/src/usage/daily.ts
+      SELECT organizations.plan, usage_daily.answers
+        FROM organizations
+        LEFT JOIN usage_daily ON (org_id, day = today UTC)
+       WHERE organizations.id = $org
+      ↑ one round trip, both sides primary-key lookups. No counter row is
+        a quiet day → 0, not an error.
+      limit    = min(PLANS[plan].dailyAnswers, overrideLimit ?? ∞)
+      exceeded = answersToday >= limit
+  → exceeded → 429 {error: "daily quota reached"}   (nothing was spent)
+```
+
+Three decisions worth their lines:
+
+| Decision | Why, and what it rejects |
+|---|---|
+| Counter, not `COUNT(*)` over today's messages | The old check was a range scan on the (org_id, created_at) index — correct, but its cost grew with the tenant's traffic, and it runs before EVERY question including the ones that get refused or rate-limited. The counter's cost is the same on a customer's busiest day as on their first. |
+| Written in the answer's transaction, not rolled up nightly | A cap enforced against a number up to a day stale is not a cap. |
+| The env override can only TIGHTEN | A demo deployment must be able to cap every org below its plan; a mistyped variable must not be able to hand every tenant unlimited answers, which is the exact failure a quota exists to prevent. So the effective limit is the MINIMUM of plan and override. |
+
+**The honest imprecision, stated rather than hidden:** the check runs before
+the answer and the increment after it, so N requests in flight when the
+ceiling is reached can overshoot it by up to N. Closing that would mean
+reserving a slot before the model call and releasing it on failure — two
+more writes on the hot path, and a leaked reservation on every crash — to
+prevent an overshoot bounded by the per-visitor and per-IP token buckets
+already in front of it. The dashboard's meter clamps at 100% for the same
+reason (§9.7): the overshoot is real, small, and not worth a distributed
+lock. What is guaranteed is the property the plan actually promises — the
+worst case is a stopped widget, never an unbounded bill.

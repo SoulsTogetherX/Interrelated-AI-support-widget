@@ -4,6 +4,7 @@
 import Link from "next/link"
 
 import { getPublishableKey, listOrgsForUser, requireOrgMember } from "@/lib/orgs"
+import { getTodayUsage } from "@/lib/usage/queries"
 import "./page.css"
 
 export const metadata = { title: "Overview — Interrelated" }
@@ -15,9 +16,10 @@ export default async function OrgOverviewPage({
 }) {
   const { orgId } = await params
   const { user, org } = await requireOrgMember(orgId)
-  const [publishableKey, orgs] = await Promise.all([
+  const [publishableKey, orgs, usage] = await Promise.all([
     getPublishableKey(org.id),
     listOrgsForUser(user.id),
+    getTodayUsage(org.id),
   ])
   const otherOrgs = orgs.filter((o) => o.id !== org.id)
 
@@ -44,6 +46,36 @@ export default async function OrgOverviewPage({
             </Link>
           ))}
         </nav>
+      ) : null}
+
+      {usage ? (
+        <section className="orghome-card">
+          <h2 className="orghome-cardtitle">Today</h2>
+          {/* The same counter realtime reads before every model call, shown
+              here so the ceiling is never a surprise — the plan's promise
+              is that the worst case is a stopped widget, not a bill. */}
+          <p className="orghome-usage">
+            <strong>{usage.answers.toLocaleString("en-US")}</strong> of{" "}
+            {usage.limit.toLocaleString("en-US")} answers today
+            {usage.refusals > 0 ? ` · ${usage.refusals} refused for want of evidence` : null}
+            {usage.escalations > 0 ? ` · ${usage.escalations} reached a person` : null}
+          </p>
+          <div
+            className="orghome-meter"
+            role="meter"
+            aria-valuenow={usage.answers}
+            aria-valuemin={0}
+            aria-valuemax={usage.limit}
+            aria-label="Answers used today"
+          >
+            <span className="orghome-meterfill" style={{ width: `${usage.fraction * 100}%` }} />
+          </div>
+          <p className="orghome-cardnote">
+            {usage.plan.name} allows {usage.limit.toLocaleString("en-US")} answers per UTC day,
+            counted per organization and checked before the model is called — a refusal counts
+            too, because it still costs a retrieval. The count resets at midnight UTC.
+          </p>
+        </section>
       ) : null}
 
       <section className="orghome-card">
@@ -89,8 +121,10 @@ export default async function OrgOverviewPage({
           </li>
         </ol>
         <p className="orghome-cardnote">
-          Every step above is live. Human handoff (M4) and usage metrics
-          (M5) are what the dashboard still owes you.
+          Every step above is live, as are the{" "}
+          <Link href={`/dashboard/${org.id}/inbox`}>agent inbox</Link> and{" "}
+          <Link href={`/dashboard/${org.id}/metrics`}>metrics</Link>. Billing is
+          what the dashboard still owes you.
         </p>
       </section>
     </div>

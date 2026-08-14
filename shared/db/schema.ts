@@ -5,6 +5,14 @@
 // carries it as a devDependency purely so `typecheck:shared` can see it,
 // the same arrangement fastembed has for providers/local.ts.
 import type { ColumnType, Generated } from "kysely"
+
+// The plan catalog owns the tier ids (shared/billing/plans.ts). Importing
+// the type here rather than repeating the union means a plan the catalog
+// does not know is a compile error at every query that writes one. It does
+// NOT prove the database's CHECK agrees — the compiler cannot read SQL — so
+// a DB-gated test inserts an org at every catalog id, and the two
+// mechanisms cover what the other cannot.
+import type { PlanId } from "../billing/plans"
 //#endregion
 
 //#region Type Defs
@@ -30,9 +38,11 @@ import type { ColumnType, Generated } from "kysely"
 interface OrganizationsTable {
   id: string
   name: string
-  /** Billing tier. Enforced by CHECK in the migration; typed here so a typo
-   *  like "prem" is a compile error, not a runtime constraint violation. */
-  plan: Generated<"free" | "starter" | "pro">
+  /** Billing tier. Enforced by CHECK in the migration; typed from the plan
+   *  catalog so a typo like "prem" is a compile error, not a runtime
+   *  constraint violation — and so the caps the catalog states are the caps
+   *  this column can hold. */
+  plan: Generated<PlanId>
   /** Optional tone/persona text prepended to the org's answer prompts. Lives
    *  on the org (not per-source) because it is part of the CACHEABLE prompt
    *  prefix — see the prompt-assembly notes in CLAUDE.md when M2 lands. */
@@ -328,6 +338,33 @@ interface HandoffSessionsTable {
   closed_at: ColumnType<Date | null, string | Date | null, string | Date | null>
 }
 
+/** One org's counters for one UTC day (§3.3.6) — what the pre-flight quota
+ *  check reads on the hot path and what a billing period sums. Written in
+ *  the same transaction as the rows it counts, so it cannot drift from the
+ *  history it summarizes; a nightly rollup would leave a cap enforced
+ *  against a number up to a day stale, which is not a cap.
+ *
+ *  `day` is a DATE in UTC — pg returns it as a string in this driver's
+ *  default, which is why the select type is string: a Date would carry a
+ *  local-midnight time nobody meant. Counter columns are insert-or-add
+ *  targets, never set directly outside the increment helper. */
+interface UsageDailyTable {
+  org_id: string
+  day: ColumnType<string, string, never>
+  /** Every assistant message, refusals included — see the migration for
+   *  why the cheapest questions still count against a quota. */
+  answers: Generated<number>
+  refusals: Generated<number>
+  /** Genuinely-created handoffs only; an idempotent re-request adds
+   *  nothing (§3.23). */
+  escalations: Generated<number>
+  /** BIGINT in the database: pg returns it as a string, because a bigint
+   *  does not always fit a JS number. Callers coerce at the edge. */
+  input_tokens: ColumnType<string, string | number | undefined, string | number>
+  output_tokens: ColumnType<string, string | number | undefined, string | number>
+  updated_at: ColumnType<Date, string | Date | undefined, string | Date>
+}
+
 /** The Kysely database contract. Every query in the codebase is typed
  *  against this interface — a column typo is a compile error. */
 interface Database {
@@ -347,6 +384,7 @@ interface Database {
   messages: MessagesTable
   message_citations: MessageCitationsTable
   handoff_sessions: HandoffSessionsTable
+  usage_daily: UsageDailyTable
 }
 //#endregion
 
@@ -369,5 +407,6 @@ export type {
   MessagesTable,
   MessageCitationsTable,
   HandoffSessionsTable,
+  UsageDailyTable,
 }
 //#endregion
