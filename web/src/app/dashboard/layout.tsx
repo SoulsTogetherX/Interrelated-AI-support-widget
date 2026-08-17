@@ -27,7 +27,7 @@ export default async function DashboardLayout({
         {user ? (
           <div className="dashshell-session">
             <span className="dashshell-email">{user.email}</span>
-            <form action={logoutAction}>
+            <form className="dashshell-signout-form" action={logoutAction}>
               <button className="dashshell-signout" type="submit">
                 Sign out
               </button>

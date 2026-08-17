@@ -3346,9 +3346,11 @@ date. Two layout defects were found that way and fixed — the plan grid's
 15rem minimum wrapped the third tier onto its own row inside the
 dashboard's 720px content column (a pricing table that is not a row is not
 a comparison), and the org nav's eighth link pushed the whole dashboard
-into horizontal scroll at 375px, now wrapped. A third, pre-existing one is
-recorded rather than quietly fixed: the shell header's email does not
-shrink, so a long address still overflows a phone viewport.
+into horizontal scroll at 375px, now wrapped. A third, pre-existing one was
+recorded rather than quietly fixed, because it predates M5 and lives in a
+file this milestone did not touch: the shell header's email did not shrink,
+so a long address still overflowed a phone viewport. It has since been
+closed — §9.16.
 
 **What was NOT verified, and why:** a real Checkout round-trip. It needs a
 Stripe account with test-mode price ids, which this repo deliberately does
@@ -3359,3 +3361,45 @@ delivers genuine events to the handler proven above. There is deliberately
 no keyless substitute for that last step: a fake that satisfied it would
 have to forge Stripe's signature, which is the one thing about this surface
 that must never be made easy.
+
+### §9.16 The shell header at phone widths
+
+Closes the third defect M5.4 recorded above. The file is
+`dashboard/layout.css`, styling the chrome §9.7 describes — shared by every
+`/dashboard/*` route, which is why one header made every dashboard page
+scroll sideways.
+
+The header is `justify-content: space-between` over two items, and neither
+could give ground: a flex item's automatic minimum size is its content
+width, so `.dashshell-session` (email + sign-out) held its full intrinsic
+width and carried the row past the viewport — measured at 375px, where the
+document was 453px against a 375px client, because
+`m5webhook+1755102000000@example.test` renders at 275px. `min-width: 0` on
+the session lifts that floor, and `overflow: hidden` + `text-overflow:
+ellipsis` + `white-space: nowrap` on `.dashshell-email` spend the
+difference there. The brand and the sign-out form take `flex-shrink: 0` so
+the loss lands on the one part that can afford it; without it on the form,
+the button shrinks and "Sign out" wraps onto two lines. No `min-width: 0`
+on the email itself — `overflow` other than `visible` already zeroes the
+automatic minimum, and a declaration that does nothing is a claim that it
+does something.
+
+**Hiding the address under a media query was the rejected alternative.** It
+is identity confirmation rather than navigation, which is the argument for
+dropping it on a phone. Against that: it is the ONLY place the chrome names
+the signed-in account, on a dashboard whose whole premise is that several
+tenants look alike — and the local part that distinguishes an account is
+exactly the part an end ellipsis keeps. Truncation degrades, hiding
+deletes. Ordinary addresses still render whole at every width.
+
+**Verified live** the same way the defect was found: a 375px viewport, an
+authenticated session on that 36-character address. `/dashboard`,
+`/dashboard/[orgId]`, and its billing, metrics, and widget pages each
+report `document.documentElement.scrollWidth === clientWidth === 375`, with
+a sweep for elements crossing the viewport edge returning none; the email's
+275px of text sits in a 148.5px box (truncated) while the sign-out button
+keeps its full 77.7px on a single line box, a clean 0.75rem gap between
+them. Disabling ONLY the new declarations at runtime restores exactly
+453px, so the fix is what carries it rather than something incidental. At
+1265px the box measures 275.3px and the address shows in full — the
+truncation costs nothing where there is room.
