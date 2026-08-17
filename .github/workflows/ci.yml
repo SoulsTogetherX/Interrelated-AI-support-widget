@@ -4,8 +4,13 @@
 #           with a real pgvector Postgres as a service container so the
 #           DB-gated suites actually run (they self-skip without a password).
 #   e2e     the real thing: build the PROD images, boot the prod compose
-#           stack, and drive it from outside with the zero-dependency smoke
-#           probe. What gets probed is byte-for-byte what gets deployed.
+#           stack, seed it with a tenant to attack (docker-compose.probe.yaml's
+#           one-shot service — the image under test is untouched), and drive
+#           it from outside with the zero-dependency probes: smoke (is the
+#           surface mounted and closed), security (does every layer of the
+#           trust model hold against the requests it exists to stop). What
+#           gets probed is byte-for-byte what gets deployed, and a layer that
+#           gives is a red merge.
 #   eval    the retrieval-quality gate: golden set scored against an
 #           ephemeral pgvector container with the LOCAL embedding model
 #           (bge-small via fastembed — no API key), failing the build if
@@ -216,16 +221,33 @@ jobs:
           sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
           sed -i "s/^POSTGRES_PORT=.*/POSTGRES_PORT=5432/" .env
 
+      # Both files everywhere below: the probe override adds only the
+      # one-shot seed service (profile-gated, so `up` never starts it), and
+      # naming it on `down` is what lets `-v` reach the network it joined.
       - name: boot prod stack
-        run: docker compose -f docker-compose.prod.yaml up --build --wait --wait-timeout 180 -d
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml up --build --wait --wait-timeout 180 -d
+
+      # The tenant the security probe attacks: two orgs, keys (one revoked),
+      # allowlisted origins, known content, written to .probe/ as a fixture.
+      # Runs INSIDE the compose network against the unpublished database, so
+      # neither the prod image nor the network posture changes for the sake
+      # of the harness.
+      - name: seed probe fixture
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml run --rm seed
 
       - name: smoke probe
         run: node scripts/smoke-test.mjs http://localhost:3000
 
+      # LAST among the probes: its final section drains the mint and chat
+      # token buckets on purpose, and anything after it would wait a minute
+      # for them to refill.
+      - name: security probe
+        run: node scripts/security-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
+
       - name: dump logs on failure
         if: failure()
-        run: docker compose -f docker-compose.prod.yaml logs --no-color
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml logs --no-color
 
       - name: teardown
         if: always()
-        run: docker compose -f docker-compose.prod.yaml down -v
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml down -v

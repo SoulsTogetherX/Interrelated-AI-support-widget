@@ -8,6 +8,7 @@
     "search": "tsx scripts/searchDev.ts",
     "ask": "tsx scripts/askDev.ts",
     "seed-demo": "tsx scripts/seedWidgetDemo.ts",
+    "seed-security": "tsx scripts/seedSecurityFixture.ts",
     "eval": "tsx scripts/runEval.ts",
     "loadtest": "tsx scripts/runLoadtest.ts",
     "build": "esbuild src/server.ts --bundle --platform=node --target=node22 --format=cjs --packages=external --alias:@shared=../shared --alias:@providers=../providers --sourcemap --outfile=dist/server.js",

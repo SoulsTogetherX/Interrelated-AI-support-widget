@@ -62,7 +62,10 @@ escalations they count, and read as one primary-key lookup against the
 org's plan before any model call. M5.4 closed the milestone with billing
 (§11): Stripe Checkout out, a signature-verified webhook back, and an event
 ledger keyed by Stripe's own event id so a redelivery applies exactly once.
-**M5 COMPLETE.**
+**M5 COMPLETE.** M6 is underway: as of M6.1 the trust model is ATTACKED in CI
+(§12) — a seeded pair of tenants and 36 black-box checks against the shipped
+image, every layer from the origin allowlist to the socket's single-use
+ticket, merge-blocking.
 
 ---
 
@@ -1511,3 +1514,86 @@ The page also explains the one place its two plan values can disagree: what
 was BOUGHT (`subscriptions.plan`) versus what is currently ALLOWED
 (`organizations.plan`), which differ exactly while a subscription is
 cancelled or unpaid.
+
+---
+
+## §12 The security gate — seed → probe → red or green (M6)
+
+The one path in this document that is not a request path: it is the
+sequence CI runs to attack the shipped image from the outside, and the
+reason the trust model in CLAUDE.md is a measurement rather than a diagram.
+
+### §12.1 The e2e job (ci.yml)
+
+```
+docker compose -f prod -f probe up --build --wait
+  → the prod realtime image + Postgres, unpublished, on the compose network
+docker compose -f prod -f probe run --rm seed        docker-compose.probe.yaml
+  → realtime's DEV image stage, ONE shot, inside the network:
+    npm run seed-security -- --out /out/security-fixture.json
+                                       realtime/scripts/seedSecurityFixture.ts
+      DELETE both probe orgs by name (cascade wipes everything they own)
+      org A: pk (live) + pk (created, then REVOKED) + origin + 3 chunks
+      org B: pk + revoked pk + origin + 2 chunks, no shared vocabulary
+      credential canary on A  (only if CREDENTIAL_MASTER_KEY — M6.2)
+      systemPromptMarkers     lifted from the REAL prompt (§5.1's SYSTEM_PROMPT)
+      → .probe/security-fixture.json   (bind mount; gitignored)
+node scripts/smoke-test.mjs http://localhost:3000        mounted and closed
+node scripts/security-probe.mjs http://localhost:3000 --fixture …
+                                                         every layer, attacked
+```
+
+Nothing about the image or the network changes for the harness: the seed
+runs where the database already is, and the probes need nothing installed.
+
+### §12.2 What the security probe does, layer by layer
+
+```
+[A] posture                             needs no fixture
+  POST 70 KB body → 413                 app.ts's cap, BEFORE any route
+  raw upgrade, no/forged ticket → 401   ×30 concurrently, health still 200
+  GET /internal/… → 404|401             the admin surface is closed either way
+
+[B] origin allowlist + key state        realtime/src/routes/widget.ts (session)
+  Origin thief.example / null / Probe-A.example → 403, NO access-control-allow-origin
+  no Origin → 403 (spends no mint token)
+  unknown pk / REVOKED pk / sk_… → one 401, byte-identical bodies
+  allowlisted origin → 200, CORS echo === that origin exactly
+
+[C] session tokens                       (chat with three sessions: A1, A2, B1)
+  tampered → 401
+  A1's token from thief.example → 403, no CORS
+  A1's token from org B's origin → 403          (bound to ITS origin, not "an" origin)
+  garbage bearer === missing bearer → same 401
+
+[D] tenant isolation                     the answer pipeline through SSE
+  CONTROL  A1 asks A's sentence → claim, url ∈ A.corpus         ← must pass first
+           B1 asks A's sentence → refusal, no claim, no A url in the bytes
+           A2 continues A1's conversation → [{type:"error"}] and nothing else
+           B1 continues A1's conversation → same single opaque error
+           fabricated conversation id → 400
+
+[E] input bounds                         2,001-char question → 400; blank → 400; "{not json" → 400
+
+[F] handoff socket                       escalate / handoff-ticket / /v1/handoff
+  A2 or B1 escalate A1's conversation → 404
+  A1 escalates → 200 created:true; again → created:false
+  A2 asks a ticket for it → 404; A1 gets one
+  WebSocket: ready(role visitor, right conversation) → history → presence
+  the SAME ticket again at upgrade → 401           (single use)
+  {type:"message", role:"agent"} → echoed role "visitor"
+  "not json" / 4,001 chars / {type:"teleport"} → error frames, socket OPEN
+  100 typing frames → still open, next message still echoes
+
+[G] rate limits                          LAST — drains the buckets
+  12 rapid chats as one visitor → a 429 WITH the CORS echo
+  30 rapid mints from one IP → a 429
+  health → 200
+```
+
+Two conventions make it reproducible. Every mint and chat spends a token
+bucket in the service by design, so a check that is not about rate limits
+answers a 429 by waiting for the refill and retrying (bounded); a re-run
+within a minute is slow, not wrong. And [D]'s negatives sit behind a
+positive control: "B cannot read A" is evidence only if A can read A, so
+that is asserted first and its failure fails the run.

@@ -1,0 +1,531 @@
+#!/usr/bin/env node
+// Security probe (M6) — attacks the LIVE stack from the outside, the way a
+// script on the internet would, and exits nonzero on the first layer that
+// gives. Where smoke-test.mjs asks "is the surface mounted and closed?",
+// this asks "does each layer of the trust model actually hold against the
+// requests it exists to stop?" — the origin allowlist, key state, session
+// tokens, tenant isolation, input bounds, the handoff socket, and the rate
+// limits — with a seeded tenant to attack rather than posture alone.
+//
+// Zero dependencies, like every probe here: Node 22's stdlib is enough
+// (fetch, the global WebSocket client, node:http for raw upgrade handshakes),
+// so CI runs it without an npm install and it can be pointed at any
+// deployment from any machine.
+//
+// Usage:
+//   node scripts/security-probe.mjs [baseUrl] [--fixture path.json]
+//
+// The fixture is what `npm run seed-security` (realtime/scripts/
+// seedSecurityFixture.ts) writes: two probe orgs with keys, origins, and
+// known content. WITHOUT it the probe runs its posture subset — what can be
+// verified against a stack with no tenant to attack — and says so; WITH it
+// the full suite runs. Against production, run posture-only unless you have
+// seeded the probe orgs there on purpose.
+//
+// The internal-API checks (SSRF payloads, credential read-back) additionally
+// need INTERNAL_API_SECRET in the environment, and run only when it is
+// present: that secret is the admin key, and a probe pointed at production
+// must never carry it. CI's e2e stack sets a throwaway one.
+//
+// Two conventions worth knowing before reading the checks:
+//   · Every mint and chat consumes a token bucket in the SERVICE, by design.
+//     Where a check is not itself about rate limiting, a 429 is answered by
+//     waiting for the bucket to refill and retrying, so a re-run within a
+//     minute of the last is slow rather than wrong. The rate-limit checks
+//     themselves come LAST, and never retry.
+//   · Negative checks have positive controls. "Org B cannot retrieve org
+//     A's content" is only evidence if org A can retrieve its own — so that
+//     is asserted first, and a failed control fails the run rather than
+//     letting everything after it pass vacuously.
+
+import { readFileSync } from "node:fs"
+
+//#region Arguments
+const args = process.argv.slice(2)
+const positional = args.filter((arg) => !arg.startsWith("--"))
+const base = (positional[0] ?? "http://localhost:3000").replace(/\/$/, "")
+const fixturePath = args.includes("--fixture") ? args[args.indexOf("--fixture") + 1] : undefined
+const fixture = fixturePath ? JSON.parse(readFileSync(fixturePath, "utf8")) : null
+const internalSecret = process.env.INTERNAL_API_SECRET || null
+const wsBase = base.replace(/^http/, "ws")
+//#endregion
+
+//#region Harness
+let failures = 0
+let passes = 0
+let skips = 0
+
+async function check(name, fn) {
+  try {
+    await fn()
+    passes++
+    console.log(`  ok  ${name}`)
+  } catch (err) {
+    failures++
+    console.error(`FAIL  ${name}: ${err.message}`)
+  }
+}
+
+function skip(name, why) {
+  skips++
+  console.log(`skip  ${name} — ${why}`)
+}
+
+function expect(condition, message) {
+  if (!condition) throw new Error(message)
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** fetch with a timeout: a probe that can hang turns a dead service into a
+ *  stuck CI job. */
+function request(path, init = {}, ms = 15_000) {
+  return fetch(`${base}${path}`, { ...init, signal: AbortSignal.timeout(ms) })
+}
+
+/** POST JSON. `patient` retries a 429 after the mint/chat buckets have had
+ *  time to refill (6 s per mint token, 10 s per visitor chat token) — for
+ *  checks that are not about rate limits. Bounded, so a service that 429s
+ *  forever still fails loudly. */
+async function postJson(path, body, headers = {}, { patient = true, timeoutMs = 15_000 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await request(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    }, timeoutMs)
+    if (res.status === 429 && patient && attempt < 12) {
+      await res.arrayBuffer()
+      console.log(`      (429 from ${path} — waiting for the bucket to refill)`)
+      await sleep(7_000)
+      continue
+    }
+    return res
+  }
+}
+
+/** Parses an SSE body into its JSON events. The chat route writes
+ *  `data: <json>\n\n` per event and ends the response after `done`, so the
+ *  whole stream is one text() away. */
+function sseEvents(text) {
+  return text.split("\n\n")
+    .map((frame) => frame.trim())
+    .filter((frame) => frame.startsWith("data: "))
+    .map((frame) => JSON.parse(frame.slice(6)))
+}
+
+/** Sends a raw WebSocket handshake and resolves with the HTTP status the
+ *  server answered — 101 if it upgraded (the socket is then destroyed). fetch
+ *  cannot do this, and the global WebSocket hides the status; the status IS
+ *  the assertion here (refused BEFORE a socket exists, never accepted-then-
+ *  closed). */
+async function upgradeStatus(path) {
+  const { request: httpRequest } = await import(base.startsWith("https") ? "node:https" : "node:http")
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(`${base}${path}`, {
+      headers: {
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": "AAAAAAAAAAAAAAAAAAAAAA==",
+      },
+      timeout: 15_000,
+    })
+    req.on("response", (res) => { res.resume(); resolve(res.statusCode) })
+    req.on("upgrade", (_res, socket) => { socket.destroy(); resolve(101) })
+    req.on("timeout", () => { req.destroy(); reject(new Error("upgrade timed out")) })
+    req.on("error", reject)
+    req.end()
+  })
+}
+
+/** Opens a handoff socket with Node's global WebSocket and collects its
+ *  frames, with a `next(predicate)` that waits for one. */
+function openSocket(ticket) {
+  const ws = new WebSocket(`${wsBase}/v1/handoff?ticket=${encodeURIComponent(ticket)}`)
+  const frames = []
+  const waiters = []
+  let closed = false
+  ws.addEventListener("message", (event) => {
+    const frame = JSON.parse(String(event.data))
+    frames.push(frame)
+    for (const waiter of [...waiters]) {
+      if (waiter.predicate(frame)) {
+        waiters.splice(waiters.indexOf(waiter), 1)
+        waiter.resolve(frame)
+      }
+    }
+  })
+  ws.addEventListener("close", () => { closed = true })
+  const opened = new Promise((resolve, reject) => {
+    ws.addEventListener("open", () => resolve())
+    ws.addEventListener("error", () => reject(new Error("socket errored before opening")))
+  })
+  return {
+    ws,
+    frames,
+    opened,
+    isClosed: () => closed,
+    send: (frame) => ws.send(typeof frame === "string" ? frame : JSON.stringify(frame)),
+    next: (predicate, ms = 10_000) => {
+      const already = frames.find(predicate)
+      if (already) return Promise.resolve(already)
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no matching frame within timeout")), ms)
+        waiters.push({ predicate, resolve: (frame) => { clearTimeout(timer); resolve(frame) } })
+      })
+    },
+    close: () => ws.close(),
+  }
+}
+//#endregion
+
+console.log(`security-probe against ${base}`)
+console.log(fixture ? `  fixture: ${fixturePath} (seeded ${fixture.seededAt}, orgs ${fixture.orgs.a.id} / ${fixture.orgs.b.id})` : "  no fixture — posture checks only")
+console.log(internalSecret ? "  internal API secret present — SSRF and read-back checks enabled" : "  no INTERNAL_API_SECRET — internal API checks skipped")
+
+//#region A. Posture — what holds with no tenant at all
+console.log("\n[A] posture")
+
+await check("a request body over the 64 KB cap is refused with 413 before any route runs", async () => {
+  // Bodies are capped in app.ts, ahead of auth: a big JSON limit is a free
+  // memory-pressure lever, and it must not cost a session token to find out.
+  const res = await request("/v1/widget/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://anyone.example" },
+    body: JSON.stringify({ question: "x".repeat(70_000) }),
+  })
+  expect(res.status === 413, `status ${res.status}`)
+})
+
+await check("a WebSocket upgrade with no ticket is refused with 401, and a forged ticket identically", async () => {
+  expect((await upgradeStatus("/v1/handoff")) === 401, "no ticket was not 401")
+  expect((await upgradeStatus("/v1/handoff?ticket=forged.forged.forged")) === 401, "forged ticket was not 401")
+})
+
+await check("30 concurrent unticketed upgrade attempts are all refused and the service stays healthy", async () => {
+  const statuses = await Promise.all(Array.from({ length: 30 }, () => upgradeStatus("/v1/handoff")))
+  expect(statuses.every((s) => s === 401), `statuses ${[...new Set(statuses)].join(",")}`)
+  const health = await request("/api/health")
+  expect(health.status === 200, `health ${health.status} after the flood`)
+})
+
+await check("the internal API is closed to outsiders (404 unconfigured, 401 configured)", async () => {
+  const res = await request("/internal/orgs/org_probe/credentials")
+  expect(res.status === 404 || res.status === 401, `status ${res.status}`)
+})
+//#endregion
+
+if (!fixture) {
+  skip("[B]–[G] tenant checks", "no --fixture given (npm run seed-security writes one)")
+} else {
+  const { a: orgA, b: orgB } = fixture.orgs
+
+  //#region B. Layer 1 — the origin allowlist and key state
+  console.log("\n[B] origin allowlist + key state")
+
+  await check("an unlisted origin is refused with 403 and NO CORS headers — a copied snippet dies here", async () => {
+    const res = await postJson("/v1/widget/session", { publishableKey: orgA.publishableKey }, { origin: "https://thief.example" })
+    expect(res.status === 403, `status ${res.status}`)
+    expect(res.headers.get("access-control-allow-origin") === null, "CORS header present on a refused origin")
+  })
+
+  await check("Origin: null (file://, sandboxed iframes) is refused", async () => {
+    const res = await postJson("/v1/widget/session", { publishableKey: orgA.publishableKey }, { origin: "null" })
+    expect(res.status === 403, `status ${res.status}`)
+  })
+
+  await check("a case-variant of the allowlisted origin is refused — the match is exact", async () => {
+    const variant = orgA.origin.replace("https://", "https://").replace(/probe-a/, "Probe-A")
+    const res = await postJson("/v1/widget/session", { publishableKey: orgA.publishableKey }, { origin: variant })
+    expect(res.status === 403, `status ${res.status}`)
+  })
+
+  await check("a missing Origin header is refused without spending a mint token", async () => {
+    const res = await postJson("/v1/widget/session", { publishableKey: orgA.publishableKey })
+    expect(res.status === 403, `status ${res.status}`)
+  })
+
+  let unknownKeyBody = null
+  await check("an unknown publishable key is refused with 401", async () => {
+    const res = await postJson("/v1/widget/session", { publishableKey: "pk_live_00000000000000000000000000000000" }, { origin: orgA.origin })
+    expect(res.status === 401, `status ${res.status}`)
+    unknownKeyBody = await res.text()
+  })
+
+  await check("a REVOKED key is refused identically to an unknown one — key state is not probeable", async () => {
+    // orgA.revokedKey was live and was rotated out; from outside it must be
+    // indistinguishable from a key that never existed: same status, same
+    // body, byte for byte.
+    const res = await postJson("/v1/widget/session", { publishableKey: orgA.revokedKey }, { origin: orgA.origin })
+    expect(res.status === 401, `status ${res.status}`)
+    const body = await res.text()
+    expect(body === unknownKeyBody, `body differs: revoked=${body} unknown=${unknownKeyBody}`)
+  })
+
+  await check("a malformed key is refused with the same 401", async () => {
+    const res = await postJson("/v1/widget/session", { publishableKey: "sk_live_not_a_public_key" }, { origin: orgA.origin })
+    expect(res.status === 401, `status ${res.status}`)
+    expect((await res.text()) === unknownKeyBody, "body differs from the unknown-key answer")
+  })
+  //#endregion
+
+  //#region Sessions for the rest of the run
+  async function mint(org, visitorId) {
+    const res = await postJson("/v1/widget/session", { publishableKey: org.publishableKey, visitorId }, { origin: org.origin })
+    if (res.status !== 200) throw new Error(`mint for ${org.name} failed: ${res.status} ${await res.text()}`)
+    const corsEcho = res.headers.get("access-control-allow-origin")
+    if (corsEcho !== org.origin) throw new Error(`mint CORS echo was ${corsEcho}, expected ${org.origin}`)
+    return await res.json()
+  }
+
+  const stamp = Date.now().toString(36)
+  let sessionA1, sessionA2, sessionB1
+  await check("the allowlisted origin mints sessions, with CORS echoing exactly that origin", async () => {
+    sessionA1 = await mint(orgA, `probe_a1_${stamp}`)
+    sessionA2 = await mint(orgA, `probe_a2_${stamp}`)
+    sessionB1 = await mint(orgB, `probe_b1_${stamp}`)
+    expect(typeof sessionA1.token === "string" && sessionA1.token.length > 20, "no token in mint response")
+    expect(sessionA1.visitorId === `probe_a1_${stamp}`, "visitor id was not honored")
+  })
+  if (!sessionA1 || !sessionA2 || !sessionB1) {
+    console.error("\ncannot continue without sessions")
+    process.exit(1)
+  }
+
+  const bearer = (session) => ({ authorization: `Bearer ${session.token}` })
+
+  /** One chat turn; returns { status, events, headers, raw }. */
+  async function chat(session, origin, body, options = {}) {
+    const res = await postJson("/v1/widget/chat", body, { origin, ...bearer(session) }, { ...options, timeoutMs: 30_000 })
+    const raw = await res.text()
+    return { status: res.status, headers: res.headers, raw, events: res.status === 200 ? sseEvents(raw) : [] }
+  }
+  //#endregion
+
+  //#region C. Layer 2 — session tokens
+  console.log("\n[C] session tokens")
+
+  await check("a tampered token is refused with 401", async () => {
+    const token = sessionA1.token
+    const last = token.at(-1)
+    const tampered = token.slice(0, -1) + (last === "A" ? "B" : "A")
+    const res = await postJson("/v1/widget/chat", { question: "hello" }, { origin: orgA.origin, authorization: `Bearer ${tampered}` })
+    expect(res.status === 401, `status ${res.status}`)
+  })
+
+  await check("a valid token replayed from ANOTHER origin is refused with 403 and no CORS", async () => {
+    // The token binds the origin it was minted for. Exfiltrated to another
+    // site, it is worthless — and that site's browser cannot even read the
+    // refusal.
+    const res = await postJson("/v1/widget/chat", { question: "hello" }, { origin: "https://thief.example", ...bearer(sessionA1) })
+    expect(res.status === 403, `status ${res.status}`)
+    expect(res.headers.get("access-control-allow-origin") === null, "CORS header present on the replay refusal")
+  })
+
+  await check("org A's token presented from org B's (allowlisted) origin is still refused", async () => {
+    const res = await postJson("/v1/widget/chat", { question: "hello" }, { origin: orgB.origin, ...bearer(sessionA1) })
+    expect(res.status === 403, `status ${res.status}`)
+  })
+
+  await check("a garbage bearer and a missing bearer get the same 401", async () => {
+    const garbage = await postJson("/v1/widget/chat", { question: "hello" }, { origin: orgA.origin, authorization: "Bearer not.a.token" })
+    const missing = await postJson("/v1/widget/chat", { question: "hello" }, { origin: orgA.origin })
+    expect(garbage.status === 401 && missing.status === 401, `statuses ${garbage.status}/${missing.status}`)
+    expect((await garbage.text()) === (await missing.text()), "bodies differ")
+  })
+  //#endregion
+
+  //#region D. Tenant isolation — retrieval and conversation hijack
+  console.log("\n[D] tenant isolation")
+
+  const knownA = orgA.corpus[0]
+  let conversationA1 = null
+  await check("CONTROL: org A retrieves its own content and cites its own URL", async () => {
+    // The positive control every negative below depends on. If this fails,
+    // the cross-tenant refusals prove nothing.
+    const { status, events, headers } = await chat(sessionA1, orgA.origin, { question: knownA.text })
+    expect(status === 200, `status ${status}`)
+    expect(headers.get("access-control-allow-origin") === orgA.origin, "SSE response lacks the CORS echo")
+    const meta = events.find((e) => e.type === "meta")
+    const claims = events.filter((e) => e.type === "claim")
+    expect(meta && typeof meta.conversationId === "string", "no meta event")
+    expect(claims.length > 0, `no claim events (got ${events.map((e) => e.type).join(",")})`)
+    const corpusUrls = new Set(orgA.corpus.map((c) => c.url))
+    expect(claims.every((c) => corpusUrls.has(c.url)), `a claim cited a URL outside org A's corpus: ${claims.map((c) => c.url).join(",")}`)
+    expect(claims.some((c) => c.url === knownA.url), "the retrieved sentence was not the one cited")
+    conversationA1 = meta.conversationId
+  })
+
+  await check("org B asking for org A's exact sentence retrieves NOTHING of A's — refusal, no claim, no leak", async () => {
+    // Same question, other tenant. Under exact-match retrieval this is the
+    // strongest form of the test: the sentence exists verbatim in the
+    // database, one org filter away.
+    const { status, events, raw } = await chat(sessionB1, orgB.origin, { question: knownA.text })
+    expect(status === 200, `status ${status}`)
+    expect(events.every((e) => e.type !== "claim"), "org B received a claim for org A's content")
+    expect(events.some((e) => e.type === "refusal"), `expected a refusal (got ${events.map((e) => e.type).join(",")})`)
+    for (const chunk of orgA.corpus) {
+      expect(!raw.includes(chunk.url), `org A's URL ${chunk.url} appeared in org B's stream`)
+    }
+  })
+
+  await check("another visitor of the same org cannot continue this conversation — one opaque error, nothing learned", async () => {
+    const { status, events } = await chat(sessionA2, orgA.origin, { question: knownA.text, conversationId: conversationA1 })
+    expect(status === 200, `status ${status}`)
+    expect(events.length === 1 && events[0].type === "error", `events ${events.map((e) => e.type).join(",")}`)
+    expect(Object.keys(events[0]).join(",") === "type", `error event carries detail: ${JSON.stringify(events[0])}`)
+  })
+
+  await check("another ORG cannot continue it either, with the identical opaque error", async () => {
+    const { events } = await chat(sessionB1, orgB.origin, { question: knownA.text, conversationId: conversationA1 })
+    expect(events.length === 1 && events[0].type === "error", `events ${events.map((e) => e.type).join(",")}`)
+  })
+
+  await check("a fabricated conversation id is refused with 400 before any work", async () => {
+    const { status } = await chat(sessionA2, orgA.origin, { question: "hi", conversationId: "con_00000000000000000000000000000000".slice(0, 20) })
+    expect(status === 400, `status ${status}`)
+  })
+  //#endregion
+
+  //#region E. Input bounds
+  console.log("\n[E] input bounds")
+
+  await check("a question over 2,000 characters is refused with 400", async () => {
+    const { status } = await chat(sessionB1, orgB.origin, { question: "x".repeat(2_001) })
+    expect(status === 400, `status ${status}`)
+  })
+
+  await check("an empty question is refused with 400", async () => {
+    const { status } = await chat(sessionB1, orgB.origin, { question: "   " })
+    expect(status === 400, `status ${status}`)
+  })
+
+  await check("a non-JSON body is refused, not crashed on", async () => {
+    const res = await request("/v1/widget/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: orgA.origin, ...bearer(sessionA2) },
+      body: "{not json",
+    })
+    expect(res.status === 400, `status ${res.status}`)
+  })
+  //#endregion
+
+  //#region F. The handoff socket
+  console.log("\n[F] handoff socket")
+
+  await check("escalating a conversation this visitor does not own is a 404 that reveals nothing", async () => {
+    const res = await postJson("/v1/widget/escalate", { conversationId: conversationA1 }, { origin: orgA.origin, ...bearer(sessionA2) })
+    expect(res.status === 404, `status ${res.status}`)
+    const foreign = await postJson("/v1/widget/escalate", { conversationId: conversationA1 }, { origin: orgB.origin, ...bearer(sessionB1) })
+    expect(foreign.status === 404, `cross-org status ${foreign.status}`)
+  })
+
+  await check("the owner escalates once; a repeat reports the same handoff without creating another", async () => {
+    const first = await postJson("/v1/widget/escalate", { conversationId: conversationA1 }, { origin: orgA.origin, ...bearer(sessionA1) })
+    const firstText = await first.text()
+    expect(first.status === 200, `status ${first.status} ${firstText}`)
+    const body = JSON.parse(firstText)
+    expect(body.status === "pending" && body.created === true, `first: ${JSON.stringify(body)}`)
+    const again = await postJson("/v1/widget/escalate", { conversationId: conversationA1 }, { origin: orgA.origin, ...bearer(sessionA1) })
+    const repeat = await again.json()
+    expect(repeat.created === false, `repeat: ${JSON.stringify(repeat)}`)
+  })
+
+  await check("a handoff ticket is refused for a conversation the visitor does not own", async () => {
+    const res = await postJson("/v1/widget/handoff-ticket", { conversationId: conversationA1 }, { origin: orgA.origin, ...bearer(sessionA2) })
+    expect(res.status === 404, `status ${res.status}`)
+  })
+
+  let ticket = null
+  await check("the owner gets a ticket, and it opens the socket: ready → history → presence", async () => {
+    const res = await postJson("/v1/widget/handoff-ticket", { conversationId: conversationA1 }, { origin: orgA.origin, ...bearer(sessionA1) })
+    expect(res.status === 200, `status ${res.status}`)
+    ticket = (await res.json()).ticket
+    expect(typeof ticket === "string", "no ticket")
+  })
+
+  let socket = null
+  await check("the socket authenticates at upgrade and greets with ready → history → presence", async () => {
+    socket = openSocket(ticket)
+    await socket.opened
+    await socket.next((f) => f.type === "presence")
+    expect(socket.frames.slice(0, 3).map((f) => f.type).join(",") === "ready,history,presence", `opening frames ${socket.frames.map((f) => f.type).join(",")}`)
+    expect(socket.frames[0].role === "visitor", `ready role ${socket.frames[0].role}`)
+    expect(socket.frames[0].conversationId === conversationA1, "ready names the wrong conversation")
+  })
+
+  await check("a REPLAYED ticket is refused at upgrade — single use", async () => {
+    expect((await upgradeStatus(`/v1/handoff?ticket=${encodeURIComponent(ticket)}`)) === 401, "replayed ticket was accepted")
+  })
+
+  await check("a frame claiming role 'agent' is stored and echoed as the VISITOR — role comes from the ticket", async () => {
+    const text = `probe-role-${stamp}`
+    socket.send({ type: "message", text, role: "agent" })
+    const echo = await socket.next((f) => f.type === "message" && f.text === text)
+    expect(echo.role === "visitor", `echoed role ${echo.role}`)
+  })
+
+  await check("garbage, unsupported, and oversized frames get an error frame and the socket STAYS OPEN", async () => {
+    socket.send("this is not json")
+    await socket.next((f) => f.type === "error")
+    const before = socket.frames.filter((f) => f.type === "error").length
+    socket.send({ type: "message", text: "x".repeat(4_001) })
+    await socket.next((f) => f.type === "error" && socket.frames.filter((g) => g.type === "error").length > before)
+    socket.send({ type: "teleport", to: "admin" })
+    await socket.next((f) => f.type === "error" && socket.frames.filter((g) => g.type === "error").length > before + 1)
+    expect(!socket.isClosed(), "socket was closed by a bad frame")
+    // Still alive: a good message still echoes.
+    const text = `probe-alive-${stamp}`
+    socket.send({ type: "message", text })
+    const echo = await socket.next((f) => f.type === "message" && f.text === text)
+    expect(echo.role === "visitor", "echo missing after bad frames")
+  })
+
+  await check("a burst of 100 typing frames is absorbed without a disconnect", async () => {
+    for (let i = 0; i < 100; i++) socket.send({ type: "typing", active: i % 2 === 0 })
+    const text = `probe-after-flood-${stamp}`
+    socket.send({ type: "message", text })
+    await socket.next((f) => f.type === "message" && f.text === text)
+    expect(!socket.isClosed(), "socket closed under a typing flood")
+    socket.close()
+  })
+  //#endregion
+
+  //#region G. Rate limits — LAST, because they drain the buckets
+  console.log("\n[G] rate limits (drains buckets — nothing runs after this)")
+
+  await check("a visitor who chats in a tight loop is told 429 WITH CORS headers — the widget can render it", async () => {
+    let limited = null
+    for (let i = 0; i < 12 && limited === null; i++) {
+      const res = await postJson("/v1/widget/chat", { question: `flood ${i}` }, { origin: orgB.origin, ...bearer(sessionB1) }, { patient: false })
+      if (res.status === 429) limited = res
+      else await res.arrayBuffer()
+    }
+    expect(limited !== null, "no 429 within 12 rapid chats")
+    expect(limited.headers.get("access-control-allow-origin") === orgB.origin, "429 lacked the CORS echo")
+  })
+
+  await check("an IP that mints sessions in a tight loop is told 429", async () => {
+    let limited = false
+    for (let i = 0; i < 30 && !limited; i++) {
+      const res = await postJson("/v1/widget/session", { publishableKey: orgA.publishableKey }, { origin: orgA.origin }, { patient: false })
+      if (res.status === 429) limited = true
+      else await res.arrayBuffer()
+    }
+    expect(limited, "no 429 within 30 rapid mints")
+  })
+
+  await check("the service is still healthy after the floods", async () => {
+    const res = await request("/api/health")
+    expect(res.status === 200, `health ${res.status}`)
+  })
+  //#endregion
+}
+
+console.log(`\n${passes} passed, ${failures} failed, ${skips} skipped`)
+if (failures > 0) {
+  console.error(`\n${failures} security check(s) failed`)
+  process.exit(1)
+}
+console.log("all security checks passed")

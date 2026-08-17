@@ -41,3 +41,8 @@ Thumbs.db
 # Private working notes — deliberately NOT committed, so candid per-phase
 # commentary never reaches the public repo. Same convention as OnlineWhiteboard.
 PHASE_NOTES.md
+
+# Probe fixtures (M6). Written by `npm run seed-security` / the compose
+# probe seed service and read by scripts/security-probe.mjs and
+# scripts/injection-probe.mjs. Per-run droppings, like eval/results/.
+.probe/

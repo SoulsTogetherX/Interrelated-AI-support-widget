@@ -12,7 +12,19 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M5 — metrics and billing — COMPLETE. M4 is COMPLETE.**
+**Current milestone: M6 — security hardening as a CI gate — UNDERWAY.
+M5 is COMPLETE.** M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
+across the trust model's layers — origin allowlist and CORS posture, key
+state (a revoked key byte-identical to an unknown one), token tamper and
+cross-origin replay, tenant isolation with a positive control, input
+bounds, the handoff socket (single-use ticket, role from the ticket, bad
+frames without a disconnect), and the rate limits last because they drain
+the buckets — run in CI against the shipped image as a merge-blocking gate,
+with the fixture seeded from INSIDE the compose network so neither the image
+nor its network posture changes for the harness. Still open in M6: the
+internal-API probes (SSRF payloads, credential read-back) and the injection
+probe.
 M5.1 is done — the metrics layer (§9.13): deflection, refusal and claim-strip
 rates, latency percentiles, time-to-first-human-response, and a by-model
 breakdown, all computed in SQL from columns the pipeline has been writing
@@ -1777,6 +1789,34 @@ directions.
 to compute inline, so exactly one function decides what "today" means for
 the quota.
 
+### §3.27 `realtime/scripts/seedSecurityFixture.ts` (M6.1)
+Dev/CI CLI (`npm run seed-security -- --out <fixture.json>`): seeds the two
+probe organizations the security and injection probes attack and writes
+what they need to know as a JSON fixture — the CONTRACT between this script
+and scripts/security-probe.mjs / scripts/injection-probe.mjs, documented
+once at the top of the file. Per org: a live pk and a REVOKED one (created
+live, then revoked — the path a real rotation takes; `revoked_at` is
+update-only in the schema types because a key is never born revoked), one
+allowlisted origin, and a small corpus stored one-document-per-chunk so a
+probe can say "this citation must point at THAT url". The two corpora share
+no vocabulary, so a cross-tenant retrieval hit could never be excused as
+topical overlap. Under the MOCK embedder always: the probes measure the
+trust model, not retrieval quality, and exact-match retrieval is what makes
+"ask this sentence, expect this citation" deterministic — which is also why
+the embedding input is trail-free, for seed-demo's reason (§3.19).
+
+Two more fields serve later steps: `credentialCanary`, a fake provider key
+encrypted on org A exactly as the internal API would store it, present only
+when the vault's master key is set (the seed invents no fallback key, for
+the reason the vault has none) — the read-back probe greps every response
+for it; and `systemPromptMarkers`, distinctive prose lines lifted from the
+REAL system prompt rather than typed into a probe, so a rewrite of the
+prompt cannot leave the leak check grepping for sentences that no longer
+exist. Idempotent by REPLACEMENT like seed-demo, and every key and origin
+is fresh per run and travels in the fixture: a probe hardcodes nothing
+about the deployment it attacks. Runs from the host against the compose dev
+database, or inside the compose network as §4.4's `seed` service.
+
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 
 #### §3.17.1 `src/widget/sessionToken.ts`
@@ -2195,6 +2235,26 @@ Production shape: prod image target, no bind mounts, Postgres **not**
 published to the host. This is the stack CI's e2e job boots — the artifact
 probed is the artifact shipped.
 
+### §4.4 `docker-compose.probe.yaml` — the harness half of e2e (M6)
+Layered OVER the prod stack, never used alone: one profile-gated, one-shot
+`seed` service that gives the security and injection probes a tenant to
+attack. A black-box probe needs orgs, keys, an allowlisted origin, and
+known content, and none of that can be created through the public surface
+by design — so it is seeded from INSIDE the compose network by
+`realtime/scripts/seedSecurityFixture.ts` (§3.27), and the fixture the
+probes read lands in `.probe/` through a bind mount.
+
+Why a service and not a host-side script: the prod stack deliberately does
+not publish Postgres, and the probes deliberately need no npm install; a
+container reaches `database:5432` without conceding either, and the realtime
+image under test stays exactly the artifact that ships. Why the Dockerfile's
+DEV stage: it already holds realtime's deps, src, shared/ and providers/ —
+the seed script and eval/ ride in as read-only mounts the same way compose
+dev mounts src — and it builds as one cached layer set over the deps stage
+the prod build shares. `profiles: [probe]` keeps `up` from starting it: it
+is a command, not a service, and `run --rm seed` targets it explicitly.
+`.probe/` is gitignored — per-run droppings, like eval/results/.
+
 ---
 
 ## §5 `.github/workflows/`
@@ -2204,9 +2264,14 @@ probed is the artifact shipped.
 `npm ci` → typechecks (shared, providers, eval, realtime, widget) →
 tests (including the widget's jsdom suite) → widget build → the §6.2
 size budget; the DB-gated suites run for real here. `e2e` (needs verify): generates a
-throwaway `.env`, `compose -f prod up --build --wait`, runs
-`scripts/smoke-test.mjs` against the live stack, dumps logs on failure,
-always tears down. `eval` (needs verify, parallel with e2e): its own
+throwaway `.env`, boots the prod stack with the probe override layered on
+(§4.4), runs the one-shot `seed` service to give the probes a tenant, then
+drives the live stack from outside with the zero-dependency probes —
+`scripts/smoke-test.mjs` (mounted and closed) and, since M6.1,
+`scripts/security-probe.mjs` (§6.3: every layer of the trust model, LAST
+because its final section drains the token buckets on purpose) — dumps
+logs on failure, always tears down. A layer that gives is a red merge.
+`eval` (needs verify, parallel with e2e): its own
 pgvector service container, fastembed's ONNX model restored from an
 actions/cache keyed on the model name (immutable → one download ever),
 then `npm run eval` — which ingests the committed corpus, scores the
@@ -2244,6 +2309,49 @@ the admin surface leaks. Failures are counted
 rather than thrown so one broken endpoint doesn't mask the state of the
 rest; every fetch carries a timeout because a probe that can hang turns a
 dead service into a stuck CI job.
+
+### §6.3 `scripts/security-probe.mjs` (M6.1)
+The trust model attacked from the outside, the way a script on the internet
+would, against a seeded tenant rather than posture alone. Where the smoke
+probe asks "is the surface mounted and closed?", this asks "does each layer
+actually hold against the requests it exists to stop?" — 36 checks in seven
+sections, each section named for the layer it attacks: **[A] posture** (the
+64 KB body cap answers 413 before any route runs; unticketed and forged
+upgrades are 401, thirty of them at once, with the service healthy after);
+**[B] origin allowlist + key state** (an unlisted origin, `Origin: null`,
+and a case-variant of the allowlisted origin are all 403 WITHOUT CORS
+headers; a missing Origin spends no mint token; unknown, REVOKED, and
+malformed keys are one byte-identical 401 — key state is not probeable);
+**[C] session tokens** (tampered → 401; a valid token replayed from another
+origin — including another tenant's allowlisted one — → 403 without CORS;
+garbage and missing bearers get the same 401); **[D] tenant isolation** (a
+positive CONTROL first: org A retrieves its own sentence and cites its own
+URL — then org B asking that exact sentence gets a refusal with no claim and
+none of A's URLs anywhere in the stream, and another visitor's or another
+org's attempt to continue A's conversation gets exactly one `{type:"error"}`
+with no other key); **[E] input bounds**; **[F] the handoff socket**
+(escalating or ticketing a conversation you do not own is a 404 that reveals
+nothing; the owner escalates once and a repeat reports `created:false`; the
+socket opens ready → history → presence; a REPLAYED ticket is refused at
+upgrade; a frame claiming `role:"agent"` is echoed as the visitor; garbage,
+unsupported, and oversized frames each earn an error frame with the socket
+STILL OPEN, proven by a message that echoes afterwards; a hundred typing
+frames are absorbed); and **[G] rate limits**, LAST because they drain the
+buckets on purpose (a chat loop earns 429 WITH the CORS echo so the widget
+can render it; a mint loop earns 429; health is still 200).
+
+Two conventions carry the file. Every mint and chat spends a token bucket in
+the SERVICE, so a check that is not about rate limits answers a 429 by
+waiting for the refill and retrying, bounded — a re-run within a minute is
+slow rather than wrong. And every negative check has a positive control:
+"B cannot read A" is evidence only if A can read A, so that is asserted
+first and its failure fails the run rather than letting everything after it
+pass vacuously. Zero dependencies (fetch, the global WebSocket client,
+node:http for raw upgrade handshakes — the status code IS the assertion for
+"refused before a socket exists"). Without `--fixture` it runs section A
+alone and says so; the internal-API checks (M6.2) additionally require
+`INTERNAL_API_SECRET` and skip without it, because that secret is the admin
+key and a probe pointed at production must never carry it.
 
 ---
 
