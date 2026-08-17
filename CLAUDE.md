@@ -12,8 +12,8 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M6 — security hardening as a CI gate — UNDERWAY.
-M5 is COMPLETE.** M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+**Current milestone: M6 — security hardening as a CI gate — COMPLETE.
+Every milestone in the plan (M0–M6) is now complete.** M6.1 is done — the security probe (§6.3, §3.27, §4.4,
 DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
 across the trust model's layers — origin allowlist and CORS posture, key
 state (a revoked key byte-identical to an unknown one), token tamper and
@@ -37,8 +37,20 @@ containment properties ASSERTED as observable facts of the SSE stream — no
 uncited channel, citations from documents rather than model text, the
 system prompt never in anything the visitor sees — while the relay rate is
 REPORTED as the per-model number it is (0/8 under the mock, which measures
-the pipeline; a real provider measures the model). Still open in M6: the
-documentation sweep and milestone summary.
+the pipeline; a real provider measures the model). M6.4 closed the
+milestone with the documentation and a full verification ladder. Two things
+the plan's M6 list names are covered differently than a reader might
+expect, and are stated rather than fudged: "oversized uploads" — file uploads
+do not exist (deferred with PDF support, §3.10.3), so what the probe bounds is
+every payload the surface DOES accept, the 64 KB JSON body, the 2,000-char
+question, and the 4,000-char socket frame; and "rotated keys" — one-click
+rotation is a dashboard feature that has not been built, so the fixture
+performs a rotation by hand (a key created live, then revoked) and the probe
+asserts the property rotation depends on, that a rotated-out key is
+byte-identical to one that never existed. And one thing that could not be
+verified from here: the e2e job's YAML was exercised command-for-command
+against the prod compose stack on this machine, but its first run on GitHub's
+runners is the next push to `dev`.
 M5.1 is done — the metrics layer (§9.13): deflection, refusal and claim-strip
 rates, latency percentiles, time-to-first-human-response, and a by-model
 breakdown, all computed in SQL from columns the pipeline has been writing
@@ -251,7 +263,11 @@ tests against real Postgres → and, for any increment touching migrations,
 boot, Dockerfiles, or compose, **re-boot the prod compose stack and re-run
 the smoke probe** (`docker compose -f docker-compose.prod.yaml up --wait`
 then `node scripts/smoke-test.mjs`). Unit-level green is not "the project
-runs"; the prod boot is.
+runs"; the prod boot is. Since M6, an increment touching any public
+surface, the trust model, or the answer path also re-runs the security and
+injection probes against that same stack, exactly as CI's e2e job does
+(§4.4 has the three commands): the fixture seeded through the probe
+override, then `injection-probe.mjs`, then `security-probe.mjs` last.
 
 ### §1.3 House style
 2-space indent, no semicolons, double quotes, `//#region` folding markers,
@@ -1209,6 +1225,12 @@ force-exits.
   malformed garbage, and validly-signed-wrong-shape. Buckets: exactly
   capacity takes then denial, refill at the boundary, long-absence caps
   at capacity, key independence, hammering recovers on schedule, sweep.
+  The signature tamper flips a character in the MIDDLE of the MAC since
+  M6.4: it used to flip the last base64url character, whose two low bits
+  are padding, so `A↔B` there decoded to the same bytes and the "tamper"
+  was a no-op one run in sixteen — a latent flake this suite and
+  ticket.test.ts both carried, found when the M6 probe made the identical
+  mistake (§6.3) and then the full ladder hit it in the unit test.
 - `routes/__tests__/widget.test.ts` — DB-gated, drives a REAL http
   listener. Session: allowlisted mint with CORS echo, unlisted origin
   rejected WITHOUT CORS, missing Origin, unknown/revoked keys collapse

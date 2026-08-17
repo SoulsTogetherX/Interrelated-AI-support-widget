@@ -52,8 +52,14 @@ describe("handoff tickets", () => {
     const forged = Buffer.from(JSON.stringify({ ...FIELDS, exp: Date.now() + 60_000, jti: "x" }))
       .toString("base64url")
     expect(verifyHandoffTicket(`${forged}.${signature}`, SECRET)).toBeNull()
-    // A flipped signature byte.
-    expect(verifyHandoffTicket(`${payload}.${signature?.slice(0, -1)}A`, SECRET)).toBeNull()
+    // A flipped signature character — in the MIDDLE. The last base64url
+    // character of a 32-byte MAC carries two padding bits, so replacing it
+    // with "A" is a no-op whenever it was already A–D: a 1-in-16 flake this
+    // suite carried until the M6 ladder hit it (§6.3 records the same
+    // mistake in the probe).
+    const mid = Math.floor((signature?.length ?? 0) / 2)
+    const flipped = `${signature?.slice(0, mid)}${signature?.[mid] === "a" ? "b" : "a"}${signature?.slice(mid + 1)}`
+    expect(verifyHandoffTicket(`${payload}.${flipped}`, SECRET)).toBeNull()
     expect(verifyHandoffTicket(ticket, "another-secret-0123456789abcdefghij")).toBeNull()
     expect(verifyHandoffTicket("not-a-ticket", SECRET)).toBeNull()
     expect(verifyHandoffTicket("", SECRET)).toBeNull()

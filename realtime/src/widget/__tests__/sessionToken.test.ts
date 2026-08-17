@@ -32,8 +32,14 @@ describe("session tokens", () => {
       JSON.stringify({ ...FIELDS, org: "org_victim", exp: NOW + SESSION_TOKEN_TTL_MS }),
     ).toString("base64url")
     expect(verifySessionToken(`${forged}.${sig}`, SECRET, NOW)).toBeNull()
-    // And a tampered signature against the honest payload.
-    const flipped = sig.slice(0, -1) + (sig.endsWith("A") ? "B" : "A")
+    // And a tampered signature against the honest payload. Flipped in the
+    // MIDDLE, never the last character: a 32-byte signature is 43 base64url
+    // characters, and the last one carries four real bits and two of
+    // padding — so "A" ↔ "B" there decodes to the same bytes and is no
+    // tamper at all. The M6 security probe found this the hard way (§6.3),
+    // and this suite had the same 1-in-16 latent flake.
+    const at = Math.floor(sig.length / 2)
+    const flipped = sig.slice(0, at) + (sig[at] === "a" ? "b" : "a") + sig.slice(at + 1)
     expect(verifySessionToken(`${payload}.${flipped}`, SECRET, NOW)).toBeNull()
   })
 

@@ -62,10 +62,13 @@ escalations they count, and read as one primary-key lookup against the
 org's plan before any model call. M5.4 closed the milestone with billing
 (§11): Stripe Checkout out, a signature-verified webhook back, and an event
 ledger keyed by Stripe's own event id so a redelivery applies exactly once.
-**M5 COMPLETE.** M6 is underway: as of M6.1 the trust model is ATTACKED in CI
-(§12) — a seeded pair of tenants and 36 black-box checks against the shipped
-image, every layer from the origin allowlist to the socket's single-use
-ticket, merge-blocking.
+**M5 COMPLETE.** M6 made the trust model a MEASUREMENT (§12): a seeded pair
+of tenants and 45 black-box checks against the shipped image — every layer
+from the origin allowlist to the socket's single-use ticket, the internal
+API's SSRF vet and credential read-back denial behind a throwaway secret —
+plus nine poisoned pages in the retrieved context whose containment is
+asserted and whose relay is reported, all merge-blocking in the e2e job.
+**M6 COMPLETE — every milestone in the plan is.**
 
 ---
 
