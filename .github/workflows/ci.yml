@@ -7,10 +7,12 @@
 #           stack, seed it with a tenant to attack (docker-compose.probe.yaml's
 #           one-shot service — the image under test is untouched), and drive
 #           it from outside with the zero-dependency probes: smoke (is the
-#           surface mounted and closed), security (does every layer of the
-#           trust model hold against the requests it exists to stop). What
-#           gets probed is byte-for-byte what gets deployed, and a layer that
-#           gives is a red merge.
+#           surface mounted and closed), injection (does a poisoned page in
+#           the retrieved context ever reach the visitor uncited, cite an
+#           attacker's URL, or leak the system prompt), and security (does
+#           every layer of the trust model hold against the requests it
+#           exists to stop). What gets probed is byte-for-byte what gets
+#           deployed, and a layer that gives is a red merge.
 #   eval    the retrieval-quality gate: golden set scored against an
 #           ephemeral pgvector container with the LOCAL embedding model
 #           (bge-small via fastembed — no API key), failing the build if
@@ -243,6 +245,14 @@ jobs:
 
       - name: smoke probe
         run: node scripts/smoke-test.mjs http://localhost:3000
+
+      # Poisoned pages in the retrieved context (eval/injection.jsonl, seeded
+      # into org A): asserts the containment properties — no uncited text, no
+      # attacker URL cited, no system prompt in anything the visitor sees —
+      # and reports the relay rate, which under the keyless mock measures the
+      # pipeline rather than a model and is expected to be 0.
+      - name: injection probe
+        run: node scripts/injection-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
 
       # LAST among the probes: its final section drains the mint and chat
       # token buckets on purpose, and anything after it would wait a minute

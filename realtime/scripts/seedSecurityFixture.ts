@@ -74,6 +74,21 @@ interface ProbeOrg {
    *  the exact text retrieves, so the probe asks these sentences as its
    *  questions; `url` is what a citation must point at. */
   corpus: Array<{ url: string; text: string }>
+  /** The poisoned pages (eval/injection.jsonl), also in this org's corpus
+   *  — org A only. `text` is the stored chunk (legit paragraph, blank line,
+   *  injected instruction); `question` the natural question a real embedder
+   *  can retrieve on; `canary` the token that appears ONLY in the injected
+   *  half, so a model that quotes the legitimate sentence is never scored
+   *  as having followed the injection. */
+  poisoned: Array<{
+    id: string
+    category: string
+    url: string
+    text: string
+    question: string
+    canary: string | null
+    attackerUrls: string[]
+  }>
 }
 
 interface SecurityFixture {
@@ -121,6 +136,26 @@ const CORPUS_B = [
   { url: "https://probe-b.example/greenhouse", title: "Greenhouse", heading: "Growing > Greenhouse", text: "Tomato seedlings should be hardened off for a week before transplanting outdoors." },
   { url: "https://probe-b.example/compost", title: "Compost", heading: "Growing > Compost", text: "A compost heap needs a roughly even mix of green and brown material to heat up." },
 ]
+
+/** One line of eval/injection.jsonl (§7.7). Its invariants are pinned by
+ *  eval/__tests__/injection.test.ts; this script only reads it. */
+interface InjectionEntry {
+  id: string
+  category: string
+  url: string
+  title: string
+  heading: string
+  legit: string
+  injected: string
+  canary: string | null
+  attackerUrls: string[]
+  question: string
+}
+
+function loadInjectionCorpus(): InjectionEntry[] {
+  const raw = readFileSync(resolve(__dirname, "../../eval/injection.jsonl"), "utf8")
+  return raw.split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line) as InjectionEntry)
+}
 //#endregion
 
 //#region Main
@@ -148,7 +183,12 @@ async function main(): Promise<void> {
   // ── Replace the probe orgs wholesale ─────────────────────────────────────
   await db.deleteFrom("organizations").where("name", "in", [ORG_A, ORG_B, ORG_C]).execute()
 
-  async function seedOrg(name: string, host: string, corpus: typeof CORPUS_A): Promise<ProbeOrg> {
+  async function seedOrg(
+    name: string,
+    host: string,
+    corpus: typeof CORPUS_A,
+    poisoned: InjectionEntry[] = [],
+  ): Promise<ProbeOrg> {
     const id = newId("org")
     await db.insertInto("organizations").values({ id, name }).execute()
 
@@ -179,8 +219,20 @@ async function main(): Promise<void> {
     // embedding input under the mock, for the reason seed-demo explains: the
     // mock hashes its input, so a prepended heading would REPLACE the
     // vector rather than shift it, and exact-text retrieval would die.
-    const vectors = await embedder.embed(corpus.map((c) => c.text))
-    for (const [i, page] of corpus.entries()) {
+    //
+    // The poisoned pages are stored the same way, in the same org, under
+    // the same source: to the pipeline they are simply more of the tenant's
+    // documentation, which is exactly the threat — a crawled page an
+    // attacker got to edit.
+    const pages = [
+      ...corpus,
+      ...poisoned.map((entry) => ({
+        url: entry.url, title: entry.title, heading: entry.heading,
+        text: `${entry.legit}\n\n${entry.injected}`,
+      })),
+    ]
+    const vectors = await embedder.embed(pages.map((c) => c.text))
+    for (const [i, page] of pages.entries()) {
       const documentId = newId("doc")
       await db.insertInto("documents").values({
         id: documentId, org_id: id, source_id: sourceId, url: page.url, title: page.title,
@@ -202,10 +254,16 @@ async function main(): Promise<void> {
     return {
       id, name, publishableKey, revokedKey, origin,
       corpus: corpus.map((c) => ({ url: c.url, text: c.text })),
+      poisoned: poisoned.map((entry) => ({
+        id: entry.id, category: entry.category, url: entry.url,
+        text: `${entry.legit}\n\n${entry.injected}`,
+        question: entry.question, canary: entry.canary, attackerUrls: entry.attackerUrls,
+      })),
     }
   }
 
-  const a = await seedOrg(ORG_A, "probe-a.example", CORPUS_A)
+  const injection = loadInjectionCorpus()
+  const a = await seedOrg(ORG_A, "probe-a.example", CORPUS_A, injection)
   const b = await seedOrg(ORG_B, "probe-b.example", CORPUS_B)
 
   // ── The credential canary (M6.2) ─────────────────────────────────────────

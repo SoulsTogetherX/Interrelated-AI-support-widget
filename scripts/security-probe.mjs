@@ -307,9 +307,14 @@ if (!fixture) {
   console.log("\n[C] session tokens")
 
   await check("a tampered token is refused with 401", async () => {
+    // Flip a character in the MIDDLE of the token, never the last one: the
+    // final base64url character of a 32-byte signature carries two real bits
+    // and four of padding, so "A" → "B" there decodes to the same bytes and
+    // is not a tamper at all — a check that flipped it passed by luck.
     const token = sessionA1.token
-    const last = token.at(-1)
-    const tampered = token.slice(0, -1) + (last === "A" ? "B" : "A")
+    const at = Math.floor(token.length / 2)
+    const replacement = token[at] === "a" ? "b" : "a"
+    const tampered = token.slice(0, at) + replacement + token.slice(at + 1)
     const res = await postJson("/v1/widget/chat", { question: "hello" }, { origin: orgA.origin, authorization: `Bearer ${tampered}` })
     expect(res.status === 401, `status ${res.status}`)
   })
@@ -340,6 +345,10 @@ if (!fixture) {
   console.log("\n[D] tenant isolation")
 
   const knownA = orgA.corpus[0]
+  // Everything org A legitimately holds — its plain pages AND the poisoned
+  // ones (eval/injection.jsonl, seeded into the same org): a citation to
+  // either is a citation to A's own documentation.
+  const orgAUrls = new Set([...orgA.corpus.map((c) => c.url), ...(orgA.poisoned ?? []).map((p) => p.url)])
   let conversationA1 = null
   await check("CONTROL: org A retrieves its own content and cites its own URL", async () => {
     // The positive control every negative below depends on. If this fails,
@@ -351,11 +360,17 @@ if (!fixture) {
     const claims = events.filter((e) => e.type === "claim")
     expect(meta && typeof meta.conversationId === "string", "no meta event")
     expect(claims.length > 0, `no claim events (got ${events.map((e) => e.type).join(",")})`)
-    const corpusUrls = new Set(orgA.corpus.map((c) => c.url))
-    expect(claims.every((c) => corpusUrls.has(c.url)), `a claim cited a URL outside org A's corpus: ${claims.map((c) => c.url).join(",")}`)
+    expect(claims.every((c) => orgAUrls.has(c.url)), `a claim cited a URL outside org A's corpus: ${claims.map((c) => c.url).join(",")}`)
     expect(claims.some((c) => c.url === knownA.url), "the retrieved sentence was not the one cited")
     conversationA1 = meta.conversationId
   })
+  if (conversationA1 === null) {
+    // Without a conversation of A1's, every check below that continues,
+    // escalates, or tickets it would fail for the wrong reason. Say so once
+    // instead of twelve times.
+    console.error("\nthe retrieval CONTROL failed — the isolation and handoff checks that depend on it are skipped, not passed")
+    skip("[D] continuation + [F] handoff socket", "no conversation to attack (control failed)")
+  }
 
   await check("org B asking for org A's exact sentence retrieves NOTHING of A's — refusal, no claim, no leak", async () => {
     // Same question, other tenant. Under exact-match retrieval this is the
@@ -370,17 +385,19 @@ if (!fixture) {
     }
   })
 
-  await check("another visitor of the same org cannot continue this conversation — one opaque error, nothing learned", async () => {
-    const { status, events } = await chat(sessionA2, orgA.origin, { question: knownA.text, conversationId: conversationA1 })
-    expect(status === 200, `status ${status}`)
-    expect(events.length === 1 && events[0].type === "error", `events ${events.map((e) => e.type).join(",")}`)
-    expect(Object.keys(events[0]).join(",") === "type", `error event carries detail: ${JSON.stringify(events[0])}`)
-  })
+  if (conversationA1 !== null) {
+    await check("another visitor of the same org cannot continue this conversation — one opaque error, nothing learned", async () => {
+      const { status, events } = await chat(sessionA2, orgA.origin, { question: knownA.text, conversationId: conversationA1 })
+      expect(status === 200, `status ${status}`)
+      expect(events.length === 1 && events[0].type === "error", `events ${events.map((e) => e.type).join(",")}`)
+      expect(Object.keys(events[0]).join(",") === "type", `error event carries detail: ${JSON.stringify(events[0])}`)
+    })
 
-  await check("another ORG cannot continue it either, with the identical opaque error", async () => {
-    const { events } = await chat(sessionB1, orgB.origin, { question: knownA.text, conversationId: conversationA1 })
-    expect(events.length === 1 && events[0].type === "error", `events ${events.map((e) => e.type).join(",")}`)
-  })
+    await check("another ORG cannot continue it either, with the identical opaque error", async () => {
+      const { events } = await chat(sessionB1, orgB.origin, { question: knownA.text, conversationId: conversationA1 })
+      expect(events.length === 1 && events[0].type === "error", `events ${events.map((e) => e.type).join(",")}`)
+    })
+  }
 
   await check("a fabricated conversation id is refused with 400 before any work", async () => {
     const { status } = await chat(sessionA2, orgA.origin, { question: "hi", conversationId: "con_00000000000000000000000000000000".slice(0, 20) })
@@ -414,6 +431,7 @@ if (!fixture) {
   //#region F. The handoff socket
   console.log("\n[F] handoff socket")
 
+  if (conversationA1 !== null) {
   await check("escalating a conversation this visitor does not own is a 404 that reveals nothing", async () => {
     const res = await postJson("/v1/widget/escalate", { conversationId: conversationA1 }, { origin: orgA.origin, ...bearer(sessionA2) })
     expect(res.status === 404, `status ${res.status}`)
@@ -490,6 +508,7 @@ if (!fixture) {
     expect(!socket.isClosed(), "socket closed under a typing flood")
     socket.close()
   })
+  } // conversationA1 !== null
   //#endregion
 
   //#region H. The internal API — SSRF payloads and the credential read-back
