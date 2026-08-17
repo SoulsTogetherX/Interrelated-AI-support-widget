@@ -7,6 +7,9 @@ It is updated as part of every step's definition of done — if a file exists
 and is not described here, that is a documentation bug.
 
 Companion documents:
+- `README.md` — the public face: what it is, the measured numbers, how it
+  works, the trust model, known limitations. Cites this file by section and
+  claims no number that a committed script does not produce.
 - `DATAFLOW.md` — end-to-end traces of each request path.
 - `~/.claude/plans/ticklish-forging-clover.md` — the approved project plan
   (milestones, metrics, risks). This file describes what IS; the plan
