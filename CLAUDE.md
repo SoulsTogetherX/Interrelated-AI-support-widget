@@ -22,9 +22,15 @@ bounds, the handoff socket (single-use ticket, role from the ticket, bad
 frames without a disconnect), and the rate limits last because they drain
 the buckets — run in CI against the shipped image as a merge-blocking gate,
 with the fixture seeded from INSIDE the compose network so neither the image
-nor its network posture changes for the harness. Still open in M6: the
-internal-API probes (SSRF payloads, credential read-back) and the injection
-probe.
+nor its network posture changes for the harness. M6.2 is done — the
+internal-API probes (§6.3's section H, §4.3): nine checks behind a
+throwaway secret CI now generates, every one refused BEFORE any egress —
+fifteen SSRF payloads (loopback in four spellings, link-local metadata,
+RFC1918, CGNAT, ULA, v4-mapped v6, a metadata hostname) refused as crawl
+targets and as self-hosted provider base URLs with one generic sentence,
+and the credential read-back denial proven against a seeded canary whose
+plaintext the probe knows and whose suffix is the only thing the status
+route may show. Still open in M6: the injection probe.
 M5.1 is done — the metrics layer (§9.13): deflection, refusal and claim-strip
 rates, latency percentiles, time-to-first-human-response, and a by-model
 breakdown, all computed in SQL from columns the pipeline has been writing
@@ -1806,10 +1812,13 @@ trust model, not retrieval quality, and exact-match retrieval is what makes
 the embedding input is trail-free, for seed-demo's reason (§3.19).
 
 Two more fields serve later steps: `credentialCanary`, a fake provider key
-encrypted on org A exactly as the internal API would store it, present only
-when the vault's master key is set (the seed invents no fallback key, for
-the reason the vault has none) — the read-back probe greps every response
-for it; and `systemPromptMarkers`, distinctive prose lines lifted from the
+encrypted exactly as the internal API would store it, present only when the
+vault's master key is set (the seed invents no fallback key, for the reason
+the vault has none) — the read-back probe greps every response for it. It
+lives on a THIRD org, C, that never chats: a saved generation credential is
+what the chat route resolves and CALLS (§3.21), so a fake key on an org that
+answers questions would turn every answer into a failed call to the real
+provider and break the retrieval controls. And `systemPromptMarkers`, distinctive prose lines lifted from the
 REAL system prompt rather than typed into a probe, so a rewrite of the
 prompt cannot leave the leak check grepping for sentences that no longer
 exist. Idempotent by REPLACEMENT like seed-demo, and every key and origin
@@ -2233,7 +2242,11 @@ outlive them.
 ### §4.3 `docker-compose.prod.yaml`
 Production shape: prod image target, no bind mounts, Postgres **not**
 published to the host. This is the stack CI's e2e job boots — the artifact
-probed is the artifact shipped.
+probed is the artifact shipped. Since M6.2 it passes `INTERNAL_API_SECRET`
+and `CREDENTIAL_MASTER_KEY` through from `.env` with EMPTY defaults: empty is
+"unconfigured" to server.ts (the routes do not mount), so a local boot with
+neither behaves exactly as before, while CI's throwaway pair mounts the
+surface so the security probe can attack it.
 
 ### §4.4 `docker-compose.probe.yaml` — the harness half of e2e (M6)
 Layered OVER the prod stack, never used alone: one profile-gated, one-shot
@@ -2349,9 +2362,32 @@ first and its failure fails the run rather than letting everything after it
 pass vacuously. Zero dependencies (fetch, the global WebSocket client,
 node:http for raw upgrade handshakes — the status code IS the assertion for
 "refused before a socket exists"). Without `--fixture` it runs section A
-alone and says so; the internal-API checks (M6.2) additionally require
-`INTERNAL_API_SECRET` and skip without it, because that secret is the admin
-key and a probe pointed at production must never carry it.
+alone and says so.
+
+**[H] the internal API (M6.2)** — nine more checks, gated on
+`INTERNAL_API_SECRET` in the probe's environment and skipped without it,
+because that secret is the admin key and a probe pointed at production must
+never carry it (CI's e2e stack generates a throwaway pair; §4.3's compose
+passes it through with empty defaults, and empty is "unconfigured" to
+server.ts, so a local prod boot is unchanged). Every request in the section
+is REFUSED before any network egress — that is the property under test — so
+nothing here talks to a real provider or crawls a real site: a secretless
+request and a WRONG secret are the same empty 401; unknown and malformed org
+ids are 404; the **read-back denial** — the status route for the org that
+holds the seeded canary shows the last four characters and NOTHING else of
+it, not the plaintext, not the plaintext minus its suffix, not a recognizable
+fragment, not ciphertext; **fifteen SSRF payloads** (loopback in four
+spellings including `0x7f000001` and `2130706433`, `0.0.0.0`, `localhost`,
+`[::1]`, the v4-mapped `[::ffff:127.0.0.1]`, the cloud metadata address, ULA,
+all three RFC1918 blocks, CGNAT, and `metadata.google.internal`) refused as
+crawl targets AND as Ollama / OpenAI-compatible base URLs, every one with the
+single generic "public address" sentence (which range it landed in is
+reconnaissance), while `file:` and embedded credentials are refused by their
+own rule; a refused credential's error never echoes the key it was sent;
+shape violations are refused with a sentence and nothing is stored (the
+control that the route parses rather than refusing everything); and no
+answer carries CORS headers, so a browser cannot read the surface cross-
+origin.
 
 ---
 

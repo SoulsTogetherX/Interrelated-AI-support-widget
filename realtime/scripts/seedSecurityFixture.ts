@@ -82,8 +82,18 @@ interface SecurityFixture {
   /** The embedding model the corpus was stored under — tells a probe
    *  whether retrieval is exact-match (mock) or semantic (anything else). */
   embeddingModel: string
-  orgs: { a: ProbeOrg; b: ProbeOrg }
-  /** The plaintext of a provider key stored (encrypted) on org A, or null
+  orgs: {
+    a: ProbeOrg
+    b: ProbeOrg
+    /** A third org whose ONLY job is to hold the credential canary. Not
+     *  A, deliberately: a saved generation credential is what the chat
+     *  route resolves and CALLS (§3.21's resolve.ts), so a fake key on an
+     *  org that answers questions would turn every answer into a failed
+     *  call to a real provider and break the retrieval controls. Org C
+     *  never chats; it exists to be read back. */
+    c: { id: string; name: string }
+  }
+  /** The plaintext of a provider key stored (encrypted) on org C, or null
    *  when CREDENTIAL_MASTER_KEY was unset at seed time. A probe greps every
    *  response it receives for this string; one hit is a leak. */
   credentialCanary: string | null
@@ -96,6 +106,7 @@ interface SecurityFixture {
 //#region Fixture data
 const ORG_A = "Security Probe Org A"
 const ORG_B = "Security Probe Org B"
+const ORG_C = "Security Probe Org C (credential canary)"
 
 /** Distinct corpora, deliberately about different subjects with no shared
  *  vocabulary, so a cross-tenant retrieval attempt cannot be explained away
@@ -134,8 +145,8 @@ async function main(): Promise<void> {
   // "ask this sentence, expect this citation" deterministic.
   const embedder = new MockEmbeddingProvider()
 
-  // ── Replace both orgs wholesale ──────────────────────────────────────────
-  await db.deleteFrom("organizations").where("name", "in", [ORG_A, ORG_B]).execute()
+  // ── Replace the probe orgs wholesale ─────────────────────────────────────
+  await db.deleteFrom("organizations").where("name", "in", [ORG_A, ORG_B, ORG_C]).execute()
 
   async function seedOrg(name: string, host: string, corpus: typeof CORPUS_A): Promise<ProbeOrg> {
     const id = newId("org")
@@ -198,17 +209,23 @@ async function main(): Promise<void> {
   const b = await seedOrg(ORG_B, "probe-b.example", CORPUS_B)
 
   // ── The credential canary (M6.2) ─────────────────────────────────────────
-  // A provider key stored on org A the way the internal API would store it,
-  // so the read-back probe has a plaintext to grep for. Only when the vault
-  // can encrypt: the seed must not invent a fallback key, for the reason the
-  // vault has none (a provider key is real even in dev). The canary is
-  // random per seed and lands only in the fixture file.
+  // A provider key stored on org C the way the internal API would store it,
+  // so the read-back probe has a plaintext to grep for. Org C and not A: a
+  // saved generation credential is what the chat route resolves and CALLS,
+  // and a fake Groq key on an org that answers questions would turn every
+  // answer into a failed call to the real Groq — breaking the retrieval
+  // controls in section [D]. C never chats. Only when the vault can encrypt:
+  // the seed must not invent a fallback key, for the reason the vault has
+  // none (a provider key is real even in dev). The canary is random per seed
+  // and lands only in the fixture file.
+  const c = { id: newId("org"), name: ORG_C }
+  await db.insertInto("organizations").values(c).execute()
   let credentialCanary: string | null = null
   if (hasMasterKey()) {
     credentialCanary = `gsk_probe_canary_${newId("key").slice(4)}`
     const credentialId = newId("prv")
     await db.insertInto("org_provider_credentials").values({
-      id: credentialId, org_id: a.id, role: "generation", provider: "groq",
+      id: credentialId, org_id: c.id, role: "generation", provider: "groq",
       model: null, base_url: null, dim: null,
       key_ciphertext: encryptProviderKey(credentialCanary, credentialId),
       key_suffix: keySuffix(credentialCanary),
@@ -232,17 +249,17 @@ async function main(): Promise<void> {
     version: 1,
     seededAt: new Date().toISOString(),
     embeddingModel: embedder.model,
-    orgs: { a, b },
+    orgs: { a, b, c },
     credentialCanary,
     systemPromptMarkers,
   }
   mkdirSync(dirname(resolve(outPath)), { recursive: true })
   writeFileSync(resolve(outPath), `${JSON.stringify(fixture, null, 2)}\n`)
 
-  console.log(`seeded ${ORG_A} (${a.id}) and ${ORG_B} (${b.id})`)
+  console.log(`seeded ${ORG_A} (${a.id}), ${ORG_B} (${b.id}), ${ORG_C} (${c.id})`)
   console.log(`  org A: pk ${a.publishableKey}, revoked ${a.revokedKey}, origin ${a.origin}, ${a.corpus.length} chunks`)
   console.log(`  org B: pk ${b.publishableKey}, revoked ${b.revokedKey}, origin ${b.origin}, ${b.corpus.length} chunks`)
-  console.log(`  credential canary: ${credentialCanary === null ? "none (CREDENTIAL_MASTER_KEY unset)" : "stored on org A"}`)
+  console.log(`  credential canary: ${credentialCanary === null ? "none (CREDENTIAL_MASTER_KEY unset)" : "stored on org C"}`)
   console.log(`  system-prompt markers: ${systemPromptMarkers.length}`)
   console.log(`fixture written to ${resolve(outPath)}`)
   await db.destroy()

@@ -215,11 +215,17 @@ jobs:
 
       - name: create throwaway .env
         # Secrets here are generated per-run and never real: the e2e stack is
-        # hermetic, exists for minutes, and is destroyed below.
+        # hermetic, exists for minutes, and is destroyed below. The internal
+        # API pair (M6.2) is set so the surface MOUNTS and the security probe
+        # can attack it — the SSRF vet on tenant URLs and the credential
+        # read-back denial only exist behind a configured secret. Empty in a
+        # local prod boot means unconfigured, exactly as before.
         run: |
           cp .env.example .env
           sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
           sed -i "s/^POSTGRES_PORT=.*/POSTGRES_PORT=5432/" .env
+          echo "INTERNAL_API_SECRET=$(openssl rand -hex 32)" >> .env
+          echo "CREDENTIAL_MASTER_KEY=$(openssl rand -base64 32)" >> .env
 
       # Both files everywhere below: the probe override adds only the
       # one-shot seed service (profile-gated, so `up` never starts it), and
@@ -240,9 +246,13 @@ jobs:
 
       # LAST among the probes: its final section drains the mint and chat
       # token buckets on purpose, and anything after it would wait a minute
-      # for them to refill.
+      # for them to refill. The internal secret is the throwaway one from
+      # .env — handing it to the probe is what enables the SSRF and
+      # read-back checks; against a real deployment it must never be given.
       - name: security probe
-        run: node scripts/security-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
+        run: |
+          export INTERNAL_API_SECRET="$(grep '^INTERNAL_API_SECRET=' .env | cut -d= -f2-)"
+          node scripts/security-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
 
       - name: dump logs on failure
         if: failure()

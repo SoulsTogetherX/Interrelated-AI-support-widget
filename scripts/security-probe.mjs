@@ -492,6 +492,143 @@ if (!fixture) {
   })
   //#endregion
 
+  //#region H. The internal API — SSRF payloads and the credential read-back
+  // The dashboard's server-to-server surface. Only reachable with the shared
+  // secret, which is the admin key: CI's throwaway stack has one, production
+  // must never hand one to a probe. Every request here is REFUSED before any
+  // network egress — that is the property under test — so nothing in this
+  // section talks to a real provider or crawls a real site.
+  console.log("\n[H] internal API")
+  if (!internalSecret) {
+    skip("[H] internal API checks", "INTERNAL_API_SECRET not in the environment (CI sets a throwaway one; never point this at production with the real one)")
+  } else {
+    const secretHeader = { "x-internal-secret": internalSecret }
+    const internal = (path, body, headers = secretHeader) =>
+      body === undefined
+        ? request(path, { headers })
+        : postJson(path, body, headers, { patient: false })
+
+    await check("a secretless request and a WRONG secret are the same empty 401", async () => {
+      const none = await request(`/internal/orgs/${orgA.id}/credentials`)
+      const wrong = await request(`/internal/orgs/${orgA.id}/credentials`, { headers: { "x-internal-secret": "x".repeat(internalSecret.length) } })
+      expect(none.status === 401 && wrong.status === 401, `statuses ${none.status}/${wrong.status}`)
+      const [n, w] = [await none.text(), await wrong.text()]
+      expect(n === w, `bodies differ: ${JSON.stringify(n)} vs ${JSON.stringify(w)}`)
+      expect(n.length === 0, `401 body is not empty: ${JSON.stringify(n)}`)
+    })
+
+    await check("an unknown org and a malformed org id are both 404 — with the secret", async () => {
+      const unknown = await internal(`/internal/orgs/org_00000000000000000000000000000000/credentials`)
+      const malformed = await internal(`/internal/orgs/not-an-org/credentials`)
+      expect(unknown.status === 404 && malformed.status === 404, `statuses ${unknown.status}/${malformed.status}`)
+    })
+
+    if (fixture.credentialCanary) {
+      await check("READ-BACK DENIAL: the credential status shows a suffix and never the key or its ciphertext", async () => {
+        // The one row whose plaintext this probe knows. The status route may
+        // show the last four characters — that is the display contract — and
+        // must show nothing else of it, in any form.
+        const canary = fixture.credentialCanary
+        const res = await internal(`/internal/orgs/${fixture.orgs.c.id}/credentials`)
+        expect(res.status === 200, `status ${res.status}`)
+        const body = await res.text()
+        expect(body.includes(canary.slice(-4)), "the suffix is not shown — is this the seeded row?")
+        expect(!body.includes(canary), "THE PLAINTEXT KEY IS IN THE STATUS RESPONSE")
+        expect(!body.includes(canary.slice(0, -4)), "the key minus its suffix is in the status response")
+        expect(!body.includes("probe_canary"), "a recognizable fragment of the key is in the status response")
+        expect(!/key_ciphertext|"v1\.[A-Za-z0-9+/=]+\./.test(body), "ciphertext material is in the status response")
+      })
+    } else {
+      skip("credential read-back denial", "the fixture has no canary (CREDENTIAL_MASTER_KEY was unset when it was seeded)")
+    }
+
+    // Every payload the SSRF guard exists for, in both places a tenant can
+    // hand this server a URL: a crawl target, and a self-hosted provider's
+    // base URL. Each must be refused with the ONE generic sentence — which
+    // private range it landed in is reconnaissance — and refused before any
+    // fetch: nothing here has a listener, and a probe that hung would be
+    // the finding.
+    const SSRF_URLS = [
+      "http://127.0.0.1/",
+      "http://127.1/",
+      "http://0x7f000001/",
+      "http://2130706433/",
+      "http://0.0.0.0/",
+      "http://localhost/",
+      "http://[::1]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://[fd00::1]/",
+      "http://10.0.0.1/",
+      "http://172.16.0.1/",
+      "http://192.168.1.1/",
+      "http://100.64.0.1/",
+      "http://metadata.google.internal/",
+    ]
+
+    await check(`SSRF in crawl targets: ${SSRF_URLS.length} private, loopback, link-local and exotic addresses all refused as non-public`, async () => {
+      for (const location of SSRF_URLS) {
+        const res = await internal(`/internal/orgs/${orgA.id}/sources`, { kind: "url", location })
+        const body = await res.text()
+        expect(res.status === 422, `${location} → ${res.status} ${body}`)
+        expect(body.includes("public address"), `${location} refused for another reason: ${body}`)
+      }
+    })
+
+    await check("SSRF in crawl targets: non-http schemes and embedded credentials are refused by their own rule", async () => {
+      // Different sentences from the vet's: these never reach DNS, and the
+      // probe asserts they are refused for what they are.
+      const file = await internal(`/internal/orgs/${orgA.id}/sources`, { kind: "url", location: "file:///etc/passwd" })
+      expect(file.status === 422 && (await file.text()).includes("http(s)"), "file: URL not refused by scheme")
+      const creds = await internal(`/internal/orgs/${orgA.id}/sources`, { kind: "url", location: "http://user:pw@example.com/" })
+      expect(creds.status === 422 && (await creds.text()).includes("credentials"), "embedded credentials not refused")
+    })
+
+    await check(`SSRF in self-hosted provider base URLs (Ollama and OpenAI-compatible): all ${SSRF_URLS.length} refused before any request leaves`, async () => {
+      for (const [i, baseUrl] of SSRF_URLS.entries()) {
+        const body = i % 2 === 0
+          ? { role: "generation", provider: "ollama", model: "llama3.2", baseUrl, save: false }
+          : { role: "generation", provider: "openai_compatible", model: "any", apiKey: "sk-probe-not-a-real-key-000000", baseUrl, save: false }
+        const res = await internal(`/internal/orgs/${orgA.id}/credentials`, body)
+        const text = await res.text()
+        expect(res.status === 422, `${baseUrl} → ${res.status} ${text}`)
+        expect(text.includes("public address"), `${baseUrl} refused for another reason: ${text}`)
+      }
+    })
+
+    await check("a refused credential's error never echoes the key that was sent", async () => {
+      // A refusal is the path most likely to be logged and shown; the key
+      // must not ride along in it.
+      const key = "sk-probe-INJECTED-must-not-echo-9f3a"
+      const res = await internal(`/internal/orgs/${orgA.id}/credentials`, {
+        role: "generation", provider: "openai_compatible", model: "any", apiKey: key,
+        baseUrl: "http://169.254.169.254/v1", save: false,
+      })
+      const text = await res.text()
+      expect(res.status === 422, `status ${res.status}`)
+      expect(!text.includes(key) && !text.includes("INJECTED"), `the key was echoed: ${text}`)
+    })
+
+    await check("shape violations are refused with a sentence, and nothing was stored", async () => {
+      // A control that the route parses rather than refusing everything:
+      // these are refused for SHAPE, with different sentences than the vet's.
+      const noKey = await internal(`/internal/orgs/${orgB.id}/credentials`, { role: "generation", provider: "groq", save: true })
+      expect(noKey.status === 422 && (await noKey.text()).includes("API key"), "groq without a key not refused for shape")
+      const badRole = await internal(`/internal/orgs/${orgB.id}/credentials`, { role: "root", provider: "groq", apiKey: "gsk_x".padEnd(40, "0"), save: true })
+      expect(badRole.status === 422 && (await badRole.text()).includes("role"), "bad role not refused for shape")
+      const status = await internal(`/internal/orgs/${orgB.id}/credentials`)
+      const body = await status.json()
+      expect(Array.isArray(body.credentials) && body.credentials.length === 0, `something was stored on org B: ${JSON.stringify(body)}`)
+    })
+
+    await check("the browser cannot read the internal API cross-origin — no CORS headers on any answer", async () => {
+      const res = await request(`/internal/orgs/${orgB.id}/credentials`, { headers: { ...secretHeader, origin: orgB.origin } })
+      expect(res.status === 200, `status ${res.status}`)
+      expect(res.headers.get("access-control-allow-origin") === null, "CORS header on an internal response")
+    })
+  }
+  //#endregion
+
   //#region G. Rate limits — LAST, because they drain the buckets
   console.log("\n[G] rate limits (drains buckets — nothing runs after this)")
 

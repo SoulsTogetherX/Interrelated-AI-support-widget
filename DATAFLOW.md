@@ -1535,7 +1535,9 @@ docker compose -f prod -f probe run --rm seed        docker-compose.probe.yaml
       DELETE both probe orgs by name (cascade wipes everything they own)
       org A: pk (live) + pk (created, then REVOKED) + origin + 3 chunks
       org B: pk + revoked pk + origin + 2 chunks, no shared vocabulary
-      credential canary on A  (only if CREDENTIAL_MASTER_KEY — M6.2)
+      org C: holds the credential canary and NOTHING else — a fake key on an
+             org that chats would be resolved and CALLED (§5.3's resolve hop)
+             (only if CREDENTIAL_MASTER_KEY — CI's throwaway one, M6.2)
       systemPromptMarkers     lifted from the REAL prompt (§5.1's SYSTEM_PROMPT)
       → .probe/security-fixture.json   (bind mount; gitignored)
 node scripts/smoke-test.mjs http://localhost:3000        mounted and closed
@@ -1584,6 +1586,21 @@ runs where the database already is, and the probes need nothing installed.
   {type:"message", role:"agent"} → echoed role "visitor"
   "not json" / 4,001 chars / {type:"teleport"} → error frames, socket OPEN
   100 typing frames → still open, next message still echoes
+
+[H] internal API                         only with INTERNAL_API_SECRET (CI's throwaway one)
+  no secret / WRONG secret → same empty 401
+  unknown org / malformed org id → 404
+  GET org C's credentials → 200 with the SUFFIX and nothing else of the canary
+    (not the plaintext, not plaintext-minus-suffix, not a fragment, not "v1." ciphertext)
+  POST sources with 15 SSRF payloads → every one 422 "…public address."
+    127.0.0.1 · 127.1 · 0x7f000001 · 2130706433 · 0.0.0.0 · localhost · [::1]
+    [::ffff:127.0.0.1] · 169.254.169.254 · [fd00::1] · 10/8 · 172.16/12 · 192.168/16
+    100.64/10 · metadata.google.internal            (nothing has a listener: a hang IS the finding)
+  POST sources file:///… → refused by scheme; http://user:pw@… → by credentials
+  POST credentials ollama / openai_compatible with those 15 base URLs → 422 before any fetch
+  POST credentials with key "…INJECTED…" + a private base URL → 422 that never echoes it
+  shape violations → 422 sentences; GET org B → credentials: []      (nothing was stored)
+  GET with an Origin header → no access-control-allow-origin ever
 
 [G] rate limits                          LAST — drains the buckets
   12 rapid chats as one visitor → a 429 WITH the CORS echo
