@@ -76,4 +76,28 @@ export async function removeOriginAction(formData: FormData): Promise<void> {
   await removeOrigin(orgId, field(formData, "origin"))
   revalidatePath(`/dashboard/${orgId}/widget`)
 }
+
+/** The one-click "Allow" beside a REFUSED origin in the traffic table
+ *  (M7.2, §9.18): the forgotten-staging-domain case, where the flag layer 4
+ *  raises is one the tenant answers by allowlisting. Same ladder, same
+ *  validator, same idempotent insert as the typed form — the origin comes
+ *  from a counter row realtime shape-checked, but it is validated again
+ *  here regardless, because a hidden field is still a request field. A
+ *  plain form action: the re-rendered table (the row turns from refused to
+ *  allowlisted, and the widget accepts it on the very next mint) is the
+ *  message. */
+export async function allowOriginNowAction(formData: FormData): Promise<void> {
+  const orgId = field(formData, "orgId")
+  const gate = await requireOwner(orgId)
+  if (!gate.ok) {
+    return
+  }
+  const origin = validateOrigin(formData.get("origin"))
+  if (!origin.ok) {
+    return
+  }
+  await addOrigin(orgId, origin.value)
+  revalidatePath(`/dashboard/${orgId}/widget`)
+  revalidatePath(`/dashboard/${orgId}`)
+}
 //#endregion

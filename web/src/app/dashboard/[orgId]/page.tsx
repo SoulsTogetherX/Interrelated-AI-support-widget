@@ -7,8 +7,11 @@ import RotateKeyForm from "@/components/RotateKeyForm"
 import { ROTATION_GRACE_HOURS, listPublishableKeys } from "@/lib/keys"
 import { revokePublishableKeyNowAction } from "@/lib/keys/actions"
 import { listOrgsForUser, requireOrgMember } from "@/lib/orgs"
+import { refusedSummary } from "@/lib/traffic/queries"
 import { getTodayUsage } from "@/lib/usage/queries"
 import "./page.css"
+
+const TRAFFIC_DAYS = 7
 
 export const metadata = { title: "Overview — Interrelated" }
 
@@ -24,10 +27,11 @@ export default async function OrgOverviewPage({
 }) {
   const { orgId } = await params
   const { user, org } = await requireOrgMember(orgId)
-  const [keys, orgs, usage] = await Promise.all([
+  const [keys, orgs, usage, refused] = await Promise.all([
     listPublishableKeys(org.id),
     listOrgsForUser(user.id),
     getTodayUsage(org.id),
+    refusedSummary(org.id, TRAFFIC_DAYS),
   ])
   const otherOrgs = orgs.filter((o) => o.id !== org.id)
   const isOwner = org.role === "owner"
@@ -97,6 +101,21 @@ export default async function OrgOverviewPage({
             too, because it still costs a retrieval. The count resets at midnight UTC.
           </p>
         </section>
+      ) : null}
+
+      {refused.refused > 0 ? (
+        /* Layer 4's flag (§9.18). Only when there is something to flag: a
+           quiet week renders nothing, not a reassurance nobody asked for.
+           The allowlist already refused every one of these — this is
+           visibility, and the Install page is where it can be acted on. */
+        <p className="orghome-flag" role="status">
+          <strong>{refused.refused.toLocaleString("en-US")}</strong> widget{" "}
+          {refused.refused === 1 ? "load was" : "loads were"} refused from{" "}
+          {refused.origins === 1 ? "an origin" : `${refused.origins} origins`} you have not
+          allowlisted in the last {TRAFFIC_DAYS} days. If one is your own site, allow it; if
+          not, someone has a copy of your snippet and the allowlist is doing its job.{" "}
+          <Link href={`/dashboard/${org.id}/widget`}>See which origins</Link>
+        </p>
       ) : null}
 
       <section className="orghome-card">

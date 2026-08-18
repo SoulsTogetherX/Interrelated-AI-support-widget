@@ -247,6 +247,42 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
       expect(response.headers.get("access-control-allow-headers")).toContain("authorization")
     })
 
+    it("counts every mint that names an org per origin — minted for the allowlisted, refused for the copy (layer 4)", async () => {
+      // Layer 1 refuses an unlisted origin; layer 4 makes the refusal
+      // VISIBLE to the tenant as a name and a number. The counter row is
+      // there the moment the response is (the route awaits it), which is
+      // what lets a dashboard say "that copy is still out there" truthfully.
+      const counters = async () => db.selectFrom("origin_daily")
+        .select(["origin", "minted", "refused"])
+        .where("org_id", "=", orgId).where("day", "=", utcDay())
+        .orderBy("origin").execute()
+      const before = await counters()
+      const at = (rowsNow: Awaited<ReturnType<typeof counters>>, origin: string) =>
+        rowsNow.find((r) => r.origin === origin) ?? { origin, minted: 0, refused: 0 }
+
+      expect((await mintSession()).status).toBe(200)                    // allowlisted → minted
+      expect((await mintSession({}, EVIL_ORIGIN)).status).toBe(403)     // unlisted → refused
+      expect((await mintSession({}, EVIL_ORIGIN)).status).toBe(403)
+      // A missing Origin and a bad key are refused BEFORE anything names
+      // an org, so they add nothing anywhere — the route spends no lookup
+      // on requests it will refuse for free.
+      const noOrigin = await fetch(`${baseUrl}/v1/widget/session`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ publishableKey: PK }),
+      })
+      expect(noOrigin.status).toBe(403)
+      expect((await mintSession({ publishableKey: "pk_live_never_existed" }, EVIL_ORIGIN)).status).toBe(401)
+
+      const after = await counters()
+      expect(at(after, GOOD_ORIGIN).minted - at(before, GOOD_ORIGIN).minted).toBe(1)
+      expect(at(after, GOOD_ORIGIN).refused - at(before, GOOD_ORIGIN).refused).toBe(0)
+      expect(at(after, EVIL_ORIGIN).refused - at(before, EVIL_ORIGIN).refused).toBe(2)
+      expect(at(after, EVIL_ORIGIN).minted).toBe(0)
+      // The total number of rows grew by at most the one new origin — the
+      // no-Origin and bad-key refusals left no trace.
+      expect(after.length - before.length).toBeLessThanOrEqual(1)
+    })
+
     it("rate limits session minting per IP", async () => {
       const { server: floodServer, baseUrl: floodUrl } = await listen(buildApp({
         mintLimiter: new RateLimiter({ capacity: 2, refillPerSecond: 0.001 }),

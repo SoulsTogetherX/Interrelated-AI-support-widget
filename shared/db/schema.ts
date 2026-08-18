@@ -365,6 +365,23 @@ interface UsageDailyTable {
   updated_at: ColumnType<Date, string | Date | undefined, string | Date>
 }
 
+/** One org's widget-session counters for one UTC day per ORIGIN (§3.3.8,
+ *  trust-model layer 4): sessions minted for an allowlisted origin, and
+ *  mints REFUSED from an unlisted one — the number that makes a copied
+ *  snippet visible rather than inferred from a bill. `origin` is either a
+ *  scheme://host[:port] string or one of realtime/src/usage/origins.ts's
+ *  sentinels for refused values that were malformed or past the per-day
+ *  distinct-origin cap; never a visitor identity, never a Referer path.
+ *  Same day and counter conventions as usage_daily. */
+interface OriginDailyTable {
+  org_id: string
+  day: ColumnType<string, string, never>
+  origin: string
+  minted: Generated<number>
+  refused: Generated<number>
+  updated_at: ColumnType<Date, string | Date | undefined, string | Date>
+}
+
 /** What Stripe knows about an org's subscription (§3.3.7). Deliberately
  *  NOT the entitlement: `organizations.plan` is what the product allows and
  *  is read on the hot path before every model call, while this row is the
@@ -422,6 +439,7 @@ interface Database {
   message_citations: MessageCitationsTable
   handoff_sessions: HandoffSessionsTable
   usage_daily: UsageDailyTable
+  origin_daily: OriginDailyTable
   subscriptions: SubscriptionsTable
   stripe_events: StripeEventsTable
 }
@@ -447,6 +465,7 @@ export type {
   MessageCitationsTable,
   HandoffSessionsTable,
   UsageDailyTable,
+  OriginDailyTable,
   SubscriptionsTable,
   StripeEventsTable,
 }

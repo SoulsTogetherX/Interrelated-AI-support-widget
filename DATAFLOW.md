@@ -514,11 +514,18 @@ widget (M2.6) or curl-with-headers
                                        the one the dashboard wrote with);
                                        unknown, revoked, and past-grace →
                                        ONE uniform 401
-      allowed_origins exact match      miss → 403 with NO CORS headers —
-                                       an unlisted site's browser cannot
+      allowed_origins exact match      miss → recordOriginMint(refused)
+                                       (§7.13: the key named the org, so
+                                       the tenant gets to see this
+                                       origin) → 403 with NO CORS headers
+                                       — an unlisted site's browser cannot
                                        even read the error
       api_keys.last_used_at = NOW()    ← this handshake is also what warms
                                        Neon while the visitor types
+      recordOriginMint(minted)         realtime/src/usage/origins.ts —
+                                       awaited (the dashboard never lags
+                                       the widget), wrapped (it can never
+                                       fail the mint)
       → mintSessionToken               realtime/src/widget/sessionToken.ts
         {org, origin, visitor, exp}    HMAC-signed, 30 min TTL
       → 200 {token, expiresAt, visitorId} + CORS echo of the origin
@@ -979,6 +986,70 @@ a PUBLIC key is stated in CLAUDE.md §9.17 rather than oversold: hygiene, a
 way to invalidate every deployed snippet at once without downtime, and the
 mechanism the secret key (layer 6) will need — not a defense against a
 scraper, which is what layers 1 and 3 are for.
+
+### §7.13 Traffic by origin — the counter, the table, and the one-click Allow (M7.2)
+
+Trust-model layer 4. realtime counts; the dashboard shows; the tenant
+decides. Layer 1 refused the copy already — this is how they find out it
+exists.
+
+```
+every POST /v1/widget/session that names an org (§5.3)
+  Origin allowlisted   → recordOriginMint(orgId, origin, "minted")
+  Origin NOT allowlisted → recordOriginMint(orgId, origin, "refused") → 403
+  no Origin / bad key  → nothing: refused before anything named an org,
+                         and the route spends no lookup on requests it
+                         refuses for free
+
+  recordOriginMint                     realtime/src/usage/origins.ts
+    minted  → INSERT origin_daily (org, utcDay, origin, minted=1)
+                ON CONFLICT (org, day, origin) DO UPDATE minted += 1
+    refused → origin := normalizeRefusedOrigin(origin)
+                  looks like an origin (^https?://[^\s/]+$, ≤253) → itself
+                  the literal "null" (file://, sandboxed iframe) → itself
+                  anything else → "(malformed)"
+              UPDATE … SET refused += 1 WHERE (org, day, origin)   ← common
+                                                                     case
+              0 rows → count rows for (org, day)
+                       ≥ 100 → origin := "(other)"                  ← the cap
+                       INSERT … ON CONFLICT DO UPDATE refused += 1
+    either  → awaited by the route, wrapped: an error is logged and the
+              visitor still gets their session
+
+GET /dashboard/[orgId]/widget  (the install page, under the allowlist)
+  → listOriginTraffic(orgId, 7)        web/src/lib/traffic/queries.ts
+      SELECT origin, sum(minted), sum(refused), max(day),
+             EXISTS(allowed_origins row) AS allowlisted
+      WHERE org_id AND day >= today_utc − 6      ← Postgres draws the window
+      GROUP BY origin
+      ORDER BY sum(refused) DESC, sum(minted) DESC, origin
+  → the table: refused-and-unlisted rows first and tinted, each
+    allowlistable one with an owner-only Allow; sentinels spelled out
+    (originLabel); "No widget loads yet." for an empty week
+
+GET /dashboard/[orgId]  (the overview)
+  → refusedSummary(orgId, 7)  → {refused, origins}
+  → refused > 0 → one flag sentence linking to the table; else nothing
+
+Allow (on a refused row)
+  → allowOriginNowAction              web/src/lib/origins/actions.ts
+    → currentUser → getOrgForMember → OWNER
+    → validateOrigin(hidden field)     re-validated: a hidden field is
+                                       still a request field
+    → INSERT allowed_origins ON CONFLICT DO NOTHING
+    → revalidatePath(install page, overview)
+  …and the effect, on the very next widget request from that origin:
+    allowed_origins lookup hits → token minted (200) → recordOriginMint
+    (minted) → the SAME row now carries both counters — refused before
+    noon, minted after
+```
+
+What is deliberately not here: no IP, no visitor id, no Referer (a
+browser's default Referrer-Policy strips the path on cross-origin requests,
+so it would only repeat the Origin), no per-mint log — a counter per
+(org, day, origin), which is what a week-per-origin read wants and what
+keeps the read from growing with the customer's success (CLAUDE.md §3.3.8,
+§3.28, §9.18).
 
 ---
 

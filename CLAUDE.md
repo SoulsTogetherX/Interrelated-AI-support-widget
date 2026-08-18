@@ -50,9 +50,33 @@ green alone, because at the fixture's size an exact plan (index scan plus
 Sort) and the HNSW plan sat at the planner's break-even and autoanalyze
 timing decided which ran; `enable_sort = off` on the test's single
 connection now closes every exact route, so the check bites by construction.
-Remaining in M7: layer 4 (per-origin traffic analytics) and layer 6
-(server-side session minting with the secret key), then the README's other
-named gaps. M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+M7.2 is done — **per-origin traffic visibility, layer 4** (§3.3.8, §3.28,
+§3.18, §9.18, DATAFLOW §7.13): every session mint that names an org is now
+counted per Origin per UTC day in `origin_daily` — MINTED for an
+allowlisted origin, REFUSED for one the allowlist turned away — and the
+dashboard shows the week's rows next to the allowlist. The refused count is
+the point: layer 1 already stops an unlisted site, so what changes is what
+the tenant can SEE — a copy of their snippet, or their own forgotten staging
+domain, shows up as a name and a number instead of nothing, with a one-click
+Allow for the second case and a flag on the overview when the week had any.
+Refused origins are attacker text and are bounded twice — by SHAPE (only
+strings shaped like an origin, or the literal `null`, are stored as
+themselves; the rest under a sentinel) and by VOLUME (a per-org, per-day cap
+on distinct refused origins, past which new ones collapse into `(other)`) —
+and the counter write is awaited so the dashboard never lags the widget but
+wrapped so it can never fail a mint. Nothing here identifies a visitor: an
+origin and a count, no IP, no visitor id, no Referer (a browser's default
+Referrer-Policy strips the path cross-origin, so it would only repeat the
+Origin). Verified live: five kinds of origin sent at the real route
+(allowlisted, a copy on another site, a forgotten staging domain, `null`, and
+garbage), each landing as designed; the overview flag reading "9 loads
+refused from 4 origins"; the install page's table with Allow only on the
+allowlistable refused rows; Allow clicked on the staging row, the row
+flipping to allowlisted, and the very next mint from it answered 200 with
+the same row now reading minted 1 / refused 2 — and at 375px the page never
+scrolling sideways, after two layout fixes the check found (§9.18).
+Remaining in M7: layer 6 (server-side session minting with the secret key),
+then the README's other named gaps. M6.1 is done — the security probe (§6.3, §3.27, §4.4,
 DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
 across the trust model's layers — origin allowlist and CORS posture, key
 state (a revoked key byte-identical to an unknown one), token tamper and
@@ -1121,6 +1145,34 @@ Worth noting: realtime owns these tables (it owns every migration) but has
 NO billing code at all. The dashboard writes them; realtime reads the
 entitlement column and nothing else.
 
+### §3.3.8 `src/db/migrations/006_origin_daily.ts` — traffic by origin
+One row per org per UTC day per ORIGIN: `minted` (sessions issued to an
+allowlisted origin) and `refused` (mints turned away because the origin was
+not allowlisted). Trust-model layer 4, M7.2: "every session mint records
+its Origin, and the dashboard breaks traffic down by origin, so
+unauthorized use is visible rather than inferred from a bill".
+
+What the row is FOR decides its shape. Layer 1 already stops an unlisted
+site — no unlisted origin ever gets a session — so the interesting number is
+not what got through but what was turned away: "https://thief.example
+presented your key 340 times this week" is how a tenant learns a copy of
+their snippet exists, or that they forgot to allowlist their own staging
+domain, which looks identical from here and is the commoner case. Minted
+counts per allowlisted origin ride along for the same upsert. A counter
+table rather than a log of mints, for 004's reason: the dashboard wants a
+week per origin, and rows that grew with traffic would make that read grow
+with the customer's success. Nothing identifies a visitor — origin and a
+count; no IP, no visitor id, no Referer (a browser's default
+Referrer-Policy strips the path cross-origin, so it would only repeat the
+Origin).
+
+`origin` is attacker-supplied text when the mint was refused, hence the
+length CHECK here (253, the DNS ceiling, which the allowlist's own validator
+also enforces) and the shape and volume rules in §3.28. Natural composite
+key `(org_id, day, origin)`; unlike 004 there is no second index, because
+the key's leading columns are exactly the range read (this org, last N days)
+the dashboard scans. UTC days, as usage_daily.
+
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
 `MIGRATIONS` record, not discovered from disk. Kysely's stock
@@ -1293,7 +1345,10 @@ force-exits.
   token chats, its `last_used_at` is stamped, and once the window closes
   it is byte-identical to an unknown key while the token minted inside
   the window still chats, because a session is bound to the org and not
-  to the key that opened it — preflight, per-IP mint flood. Chat: the grounded
+  to the key that opened it — the layer-4 counters (M7.2): one allowlisted
+  mint adds one `minted` to its origin's row, two refused mints add two
+  `refused` to the copy's, and a missing Origin or a bad key adds nothing
+  anywhere and creates no row — preflight, per-IP mint flood. Chat: the grounded
   SSE stream end to end (meta/claim/done with citations, persistence
   under the token's visitor), uniform 401 for missing/tampered/expired/
   wrong-secret tokens, token replay from a different origin, question
@@ -1321,6 +1376,18 @@ force-exits.
   for an org that does not exist — and the plan-catalog lockstep, which
   inserts an org at EVERY catalog id, so a tier added without a migration
   fails here instead of at a customer's upgrade.
+- `usage/__tests__/origins.test.ts` — the per-origin counters (M7.2,
+  §3.28). Keyless: the shape rule keeps origins and the literal `null`,
+  and collapses paths, schemes, whitespace, markup, and over-long hosts
+  into the malformed sentinel. DB-gated: minted sessions summed per
+  allowlisted origin; refused mints summed per unlisted one; the
+  staging-domain day, where one row carries a refusal in the morning and a
+  session in the afternoon; malformed values never stored as themselves;
+  ten CONCURRENT mints adding as ten; the distinct-origin cap — a hundred
+  forged origins admitted, the hundred-and-first and -second collapsing
+  into `(other)` while a known origin still counts on its own row; days
+  kept apart; the schema refusing an over-long origin and a negative
+  counter; and the rows deleted with their organization.
 - `handoff/__tests__/escalate.test.ts` — DB-gated. The transition and its
   record moving together; idempotence (a second request reports the first,
   and does not rewrite why the visitor is waiting, and adds NOTHING to the
@@ -1921,6 +1988,40 @@ is fresh per run and travels in the fixture: a probe hardcodes nothing
 about the deployment it attacks. Runs from the host against the compose dev
 database, or inside the compose network as §4.4's `seed` service.
 
+### §3.28 `src/usage/origins.ts` — the per-origin counters (M7.2)
+The write side of `origin_daily` (§3.3.8): `recordOriginMint(db, {orgId,
+origin, outcome})`, one upsert per mint attempt that names an org, called
+from the session route (§3.18) after the allowlist check — `minted` when it
+passed, `refused` when it did not. usage_daily's shape (amounts travel in
+VALUES, the conflict branch adds `excluded`), with two things §3.26 never
+needed because its inputs were never attacker text:
+
+- **Shape.** `normalizeRefusedOrigin` stores a refused value as itself only
+  when it looks like an origin (`^https?://[^\s/]+$`, ≤253 chars) or is the
+  literal `null` — what file:// pages and sandboxed iframes send, and a real
+  thing to show a tenant. Everything else lands under `(malformed)`, so a
+  script cannot fill a tenant's page with junk. Case is kept: a case-variant
+  of an allowlisted origin is refused precisely because it differs, and the
+  tenant should see the string that was sent.
+- **Volume.** One org accumulates at most
+  `MAX_DISTINCT_REFUSED_ORIGINS_PER_DAY` (100) distinct refused origins per
+  UTC day; past that, NEW ones count under `(other)` while origins the day
+  already knows keep their own row. A script forging a fresh Origin per
+  request is already held to the per-IP mint bucket, but "one row per
+  request" is a growth curve worth capping twice. The path is an in-place
+  UPDATE first (the common case, one statement), then a count and an upsert
+  for a new origin; the cap can overshoot by the handful of writers racing
+  at the boundary, and the file says so — it is a bound, not a quota.
+
+Minted origins are a plain upsert (the allowlist bounds them). The route
+AWAITS the write, so the counter is visible the moment the response is — a
+dashboard that lagged the widget would make "is that copy still out there?"
+unanswerable — but wraps it so an instrumentation failure logs and the
+visitor still gets their session; there is no mint transaction to join
+because a token is signed, not stored. Missing-Origin and bad-key refusals
+are NOT counted: neither names an org without a lookup the route
+deliberately does not spend on requests it refuses for free.
+
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 
 #### §3.17.1 `src/widget/sessionToken.ts`
@@ -1962,9 +2063,12 @@ NOW()`, because rotation schedules the old key's revocation at the end of
 a grace window rather than on the click — §9.17 — and the comparison is
 made on Postgres's clock, the one the dashboard wrote with, never this
 process's), exact-match allowlist check (failures carry NO CORS headers,
-so an unlisted site's browser cannot even read the error), then the
-token mint — which is also the handshake that warms Neon while the
-visitor types (the free-tier design's DB-warming path). `POST
+so an unlisted site's browser cannot even read the error — and since M7.2
+are COUNTED, §3.28: the key named the org, so the tenant gets to see which
+origin presented it), then the
+token mint — also counted per origin, and also the handshake that warms
+Neon while the visitor types (the free-tier design's DB-warming path).
+`POST
 /v1/widget/chat`: token verify (uniform 401), live-Origin-vs-token-origin
 re-check (kills replay from another site), rate limits AFTER auth (their
 429s carry CORS so the widget can render "one moment") and BEFORE work,
@@ -3074,7 +3178,13 @@ the page guard.
   accepted and when it was last used, and a one-line history of revoked
   ones. `getPublishableKey` (the one row with `revoked_at IS NULL`) still
   serves callers that only need the current value; the pages that show
-  the whole picture read `listPublishableKeys`.
+  the whole picture read `listPublishableKeys`. Since M7.2 the overview
+  also carries layer 4's FLAG (§9.18): one sentence, only when the trailing
+  week had refused loads — "N loads refused from M origins you have not
+  allowlisted; if one is yours, allow it; if not, someone has a copy of
+  your snippet and the allowlist is doing its job" — linking to the
+  install page where the origins are listed. A quiet week renders nothing,
+  not a reassurance nobody asked for.
 - **Tests** — keyless: org-name boundaries (1/2, 64/65), pk format and
   its never-an-entity-id property (in shared's ids suite). DB-gated:
   the atomic create (all three rows, DB-default plan), member access vs
@@ -3356,7 +3466,15 @@ to install the widget.
   customer's site. Since M7.1 the snippet always carries the CURRENT key,
   and while a rotation is in progress the page says so with the grace end
   (§9.17): this is where the customer copies from, and the old snippet on
-  their site is what the window is keeping alive.
+  their site is what the window is keeping alive. Since M7.2 the allowlist
+  card also carries **"Where your snippet loaded — last 7 days"** (§9.18):
+  the week's origins with sessions and refusals, refused-and-unlisted rows
+  flagged and sorted first, and beside each allowlistable one an owner-only
+  **Allow** — `allowOriginNowAction` in lib/origins/actions.ts, the typed
+  form's ladder, validator, and idempotent insert behind a hidden field,
+  because a hidden field is still a request field. The forgotten staging
+  domain is one click from working; the copy on someone else's site is a
+  name the tenant now knows.
 - **Tests** — keyless: normalization of every realistic paste, port
   handling matching the browser (:443/:80 dropped, :8443 kept), the
   bare-host and `null` refusals, and a property that every accepted
@@ -3861,3 +3979,92 @@ newest key in the snippet with the rotation-in-progress notice; and at 375px
 text in a 145px box) and the Revoke button intact at 91px, while at 1265px
 the value shows in full. Host and database clocks agreed to the second during
 the check, so none of it was masked by skew.
+
+### §9.18 `src/lib/traffic/` + the traffic table and flag — per-origin visibility (M7.2)
+
+Trust-model layer 4, the dashboard's half. realtime writes one counter row
+per (org, UTC day, origin) on every mint attempt that names an org (§3.28,
+§3.3.8); this reads a week of them back and puts the answer where it can be
+acted on.
+
+- **lib/traffic/queries.ts** — `listOriginTraffic(orgId, days = 7)`: every
+  origin seen in the window, summed, WORST FIRST — refusals ahead of the
+  merely busy, because a refusal is the thing the tenant should look at —
+  with an `allowlisted` flag computed against the allowlist as it is NOW
+  (a refused origin that has since been allowed needs no button).
+  `refusedSummary` is the overview's one-line flag: total refused and
+  distinct refused origins, zero-zero for a quiet week. Straight from
+  Postgres like every dashboard read: a realtime outage must not blank the
+  page whose job is saying whether somebody else is presenting the key.
+  The window is drawn by POSTGRES ((NOW() AT TIME ZONE 'UTC')::date), the
+  clock that wrote the rows, so a Vercel instance is never in charge of
+  which day is today — lib/usage's rule. `originLabel` spells out the three
+  non-origin values realtime can write ("null — a file:// page or sandboxed
+  iframe", "other origins — past the daily distinct-origin cap", "malformed
+  Origin headers — not from a browser"), because "(other)" alone reads as
+  a bug; `isAllowlistable` is what decides whether a row gets an Allow.
+
+- **The table** (install page, §9.11) — under the allowlist, since that is
+  where a refused origin is answered. Four columns: origin with its
+  last-seen day folded underneath, sessions, refused, and the owner's
+  Allow. Refused-and-unlisted rows are tinted and sorted first; the section
+  opens with one sentence saying what those rows mean and what to do about
+  them. Zero rows is "No widget loads yet." The origin cell wraps
+  (`word-break: break-all` — an origin has no spaces, so word-breaking
+  would never fire) so the table's intrinsic width is bounded by the fixed
+  columns whatever the origin's length; the wrapper's `overflow-x: auto` is
+  a backstop, not the plan.
+
+- **The flag** (overview, §9.7) — rendered only when the week had refusals.
+  The allowlist already refused every one of them; this is visibility, and
+  the sentence says which way to read it before linking to the table.
+
+- **`allowOriginNowAction`** (lib/origins/actions.ts) — the one-click Allow.
+  The typed OriginForm's ladder (signed-in → member → OWNER), validator, and
+  idempotent insert, behind a hidden field — validated again regardless,
+  because a hidden field is still a request field. A plain form action: the
+  re-rendered table (the row turns from refused to allowlisted, and the
+  widget accepts the origin on the very next mint) is the message.
+
+- **Tests** — `lib/traffic/__tests__/traffic.test.ts`, DB-gated over rows
+  inserted directly (writing them is realtime's job and tested there): the
+  window summed per origin in refused-first order with the allowlisted flag
+  right, seven days ago excluded from "the last 7 days, today included",
+  the window widening with `days`, the summary's total and distinct count
+  and its zero-zero for a quiet tenant, and another tenant's busier week
+  invisible in both directions — with the flag per tenant, not per string.
+  Keyless: the labels and the allowlistable rule.
+
+**Verified live** against the dev servers and the compose database: an org
+created, `https://docs.traffic.example` allowlisted, then five kinds of
+origin sent at the real session route — three allowlisted mints (200), five
+from `https://thief.example` (403), two from
+`https://staging.traffic.example` (403), one `Origin: null` (403), one
+`javascript:alert(1)` (403) — landing as five rows: thief refused 5, staging
+refused 2, `(malformed)` 1, `null` 1, docs minted 3. (Two of those requests
+first met the per-IP mint bucket's 429 and were correctly NOT counted: a
+rate-limited request names no org.) The overview flag read "9 widget loads
+were refused from 4 origins"; the install page's table listed the four
+refused rows first, tinted, with Allow only on the two allowlistable ones;
+Allow on the staging row moved it to the allowlist, cleared its tint and
+button, dropped the warning to "3 origins", and the very next mint from
+that origin was answered 200 — the same row then reading minted 1 /
+refused 2, the staging-domain story in one line.
+
+The 375px check found two things. The five-column table with `nowrap`
+cells was 682px wide inside its scrolling wrapper, and Chrome's mobile
+emulation reported the layout viewport at 667px for it — with the page not
+actually able to scroll (`scrollX` stayed 0 on `scrollTo(300, 0)`), the
+visual viewport at 375, and the same page at 768px (no emulation) showing
+the wrapper containing its table with the document at exactly
+`clientWidth`; the wide `<pre>` snippet on the same page, also a scroll
+container, never triggered it. Emulator artifact or not, a five-column
+table in 277px is unreadable, so the last-seen day moved under the origin,
+the origin cell wraps, and the table now measures 366px intrinsic — under
+the viewport, `innerWidth === clientWidth === scrollWidth === 375`,
+scrolling ~90px inside its wrapper on the narrowest phones. The second was
+pre-existing: the allowlist row's `<code>` kept its intrinsic width and
+pushed Remove 10px past the viewport once a 31-character origin was
+allowlisted — §9.16's automatic-minimum trap in a third place, fixed the
+same way (`min-width: 0` + ellipsis on the code, `flex-shrink: 0` on the
+form), the buttons then measuring 313px right on a 375px viewport.

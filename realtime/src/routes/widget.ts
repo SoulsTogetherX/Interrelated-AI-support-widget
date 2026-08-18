@@ -14,6 +14,8 @@ import { resolveEmbeddingProvider, resolveGenerationProvider } from "@/credentia
 import { requestHandoff } from "@/handoff/escalate"
 import { mintHandoffTicket } from "@/handoff/ticket"
 import { getDailyQuota } from "@/usage/daily"
+import { recordOriginMint } from "@/usage/origins"
+import type { MintOutcome } from "@/usage/origins"
 import { RateLimiter } from "@/widget/rateLimit"
 import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
 import type { SessionTokenPayload } from "@/widget/sessionToken"
@@ -35,10 +37,15 @@ import type { SessionTokenPayload } from "@/widget/sessionToken"
  *      + visitor, and the chat route re-checks the live Origin against
  *      the token's.
  *   3. Rate limits + the daily ceiling: per-IP and per-visitor token
- *      buckets, then a per-org answers-per-day cap counted from the
- *      messages table (the (org_id, created_at) index exists for exactly
- *      this query) and checked BEFORE the model call — the worst case is
- *      a stopped widget, never a surprise bill.
+ *      buckets, then a per-org answers-per-day cap (since M5.3 the plan's,
+ *      read from the usage_daily counter) checked BEFORE the model call —
+ *      the worst case is a stopped widget, never a surprise bill.
+ *   4. Per-origin visibility (M7.2, §3.28): every mint attempt that names
+ *      an org is counted per Origin, minted or refused, so a copied
+ *      snippet shows up in the dashboard as a name and a number rather
+ *      than being inferred from a bill. Layer 1 stops it; layer 4 shows it.
+ *   5. Rotation (M7.1, §9.17): a key inside its grace window is still live
+ *      here — the lookup below is where that rule is enforced.
  *
  * Uniform failures on purpose: bad key, revoked key, and unknown key are
  * the same 401; bad, expired, and tampered tokens are the same 401. Which
@@ -156,6 +163,20 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
     return session
   }
 
+  /** Layer 4's per-origin counter (§3.28). AWAITED, so the counter is
+   *  visible the moment the response is — a dashboard that lagged the
+   *  widget would make "is that copy still out there?" unanswerable — but
+   *  never allowed to fail the mint: instrumentation is not the product,
+   *  and a visitor must get their session even if this table is having a
+   *  bad day. */
+  const countOrigin = async (orgId: string, origin: string, outcome: MintOutcome): Promise<void> => {
+    try {
+      await recordOriginMint(options.db, { orgId, origin, outcome })
+    } catch (err) {
+      console.error("[widget] origin counter failed:", err)
+    }
+  }
+
   // ── Session mint: the publishable key's ONLY moment ──────────────────────
   app.post("/v1/widget/session", async (req: Request, res: Response) => {
     try {
@@ -213,7 +234,12 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         .executeTakeFirst()
       if (!allowed) {
         // No CORS headers on this path: an unlisted site's browser cannot
-        // even read this error. Copy-pasted snippets die here.
+        // even read this error. Copy-pasted snippets die here — and are
+        // COUNTED here (layer 4, §3.28): the key named the org, so the
+        // tenant gets to see which origin presented it. Refusals for a
+        // missing Origin or a bad key are not counted: neither names an org
+        // without a lookup this route deliberately does not spend on them.
+        await countOrigin(key.org_id, origin, "refused")
         res.status(403).json({ error: "origin not allowed" })
         return
       }
@@ -222,6 +248,7 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         .set({ last_used_at: new Date() })
         .where("id", "=", key.id)
         .execute()
+      await countOrigin(key.org_id, origin, "minted")
 
       // This handshake fires at bubble-open, which is ALSO what warms Neon
       // during the seconds a human spends typing (the free-tier design:

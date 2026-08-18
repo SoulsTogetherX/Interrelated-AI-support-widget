@@ -11,8 +11,11 @@ import OriginForm from "@/components/OriginForm"
 import { listPublishableKeys } from "@/lib/keys"
 import { requireOrgMember } from "@/lib/orgs"
 import { listOrigins } from "@/lib/origins"
-import { removeOriginAction } from "@/lib/origins/actions"
+import { allowOriginNowAction, removeOriginAction } from "@/lib/origins/actions"
+import { isAllowlistable, listOriginTraffic, originLabel } from "@/lib/traffic/queries"
 import "./page.css"
+
+const TRAFFIC_DAYS = 7
 
 export const metadata = { title: "Install — Interrelated" }
 
@@ -34,10 +37,12 @@ export default async function WidgetPage({
 }) {
   const { orgId } = await params
   const { org } = await requireOrgMember(orgId)
-  const [keys, origins] = await Promise.all([
+  const [keys, origins, traffic] = await Promise.all([
     listPublishableKeys(org.id),
     listOrigins(org.id),
+    listOriginTraffic(org.id, TRAFFIC_DAYS),
   ])
+  const refusedOrigins = traffic.filter((t) => t.refused > 0 && !t.allowlisted)
   // The snippet always carries the CURRENT key. A rotation in progress is
   // worth a sentence here, because this page is where the customer copies
   // from — and the old snippet on their site is what the grace window is
@@ -91,6 +96,74 @@ export default async function WidgetPage({
           </ul>
         )}
         {isOwner ? <OriginForm orgId={org.id} /> : null}
+
+        {/* Layer 4 (§9.18): where the snippet was actually loaded from,
+            allowlisted or not. Refused rows are the point — a copy of the
+            snippet on someone else's site, or the tenant's own staging
+            domain they forgot, look identical from here, and only the
+            tenant can tell which; the Allow button is for the second case.
+            Zero rows is a quiet week and renders as exactly that. */}
+        <h3 className="install-subtitle">Where your snippet loaded — last {TRAFFIC_DAYS} days</h3>
+        {traffic.length === 0 ? (
+          <p className="install-note">No widget loads yet.</p>
+        ) : (
+          <>
+            {refusedOrigins.length > 0 ? (
+              <p className="install-warning">
+                {refusedOrigins.length === 1 ? "One origin" : `${refusedOrigins.length} origins`} you
+                have not allowlisted presented your publishable key and{" "}
+                {refusedOrigins.length === 1 ? "was" : "were"} refused. If one is your own site,
+                allow it; if not, someone has a copy of your snippet — the allowlist is already
+                refusing it, and it never got a session.
+              </p>
+            ) : null}
+            <div className="install-tablewrap">
+              <table className="install-traffic">
+                <thead>
+                  <tr>
+                    <th scope="col">Origin</th>
+                    <th scope="col" className="install-num">Sessions</th>
+                    <th scope="col" className="install-num">Refused</th>
+                    {isOwner ? <th scope="col"><span className="install-srlabel">Action</span></th> : null}
+                  </tr>
+                </thead>
+                <tbody>
+                  {traffic.map((t) => (
+                    <tr key={t.origin} className={t.refused > 0 && !t.allowlisted ? "install-refused" : undefined}>
+                      {/* Origin and its last-seen day share a cell, and the
+                          origin may wrap: four narrow columns fit a phone,
+                          where five would only ever be read by scrolling. */}
+                      <td className="install-origincell">
+                        <code>{originLabel(t.origin)}</code>
+                        <span className="install-lastseen">last seen {t.lastSeenDay} UTC</span>
+                      </td>
+                      <td className="install-num">{t.minted.toLocaleString("en-US")}</td>
+                      <td className="install-num">{t.refused.toLocaleString("en-US")}</td>
+                      {isOwner ? (
+                        <td>
+                          {t.refused > 0 && !t.allowlisted && isAllowlistable(t.origin) ? (
+                            <form action={allowOriginNowAction}>
+                              <input type="hidden" name="orgId" value={org.id} />
+                              <input type="hidden" name="origin" value={t.origin} />
+                              <button className="install-allow" type="submit">
+                                Allow
+                              </button>
+                            </form>
+                          ) : null}
+                        </td>
+                      ) : null}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="install-note">
+              Counted per origin per UTC day on every attempt that presented your key — sessions
+              for allowlisted origins, refusals for the rest. No visitor identity is stored:
+              an origin and a count, nothing else.
+            </p>
+          </>
+        )}
       </section>
 
       <section className="install-card">
