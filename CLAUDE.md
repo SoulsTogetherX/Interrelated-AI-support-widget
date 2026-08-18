@@ -146,8 +146,65 @@ worked; the fixture and the Install page's directive now name the socket
 origin too (§8.4, §9.11). The bundle is 6.52 KB gzipped against the 15 KB
 budget. Nothing server-side changed: the ticket route's 404 and the
 socket's replay-on-attach were already the whole of what a rejoin needs.
-Remaining in M7: the README's other named gaps — robots.txt, and file
-uploads (with them, PDF parsing). M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+M7.5 is done — **robots.txt honored, skipped pages visible, and Re-crawl**
+(§3.10.6, §3.10.4, §3.10.5, §3.3.10, §3.22, §9.9, §3.8, DATAFLOW §3.2–§3.3,
+§7.9). A source is any public URL a tenant types, not necessarily their own
+site, so honoring robots.txt is what separates a crawler from a scraper —
+and the plan had parked it "with the dashboard, where a customer can see
+WHY a page was skipped", which is exactly the shape it landed in. The
+parser is hand-written to RFC 9309 (`ingest/robots.ts`): the group is chosen
+by product token (`InterrelatedBot`, exported from safeFetch so the header
+and the match can never disagree — a specific group REPLACES the wildcard's
+rules, several groups for one agent merge), the most specific rule wins with
+Allow winning ties, `*` and `$` are matched by a linear-time glob rather
+than a compiled regex (a pattern is untrusted text from a fetched file, and
+`/*a*a*a*b` would send a backtracking engine exponential), paths compare
+in percent-encoded form on both sides, and the OUTCOME of the fetch is part
+of the policy — 4xx is "no file, everything allowed", 5xx or a request that
+never produced a status is "unreachable, nothing allowed", which the RFC
+mandates and which fails closed VISIBLY: the crawl is refused with a
+sentence naming the cause. Same-origin scope means one file governs a whole
+crawl, so it is read once, first, and every URL — root, discovered link,
+sitemap entry, child sitemap, and the FINAL url of a redirect — is checked
+against it; a disallowed root is a source failure whose text names the rule
+("nothing crawlable — disallowed by robots.txt (User-agent: *, Disallow:
+/)"), a disallowed link is a new `skipped` crawl event that costs no fetch,
+and Crawl-delay is honored up to a 5-second cap. What the worker did with
+those events is the visibility half: migration 008 gives `ingest_jobs` a
+true `skipped_count` and a `skipped_pages` list of `{url, reason}` capped by
+CHECK at 50 (the count keeps counting past it), robots skips and page errors
+alike, written with every page's progress UPDATE — which now also RENEWS the
+lease (`locked_at = NOW()`), because a crawl slowed by a Crawl-delay must
+never read as a crashed one to a second worker. The sources page shows "N
+pages indexed · M skipped" with a collapsed "why" list under each source,
+and — the action the visibility exists for, since sources were add-only —
+an owner's **Re-crawl** button: `POST
+/internal/orgs/:orgId/sources/:sourceId/recrawl` inserts the job and wakes
+the worker, idempotent by SCHEMA through 008's other statement, a partial
+unique index allowing one LIVE job per source, so five concurrent clicks
+insert one job and the credential re-index that races them can no longer
+roll back a save on a unique violation (both use ON CONFLICT DO NOTHING).
+Verified live against two real sites from the dashboard: `https://nodejs.org/en`
+at depth 1 crawled 9 pages and recorded ONE skip — `/docs/latest/api/`,
+"disallowed by robots.txt (User-agent: *, Disallow: /docs/)", nodejs.org's
+actual rule — shown as "9 pages indexed · 1 skipped" with the reason under
+"1 page skipped — why"; `https://www.reddit.com/` (`Disallow: /`) failed
+with "nothing crawlable — disallowed by robots.txt (User-agent: *,
+Disallow: /)" and no page fetched; Re-crawl clicked on the nodejs source
+queued a second job that ran in 4 seconds (nine unchanged pages
+short-circuiting on their hash), refreshed all nine documents in place, and
+recorded the same skip; and at 375px the page never scrolled sideways with
+the row stacked and the failure sentence wrapping, while at 1280px the two
+halves sat side by side. The full ladder ran green against the prod image
+with 008 applying at boot: smoke, injection 0/8, security 54/54. Two things
+the check taught, both recorded rather than smoothed over: the dev server
+runs no ingest worker unless `INGEST_WORKER=1` (the enqueue then wakes
+nothing — the M3.6a check must have set it), and its first boot tick was
+spent on a stale queued job a test suite had left in the dev database, so
+the crawl waited for a second boot — one job per tick, wake-driven, exactly
+as documented, and a reminder that suites which queue jobs must park or
+delete them. Remaining in M7: the README's last named gap — file uploads
+(with them, PDF parsing). M6.1 is done — the security probe (§6.3, §3.27, §4.4,
 DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
 across the trust model's layers — origin allowlist and CORS posture, key
 state (a revoked key byte-identical to an unknown one), token tamper and
@@ -723,7 +780,12 @@ web never migrates. kysely is a TYPE-ONLY import, erased at compile time,
 so shared/ stays dependency-free at runtime; each consumer resolves the
 types from its own node_modules, and the root package carries kysely as a
 devDependency purely so `typecheck:shared` can see it — the exact
-arrangement fastembed has for providers/local.ts (§2.4.5c).
+arrangement fastembed has for providers/local.ts (§2.4.5c). Since M7.5 the
+file also exports one runtime VALUE beside the types: `MAX_RECORDED_SKIPPED_PAGES`
+(50), the cap on `ingest_jobs.skipped_pages` that migration 008 enforces
+by CHECK — the PADDED_DIM / halfvec(1024) arrangement, a schema fact stated
+once where both packages can read it (the worker stops recording there; the
+dashboard says "and N more").
 
 ### §2.4.5 `providers/`
 The model-provider abstraction — the BYO-provider feature's foundation.
@@ -1051,7 +1113,7 @@ What the ingest worker reads and writes, and what retrieval queries.
 | `documents` | one fetched page / uploaded file | `content_hash` (sha256 of normalized text) short-circuits recrawls — identical hash skips re-chunk + re-embed, protecting embedding quota; soft delete + **partial** unique `(source_id, url) WHERE deleted_at IS NULL` so re-added pages don't collide with tombstones |
 | `chunks` | the retrieval unit | `heading_path` travels with every chunk (citations show where a claim lives); `char_start/char_end` deep-link into the source; `tsv` is a **GENERATED** column so the lexical index can never drift from the text; unique `(document_id, ord)` makes a buggy re-chunk loud |
 | `chunk_embeddings` | one embedding per (chunk, model) | the three big decisions — see below |
-| `ingest_jobs` | Postgres-backed work queue | `FOR UPDATE SKIP LOCKED` consumer shape; partial index over queued rows only; CHECK `(state='running') = (locked_by IS NOT NULL)` makes an unowned running job unrepresentable |
+| `ingest_jobs` | Postgres-backed work queue | `FOR UPDATE SKIP LOCKED` consumer shape; partial index over queued rows only; CHECK `(state='running') = (locked_by IS NOT NULL)` makes an unowned running job unrepresentable. Since 008 (§3.3.10): `skipped_count` + `skipped_pages` (what the crawl left out and why, the list capped by CHECK), and at most one LIVE job per source |
 
 The three load-bearing decisions on `chunk_embeddings`:
 
@@ -1318,6 +1380,38 @@ that wants an org with a revoked or retiring secret key beside a current one
 must write the older keys FIRST — which is the order real history writes
 them, an older key being rotated out before a newer one is issued.
 
+### §3.3.10 `src/db/migrations/008_skipped_pages.ts` — what a crawl left out, and one live job per source
+Two things about `ingest_jobs` (M7.5). First, the record of what a crawl did
+NOT ingest: `skipped_count` (the TRUE total — robots.txt refusals, dead
+links, off-origin redirects, unparseable bodies) and `skipped_pages`, a
+JSONB list of `{url, reason}` holding the first `MAX_RECORDED_SKIPPED_PAGES`
+(50) of them in the order they were met, so the dashboard can show a tenant
+WHY a page is missing instead of a count that looks like forty fewer links.
+Columns on the job rather than a table of pages, for 003's reason: facts
+about one crawl at its own grain, read with the job by the one page that
+shows the job. CAPPED because a docs site with an API reference under
+`Disallow: /api/` discovers thousands of disallowed links, and a value that
+grows with a site's link count is a row that grows with the customer's
+success — the count stays true past the cap, so "and 1,240 more" is
+arithmetic. The cap is enforced by CHECK as well as by the worker (the
+api_keys stance): a second writer that forgot it fails loudly. The literal
+lives here and the constant in shared/db/schema.ts (§2.4.6) — the
+PADDED_DIM / halfvec(1024) arrangement, since a migration is frozen once
+applied. Both columns default, so a job that predates the migration reads as
+"nothing skipped", which is the honest answer: nothing was recorded.
+
+Second, a partial unique index — **at most one LIVE job (queued or running)
+per source** — for the Re-crawl button (§3.22): two owners clicking together,
+or a click racing the re-index a credential change queues, would otherwise
+insert two jobs that crawl one site twice for one outcome, and a
+check-then-insert cannot close that window. Partial, so history is untouched
+(a source accumulates one done/failed row per crawl); safe to add to a
+deployed database because every existing writer already respected it by
+construction — the enqueue route creates a fresh source, the re-index skips
+busy sources, the worker's requeue moves the SAME row. Both job-inserting
+routes now say ON CONFLICT DO NOTHING and read the row count, which is the
+handoff table's argument (§3.3.4) applied to the queue.
+
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
 `MIGRATIONS` record, not discovered from disk. Kysely's stock
@@ -1402,7 +1496,15 @@ force-exits.
   and 007's three statements — a secret key without its suffix or with one
   of the wrong length, a public key carrying one, a second CURRENT secret
   for the same org, and the same hash under another org, all refused, while
-  the well-formed secret row is accepted).
+  the well-formed secret row is accepted; and 008's — a job that knows
+  nothing of the columns reading as nothing skipped, a list at exactly the
+  cap accepted while one past it, a non-array, and a negative count are
+  refused, and one LIVE job per source: done and failed rows accumulating
+  freely, one queued row fine, a second queued or running one refused, and
+  another source unaffected. Both new cases delete their org in a `finally`
+  because their surviving rows are QUEUED jobs, and a later suite's worker
+  would otherwise claim and crawl them — which it did, once, on the way to
+  writing this).
 - `db/__tests__/chat.test.ts` — the chat-schema integration suite, same
   gating. Role-consistency CHECKs probed from both sides (visitor with a
   model rejected, full assistant row accepted); the span/verdict equality
@@ -1442,7 +1544,43 @@ force-exits.
   every scope hazard: fragments, duplicate links, redirects, cross-origin
   links, binary assets, broken pages, markdown served as text/plain,
   sitemap + sitemapindex. Asserts what was and was NOT requested (the
-  server records paths), not just what was yielded.
+  server records paths), not just what was yielded. The M7.5 block gives the
+  fixture a mutable `/robots.txt` (404 by default — the existing tests'
+  world, and the common case) and a root whose links cross into areas a file
+  may close: robots.txt read once, FIRST, and a disallowed link reported once
+  with the rule and never requested; no file → everything crawled; a group
+  naming InterrelatedBot winning over the wildcard's `Disallow: /`; a
+  redirect that lands on a disallowed page (linked from NOWHERE directly, so
+  only the arrival check can catch it) fetched but not ingested and reported
+  under the URL that answered; a disallowed root and a 503 robots.txt each
+  refusing the crawl with `/robots.txt` the only request made; sitemap
+  entries the file disallows announced BEFORE a plan that excludes them; a
+  disallowed sitemap file itself refused; and Crawl-delay pacing measured on
+  the server's own clock (0.3 s → every gap ≥ 250 ms; 100 s under a 200 ms
+  cap → gaps ≥ 150 ms and the crawl done in seconds).
+- `ingest/__tests__/robots.test.ts` — keyless (M7.5). Group selection
+  (wildcard when nothing names us; a specific group REPLACING the wildcard;
+  the token case-insensitive and version-blind; a run of user-agent lines as
+  one group; no group at all or only other crawlers' groups → allowed;
+  several groups for one agent merged; rules before any user-agent line
+  dropped; a Sitemap line ending the agent run but not the group); rule
+  precedence (the RFC's own example per crawler; longest match, by pattern
+  length; Allow winning an equal-length tie in either order; the empty
+  Disallow; the deciding rule named in the reason; Crawl-delay from the
+  matched group only); patterns (prefix vs `$`, `*` anywhere including
+  consecutive stars, `$` mid-pattern literal, and the exponential-regex
+  pattern answering in under half a second); the comparison form (non-ASCII
+  encoded on both sides, hex case, a space, unreserved escapes decoded and
+  reserved ones kept so `%2F` is not a slash, the query matched, an
+  unparseable URL getting no verdict); parsing tolerance (comments, CRLF, a
+  BOM, mixed-case fields, no spaces, lines with no colon, unknown fields);
+  and the fetch semantics against a loopback server — 2xx parsed with the
+  request identifying the crawler by its product token, our token's group
+  selected by default, 404/403/410 → allowed, 503 → nothing allowed with the
+  status and the RFC in the reason, a redirect followed to the file that
+  ends the chain, a redirect with nowhere to go counting as no file, a port
+  nobody listens on being unreachable rather than absent, and a file over
+  the cap unreachable too, saying how big.
 - `retrieval/__tests__/search.test.ts` — DB-gated, plus an always-on
   input-validation block (limit guards fire before any query, so they run
   keylessly). The centerpiece is the multi-tenant regression test from the
@@ -1677,7 +1815,16 @@ force-exits.
   metadata-endpoint crawl target; and the wake-driven worker proof — a
   pollMs-0 worker, idle after its start tick with NO timer in existence,
   runs a job if and only if wake() is called (an upload-kind source's
-  fast loud failure is the no-network probe that the tick really ran).
+  fast loud failure is the no-network probe that the tick really ran). The
+  M7.5 block covers Re-crawl: five CONCURRENT clicks on an idle source
+  yielding one queued job, one wake, and four honest `queued: false`
+  answers — the partial unique index deciding, not a read — then, once
+  that job is done, a fresh re-crawl accepted; and the refusals: another
+  org's source, a fabricated id, and a malformed one all 404, an upload 422
+  with a sentence, no secret 401, and no wake fired by any of them. The
+  suite parks the jobs it queues, because the wake-driven worker test after
+  it runs one job per tick and would otherwise spend its wake on a crawl of
+  `recrawl.example`.
 - `routes/__tests__/demo.test.ts` — keyless and DB-free (the demo surface
   is static config → static responses). The configured page carries the
   snippet with same-origin data-api; the unconfigured page is honest
@@ -1727,7 +1874,17 @@ force-exits.
   Queue semantics get their own tests: two workers claiming concurrently
   under SKIP LOCKED (held open by gated fake crawlers), stale-lease
   reclaim on both sides of the attempts cap, stop() requeuing between
-  pages, crawl failure and upload-source failure paths.
+  pages, crawl failure and upload-source failure paths. M7.5 adds two: the
+  lease RENEWED by the pages that land after the claim (a gated crawler
+  holds the job at its gate so the as-claimed `locked_at` can be read, then
+  the pages flow and the row's `locked_at` must be later), and the skipped
+  record — a scripted crawl yielding one dead link, more robots.txt
+  refusals than the row keeps, and two pages, after which `skipped_count`
+  is exact, `skipped_pages` holds exactly `MAX_RECORDED_SKIPPED_PAGES`
+  entries in event order with the dead link first, and the third real crawl
+  of the fixture (which drops the vanished page's LINK as well as the page)
+  records nothing skipped, because vanishing by absence and vanishing by 404
+  are different stories.
 
 ### §3.9 `realtime/Dockerfile`
 Multi-stage on node:22-alpine, **build context = repo root** (shared/ must
@@ -1781,7 +1938,12 @@ redirect chain. `hostGuard` is the one seam: passing a custom guard also
 routes through an unguarded agent (tests reaching loopback fixtures; later,
 tenant-declared Ollama base URLs in M3). `undici` became an explicit
 dependency for its typed `dispatcher` option — the global fetch cannot
-carry a custom agent.
+carry a custom agent. Every request identifies itself:
+`USER_AGENT_PRODUCT` (`InterrelatedBot`) is the crawler's product token —
+exported since M7.5 so robots.ts matches groups against the very token the
+header carries — and the full header adds the conventional `(+url)` a site
+operator can follow to learn what the bot is; robots.txt is only useful to
+someone who knows whom to name.
 
 #### §3.10.3 `src/ingest/parsers/`
 One contract rules all of them (`types.ts`):
@@ -1840,9 +2002,33 @@ intuitive meaning of the knob. Failure policy: a dead ROOT throws
 100-page ingest). Sitemaps (plus one level of sitemapindex nesting) are
 parsed with a regex over `<loc>` — legitimate here because the sitemap
 schema forbids the nesting and attributes that make regex-over-XML a trap.
-Not yet implemented, stated honestly: robots.txt (belongs with the M3
-dashboard, where a customer can see WHY a page was skipped; the cap and
-delay bound our footprint meanwhile).
+
+Since M7.5 the crawler honors robots.txt (§3.10.6) on every fetch but its
+own. Same-origin scope means ONE file governs a whole crawl, so it is read
+once, FIRST — before the root, through the same guarded client — and every
+URL is checked against it: the root, each discovered link (at DISCOVERY, so
+a disallowed link costs no fetch and no queue slot and is reported exactly
+once), each sitemap entry (refused entries are announced and left OUT of the
+plan, so the progress the dashboard shows counts only pages that will be
+fetched), each child sitemap, and the FINAL url of a redirect (the fetch was
+spent — safeFetch follows hops internally — but the content is not kept:
+robots.txt speaks about the URL that answered). A disallowed root, or a
+disallowed sitemap file, is a source failure whose text names the rule —
+"nothing crawlable — disallowed by robots.txt (User-agent: *, Disallow: /)"
+— before a single page is spent; a disallowed link is a third event kind,
+`skipped`, distinct from `error` because it is not a failure of anything
+(the site asked, the crawler listened) though both land in the same per-job
+record (§3.10.5). An UNREACHABLE robots.txt (5xx, or a request that never
+produced a status) refuses the crawl the same way, with the status in the
+sentence, because RFC 9309 says so and because a crawl of zero pages that
+"worked" would hide it. Crawl-delay is honored — the effective delay is the
+larger of the crawler's own politeness delay and the site's request — up to
+`DEFAULT_MAX_CRAWL_DELAY_MS` (5 s): the directive is not in the RFC, most
+crawlers cap it, and "Crawl-delay: 3600" taken literally would run a
+100-page crawl for four days; at the cap a full crawl is ~8 minutes, which
+is why the worker renews its lease per page. Requests are PACED through one
+helper (`pace`) so sitemap fetches wait their turn like pages do; a
+redirect's hops are one logical request inside safeFetch and are not paced.
 
 #### §3.10.5 `src/ingest/worker.ts`
 The queue consumer that ties the pipeline together; runs IN-PROCESS (a
@@ -1891,6 +2077,81 @@ byte-identical site, skip every page, and be left with a corpus the dense
 arm can never see again — the re-index (§3.22) would be a no-op. The cost
 is one indexed EXISTS per unchanged page; the alternative is a widget
 that silently stops answering.
+
+Since M7.5 the worker also records what a crawl left OUT, and renews its
+lease as it goes. Every `skipped` (robots.txt) and `error` (dead link,
+off-origin redirect, unparseable body) event increments the job's
+`skipped_count` and, up to `MAX_RECORDED_SKIPPED_PAGES`, appends
+`{url, reason}` to its `skipped_pages` (§3.3.10) — the crawler's sentence
+verbatim, so the dashboard shows "disallowed by robots.txt (User-agent: *,
+Disallow: /private/)" rather than a paraphrase. Until then those events
+were console.warn lines a tenant could never see; page errors are still
+logged, since a burst of them is an operational signal, while robots skips
+are not (nothing was fetched, and the record is the point). The columns are
+written by ONE progress UPDATE per fetch that produced something to say — a
+page landing or a page failing — and that same UPDATE sets `locked_at =
+NOW()`: the stale-lease reclaim measures staleness from the last renewal
+rather than from the claim, so a crawl that is slow because it is polite
+(a Crawl-delay at the cap makes a full crawl ~8 minutes, against a
+10-minute stale window) can never be requeued by a second worker while it
+is making progress — the property that keeps "a second worker is a deploy,
+not a rewrite" true. A page robots.txt now closes is soft-deleted with the
+other absent pages, by the same rule: the site said not to keep it.
+
+#### §3.10.6 `src/ingest/robots.ts`
+The Robots Exclusion Protocol (RFC 9309), parsed and applied — hand-written
+for RRF's reason (§2.4.3): the whole protocol is a few pages of RFC and the
+decisions worth pointing at in code are the ones a dependency would hide.
+Each is implemented where the file cites the section:
+
+- **Which group applies (§2.2.1).** The user-agent value is a PRODUCT TOKEN
+  (letters, `_`, `-`; "InterrelatedBot/0.1" names InterrelatedBot), matched
+  case-insensitively against `USER_AGENT_PRODUCT` from safeFetch — the very
+  token the request header carries, imported rather than retyped so a site's
+  rule for us can never apply to nobody. A run of consecutive user-agent
+  lines is ONE group; any other line ends the run, so the next user-agent
+  line starts a fresh group; rules before any user-agent line belong to
+  nobody. Every group naming our token is MERGED into one; failing that,
+  every `*` group; failing that, no rules — and a group naming us
+  specifically REPLACES the wildcard's rules rather than adding to them,
+  which is what naming a crawler in robots.txt is for.
+- **Which rule wins (§2.2.2).** Among matching rules the most specific — the
+  most octets — wins, and an Allow beats a Disallow of the same length. An
+  empty `Disallow:` (the idiom for "everything allowed") is a rule that
+  matches nothing and is simply not kept.
+- **How a path is matched (§2.2.3).** `*` matches any run and a TRAILING `$`
+  anchors; anything else is a prefix. Matched by the classic two-pointer glob
+  rather than a compiled RegExp on purpose: a pattern is untrusted text from
+  a fetched file, and `/*a*a*a*a*b` against a long path sends a backtracking
+  engine exponential where the loop is bounded by pattern × path — a test
+  runs exactly that pattern against a 5,000-character path and asserts it
+  answers in milliseconds. Both sides compare in PERCENT-ENCODED form:
+  non-ASCII is encoded (UTF-8, uppercase hex — what `new URL()` already does
+  to a pathname, applied to patterns too so "/café" in a file matches the
+  "/caf%C3%A9" a browser requests), escapes of UNRESERVED characters are
+  decoded ("%7Efoo" and "~foo" are one resource), remaining escapes have
+  their hex uppercased ("%2f" = "%2F"), and reserved characters stay as
+  written ("/a%2Fb" and "/a/b" are different paths). The query string is
+  part of what is matched.
+- **What the fetch's outcome means (§2.3.1).** 2xx: parse (safeFetch follows
+  up to five redirects first — the RFC's "SHOULD follow at least five").
+  3xx it would not follow, and every 4xx: UNAVAILABLE, "the crawler MAY
+  access any resources" — the common case for a small docs site. 5xx, or a
+  request that never produced a status (network, timeout, DNS, the SSRF
+  guard, the 512 KiB size cap): UNREACHABLE, "the crawler MUST assume
+  complete disallow" — fail-closed, and visibly, since the crawler turns it
+  into a source failure that names the cause.
+- **What it deliberately does not do, and says so.** `Sitemap:` lines are
+  ignored (a "url" source follows links; a "sitemap" source names its own
+  file). Crawl-delay — not in the RFC — is REPORTED, never applied here: how
+  much of it to honor is the crawler's decision (§3.10.4). No cache across
+  crawls: the file is re-read per job, rarer than the 24 hours the RFC
+  allows a copy to live.
+
+The verdict a refusal carries is a self-contained clause the crawler passes
+on verbatim and the dashboard shows: "disallowed by robots.txt (User-agent:
+*, Disallow: /private/)" names the rule that decided it; an unreachable
+file says so and why nothing may be fetched.
 
 ### §3.11 `realtime/scripts/enqueueSource.ts`
 Dev-only CLI (`npm run enqueue -- <url> [--depth N] [--sitemap]`):
@@ -2438,6 +2699,27 @@ sentence instead of a constraint violation, writes source + queued job
 in one transaction, and then calls onEnqueue — which server.ts wires to
 the worker's wake(). In production that callback is the entire
 scheduler (§3.10.5).
+
+Since M7.5 it also owns RE-crawling one source: `POST
+/internal/orgs/:orgId/sources/:sourceId/recrawl`, the action the sources
+page's new visibility exists for. Until then a source was crawled once,
+when connected, and again only when the org's embedding model changed; a
+tenant who read "failed: nothing crawlable — disallowed by robots.txt" and
+fixed their robots.txt, or whose docs simply changed, had nowhere to click.
+Through realtime rather than an INSERT from web for the enqueue route's
+reason — the row is not the whole effect, the wake is. Idempotent by SCHEMA:
+one INSERT with `ON CONFLICT (source_id) WHERE state IN ('queued',
+'running') DO NOTHING` against 008's partial unique index (§3.3.10), so a
+source with a crawl already queued or running answers `queued: false` and
+writes nothing, and five concurrent clicks insert one job and fire one wake
+(a test fires them together). No read before the insert, no transaction —
+the race resolves in Postgres, §3.23's playbook. Uploads are refused with a
+sentence (the worker fails them by design; manufacturing a job guaranteed to
+fail is not a re-crawl); a source that is another org's, or does not exist,
+or is not even an id, is one 404 — the org guard's stance one level down.
+`enqueueReindex` gained the same ON CONFLICT clause, so a click landing
+between its read and its insert can no longer turn a unique violation into
+a rolled-back credential save.
 
 Since M3.6b the credential route serves both ROLES through that same
 one-path rule: the role picks which builder and which round-trip runs,
@@ -3719,6 +4001,60 @@ Verified live at M3.6a with two real public pages: one job recovered by
 the BOOT tick after a dev-server restart (the deploy-stranded path), one
 run purely by wake (no poll timer existed), and the page's auto-refresh
 flipping to "1 pages indexed" unattended.
+
+**M7.5 — what a crawl left out, and Re-crawl.** The plan parked robots.txt
+"with the dashboard, where a customer can see WHY a page was skipped"; this
+is that page.
+
+- **queries.ts** carries the latest job's `skippedCount` and `skippedPages`
+  (§3.3.10) with each source — the count is the truth, the list is what was
+  kept — pinned by a DB-gated suite of its own
+  (`lib/sources/__tests__/queries.test.ts`, the first for this file): a
+  source crawled twice showing the LATEST run's record with its document
+  count, a running crawl with nothing skipped yet and `hasActiveJob` true,
+  and another tenant's busier record invisible in both directions.
+- **The page** says "N pages indexed · M skipped" (the skipped count rides
+  along while a crawl runs too, growing with the progress) and, under any
+  source with skips, a collapsed `<details>` — "M pages skipped — why" —
+  listing each url with the crawler's sentence verbatim ("disallowed by
+  robots.txt (User-agent: *, Disallow: /private/)", "HTTP 404") and, past
+  the cap, "…and K more not listed". A failed crawl's reason is a sentence
+  now ("nothing crawlable — disallowed by robots.txt (User-agent: *,
+  Disallow: /)"), so the status cell WRAPS instead of `nowrap` and the row
+  stacks its two halves under 480px — §9.16's automatic-minimum trap,
+  avoided rather than found. The intro promises robots.txt is honored.
+- **Re-crawl** — an owner-only button on every crawlable source without a
+  job queued or running (sources were add-only until now: a fixed
+  robots.txt, or docs that changed, had nowhere to go). A plain form action,
+  the install page's Allow pattern: `recrawlSourceAction` re-checks the
+  ladder (signed-in → member → OWNER, since a Server Action is reachable as
+  a direct POST), calls lib/realtime's `recrawlSource` (§3.22 — the wake is
+  the reason it goes through realtime), and revalidates; the re-rendered
+  list IS the message, the source flipping to "queued…" and AutoRefresh
+  taking it from there. `queued: false` needs nothing said — the page
+  already shows that state. lib/realtime's client test pins the wire: POST,
+  the path, the secret header, and `queued` read back with `false` a normal
+  answer.
+
+**Verified live** against the dev servers and the compose database, with
+two REAL sites rather than fixtures: `https://nodejs.org/en` connected at
+depth 1 crawled 9 pages and recorded one skip, `/docs/latest/api/` under
+nodejs.org's own `Disallow: /docs/` — the page reading "9 pages indexed · 1
+skipped" with the URL and the rule under "1 page skipped — why";
+`https://www.reddit.com/` (`Disallow: /`) reading "failed: nothing crawlable
+— disallowed by robots.txt (User-agent: *, Disallow: /)" with a Re-crawl
+button beside it; Re-crawl on the nodejs source producing a second job that
+ran in 4 seconds (the recrawl short-circuit), refreshed all nine documents,
+and recorded the same skip; and the layout measured from the DOM (the
+Browser pane was not displayed): at 375px `scrollWidth === clientWidth ===
+375` with the details opened and no element past the viewport edge, the row
+stacked (`flex-direction: column`), the failure sentence wrapping in 243px
+and the Re-crawl button intact at 71px; at 1280px both rows side by side
+with the status column right-aligned to the row's edge. The dev server
+needed `INGEST_WORKER=1` (with `INGEST_POLL_MS=0`, production's mode) in the
+throwaway live env before any crawl ran — without a worker the enqueue
+wakes nothing — and its first boot tick went to a stale queued job a test
+suite had left behind, which is one-job-per-tick behaving as documented.
 
 ### §9.10 `src/lib/conversations/` + the transcript routes (M3.7)
 

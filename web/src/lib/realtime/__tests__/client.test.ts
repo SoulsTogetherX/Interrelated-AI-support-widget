@@ -6,7 +6,7 @@
 import { createServer } from "node:http"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { createSource, removeCredential, submitCredential } from "../index"
+import { createSource, recrawlSource, removeCredential, submitCredential } from "../index"
 
 import type { Server } from "node:http"
 import type { IncomingMessage } from "node:http"
@@ -137,5 +137,16 @@ describe("realtime internal client", () => {
       location: "https://docs.example.com/",
       crawlDepth: 2,
     })
+  })
+
+  it("POSTs a re-crawl and reads `queued` back, false being a normal answer", async () => {
+    await listen(200, { ok: true, queued: false })
+    const result = await recrawlSource("org_00000000000000000000000000000000", "src_00000000000000000000000000000000")
+    expect(result).toEqual({ ok: true, value: { queued: false } })
+    expect(seen[0].method).toBe("POST")
+    expect(seen[0].url).toBe(
+      "/internal/orgs/org_00000000000000000000000000000000/sources/src_00000000000000000000000000000000/recrawl",
+    )
+    expect(seen[0].secret).toBe("web-client-test-secret-0123456789ab")
   })
 })

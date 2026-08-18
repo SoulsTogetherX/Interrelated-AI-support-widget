@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { db } from "@/db/pool"
 import { migrateToLatest } from "@/db/migrate"
+import { MAX_RECORDED_SKIPPED_PAGES } from "@/db/schema"
 import { crawl, CrawlError } from "@/ingest/crawler"
 import type { CrawlEvent, CrawlSource } from "@/ingest/crawler"
 import { parseMarkdown } from "@/ingest/parsers/markdown"
@@ -230,6 +231,14 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
       .where("source_id", "=", mainSourceId).where("deleted_at", "is not", null)
       .executeTakeFirst()
     expect(tombstone?.title).toBe("Gone")
+
+    // The site dropped the LINK as well as the page, so this crawl met no
+    // dead link and records nothing skipped: vanishing by absence and
+    // vanishing by 404 are different stories, and only the second is one the
+    // tenant needs to read (the scripted case below covers the record).
+    const j = await job(jobId)
+    expect(j.skipped_count).toBe(0)
+    expect(j.skipped_pages).toEqual([])
   })
 
   it("re-embeds unchanged pages when the org's embedding model changes", async () => {
@@ -330,6 +339,70 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     expect(dead.state).toBe("failed")
     expect(dead.error).toContain("lease expired")
     expect(dead.locked_by).toBeNull()
+  })
+
+  it("renews the lease with every page, so a slow crawl is never reclaimed as a crashed one", async () => {
+    const orgH = await makeOrg("Heartbeat Co")
+    const gate = gatedCrawler([
+      { url: "https://slow.test/one", markdown: "# One\n\nfirst" },
+      { url: "https://slow.test/two", markdown: "# Two\n\nsecond" },
+    ])
+    const { jobId } = await enqueue(orgH, { location: "https://slow.test" })
+    const worker = makeWorker({ crawler: gate.factory })
+
+    const tick = worker.tick()
+    // The claim stamps locked_at; the crawler is parked at its gate, so this
+    // is the lease as claimed, before any page.
+    let claimed: Date | null = null
+    for (let i = 0; i < 100 && claimed === null; i++) {
+      const row = await job(jobId)
+      if (row.state === "running") claimed = row.locked_at
+      else await sleep(20)
+    }
+    expect(claimed).not.toBeNull()
+
+    await sleep(50) // so a renewal is measurably later than the claim
+    gate.release()
+    expect(await tick).toBe(true)
+
+    // Done, and the lease was moved forward by the pages that landed after
+    // the claim — the reclaim pass measures staleness from HERE.
+    const done = await job(jobId)
+    expect(done.state).toBe("done")
+    expect(done.docs_done).toBe(2)
+    expect((done.locked_at as Date).getTime()).toBeGreaterThan((claimed as Date).getTime())
+  })
+
+  it("records what the crawl skipped — the count exact, the list capped at the schema's bound", async () => {
+    const orgS = await makeOrg("Skipped Co")
+    // One dead link, then far more robots.txt refusals than the row keeps,
+    // then a page — in that order, so the record's head is checkable.
+    const factory = async function* (): AsyncGenerator<CrawlEvent> {
+      yield { kind: "page", url: "https://skip.test/", doc: parseMarkdown("# Home\n\nwelcome") }
+      yield { kind: "error", url: "https://skip.test/dead", message: "HTTP 404" }
+      for (let i = 0; i < MAX_RECORDED_SKIPPED_PAGES + 10; i++) {
+        yield {
+          kind: "skipped",
+          url: `https://skip.test/private/${i}`,
+          reason: "disallowed by robots.txt (User-agent: *, Disallow: /private/)",
+        }
+      }
+      yield { kind: "page", url: "https://skip.test/last", doc: parseMarkdown("# Last\n\nfin") }
+    }
+    const { jobId } = await enqueue(orgS, { location: "https://skip.test" })
+    expect(await makeWorker({ crawler: factory }).tick()).toBe(true)
+
+    const j = await job(jobId)
+    expect(j.state).toBe("done")
+    expect(j.docs_done).toBe(2)
+    expect(j.skipped_count).toBe(MAX_RECORDED_SKIPPED_PAGES + 11) // 1 error + 60 skips: all counted
+    expect(j.skipped_pages).toHaveLength(MAX_RECORDED_SKIPPED_PAGES) // …but only this many kept
+    expect(j.skipped_pages[0]).toEqual({ url: "https://skip.test/dead", reason: "HTTP 404" })
+    expect(j.skipped_pages[1]).toEqual({
+      url: "https://skip.test/private/0",
+      reason: "disallowed by robots.txt (User-agent: *, Disallow: /private/)",
+    })
+    expect(j.skipped_pages[MAX_RECORDED_SKIPPED_PAGES - 1]?.url).toBe(`https://skip.test/private/${MAX_RECORDED_SKIPPED_PAGES - 2}`)
   })
 
   it("stop() requeues the in-flight job between pages", async () => {

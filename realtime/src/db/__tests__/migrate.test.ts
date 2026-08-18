@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import pool, { db } from "@/db/pool"
 import { MIGRATIONS, migrateToLatest } from "@/db/migrate"
+import { MAX_RECORDED_SKIPPED_PAGES } from "@/db/schema"
 import { newId } from "@shared/utils/ids"
 //#endregion
 
@@ -70,6 +71,13 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
   })
 
   describe("constraints reject invalid rows", () => {
+    /** A crawl source of `orgId` with nothing queued for it yet. */
+    async function freshSource(orgId: string): Promise<string> {
+      const id = newId("src")
+      await db.insertInto("sources").values({ id, org_id: orgId, kind: "url", location: `https://${id}.example/` }).execute()
+      return id
+    }
+
     it("allows exactly one owner per organization", async () => {
       const orgId = newId("org")
       await db.insertInto("organizations").values({ id: orgId, name: "Constraint Co" }).execute()
@@ -158,6 +166,65 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
         ).rejects.toThrow(/api_keys_secret_hash/)
       } finally {
         await db.deleteFrom("organizations").where("id", "in", [orgId, otherOrg]).execute()
+      }
+    })
+
+    it("bounds a job's skipped-page record by shape and by size (008)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Skipped Co" }).execute()
+      // Each row on its own source: every insert here is a queued job, and
+      // the same migration allows one live job per source (next case).
+      const insertJob = async (extra: Record<string, unknown>) =>
+        db.insertInto("ingest_jobs")
+          .values({ id: newId("job"), org_id: orgId, source_id: await freshSource(orgId), ...extra } as never)
+          .execute()
+
+      // A job that knows nothing of the columns reads as "nothing skipped".
+      const plainId = newId("job")
+      await db.insertInto("ingest_jobs").values({ id: plainId, org_id: orgId, source_id: await freshSource(orgId) }).execute()
+      const plain = await db.selectFrom("ingest_jobs").selectAll().where("id", "=", plainId).executeTakeFirstOrThrow()
+      expect(plain.skipped_count).toBe(0)
+      expect(plain.skipped_pages).toEqual([])
+
+      // Exactly the cap is fine; one past it is refused; so is a non-array
+      // and a negative count — a second writer that forgot the rules fails
+      // loudly instead of growing the row.
+      const page = (i: number) => ({ url: `https://skipped.example/p${i}`, reason: "HTTP 404" })
+      const atCap = Array.from({ length: MAX_RECORDED_SKIPPED_PAGES }, (_, i) => page(i))
+      try {
+        await insertJob({ skipped_count: 500, skipped_pages: JSON.stringify(atCap) })
+        await expect(insertJob({ skipped_count: 51, skipped_pages: JSON.stringify([...atCap, page(50)]) })).rejects.toThrow(/check/i)
+        await expect(insertJob({ skipped_pages: JSON.stringify({ url: "x" }) })).rejects.toThrow(/check/i)
+        await expect(insertJob({ skipped_count: -1 })).rejects.toThrow(/check/i)
+      } finally {
+        // The rows that inserted are QUEUED jobs; a later suite's worker
+        // would claim and crawl them. Cascade them away with the org.
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
+    it("allows at most one LIVE job per source (008)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "One Job Co" }).execute()
+      try {
+        const sourceId = await freshSource(orgId)
+        const jobFor = (state: "queued" | "running" | "done" | "failed") =>
+          db.insertInto("ingest_jobs").values({
+            id: newId("job"), org_id: orgId, source_id: sourceId, state,
+            ...(state === "running" ? { locked_by: "w", locked_at: new Date() } : {}),
+          }).execute()
+        // History accumulates freely…
+        await jobFor("done")
+        await jobFor("failed")
+        // …one live job is fine…
+        await jobFor("queued")
+        // …a second live one (queued or running) is not.
+        await expect(jobFor("queued")).rejects.toThrow(/unique|duplicate/i)
+        await expect(jobFor("running")).rejects.toThrow(/unique|duplicate/i)
+        // Another source of the same org is unaffected.
+        await db.insertInto("ingest_jobs").values({ id: newId("job"), org_id: orgId, source_id: await freshSource(orgId) }).execute()
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
       }
     })
 

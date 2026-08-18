@@ -213,6 +213,8 @@ IngestWorker poll timer fires
   → tick()                               realtime/src/ingest/worker.ts
       1. reclaim stale leases:
            running AND locked_at older than staleLockMs
+           (locked_at is set by the claim and RENEWED by every page the
+            job lands — §3.2 — so "stale" means no progress, not "slow")
              · attempts < max → back to 'queued' (crashed worker; retry)
              · attempts ≥ max → 'failed', error="lease expired…"
       2. claim: single UPDATE over
@@ -236,22 +238,57 @@ IngestWorker poll timer fires
       mid-crawl would split one source across two vector spaces.
       A decrypt failure throws → job 'failed' (never a silent wrong model)
   → for await (event of crawl(source))   realtime/src/ingest/crawler.ts
+      (crawl() reads <origin>/robots.txt FIRST — §3.3 — and a root the
+       file disallows, or a file that is unreachable, throws CrawlError
+       before any page: "nothing crawlable — disallowed by robots.txt
+       (User-agent: *, Disallow: /)")
       · stop() requested?  → job back to 'queued', source 'pending', return
-      · {plan, total}      → ingest_jobs.docs_total = total   (sitemaps)
-      · {error, url, msg}  → console.warn; crawl continues
+      · {plan, total}      → ingest_jobs.docs_total = total   (sitemaps;
+                             entries robots.txt disallows are not in it)
+      · {error, url, msg}  → console.warn + noteSkipped(url, msg)
+                             → recordProgress (a fetch was spent)
+      · {skipped, url, reason} → noteSkipped(url, reason)  (M7.5: robots.txt
+                             said no; nothing fetched, nothing logged)
       · {page, url, doc}   → #processPage (§3.3) → docs_done++
+                             → recordProgress
+        recordProgress = ONE UPDATE: docs_done, skipped_count,
+          skipped_pages (first MAX_RECORDED_SKIPPED_PAGES of them),
+          AND locked_at = NOW() — the lease renewed per fetch, so a crawl
+          slowed by a Crawl-delay is never reclaimed as crashed (§3.1)
   → soft-delete live documents of this source NOT seen this crawl
-    (page removed from the site → retrieval must stop seeing it)
-  → ingest_jobs: docs_total=docs_done, state='done', locked_by=NULL
+    (page removed from the site → retrieval must stop seeing it; a page
+     robots.txt now closes is absent by the same rule)
+  → ingest_jobs: docs_total=docs_done, skipped_count, skipped_pages,
+                 state='done', locked_by=NULL
   → sources: status='ready', last_crawled_at=NOW()
-  · any thrown error (CrawlError from a dead root, etc.)
+  · any thrown error (CrawlError from a dead or disallowed root, etc.)
       → job 'failed' + error text; source 'failed'
 ```
 
 ### §3.3 One page (inside the crawl loop)
 
 ```
+crawl() starts                           realtime/src/ingest/crawler.ts
+  ← fetchRobotsPolicy(origin)            realtime/src/ingest/robots.ts (M7.5)
+      safeFetch(<origin>/robots.txt)     the one request the file does not
+                                         govern; same guard as every page
+      2xx → parseRobotsTxt → the group for InterrelatedBot (else *)
+      3xx-unfollowed / 4xx → no file: everything allowed
+      5xx / no status (network, timeout, DNS, SSRF guard, >512 KiB)
+          → unreachable: NOTHING allowed (RFC 9309), and the crawl fails
+            with the cause in the sentence
+      Crawl-delay → effective delay = max(150 ms, min(it, 5 s))
+  every URL below is checked with policy.check(url) BEFORE it is fetched:
+      root / sitemap file → disallowed = CrawlError, nothing spent
+      discovered link      → disallowed = {skipped, url, reason}, no fetch,
+                             no queue slot, reported once
+      sitemap entry        → disallowed = skipped, and left out of the plan
+      child sitemap        → disallowed = skipped
+      redirect's FINAL url → disallowed = skipped (the fetch was spent;
+                             the content is not kept)
+
 crawl() yields a page                    realtime/src/ingest/crawler.ts
+  ← pace()                               the politeness / Crawl-delay wait
   ← safeFetch(url)                       realtime/src/ingest/safeFetch.ts
       per hop: assertPublicUrl           scheme, no credentials, ALL DNS
                                          answers public (ip.ts) — redirects
@@ -926,7 +963,7 @@ DELETE `/internal/orgs/<id>/credentials/embedding` runs the same re-index
 for the same reason: removing a credential reverts the org to the
 platform's built-in model, which is a model change like any other.
 
-### §7.9 Source connect → crawl → visible progress (M3.6a)
+### §7.9 Source connect → crawl → visible progress (M3.6a), skipped pages and Re-crawl (M7.5)
 
 ```
 AddSourceForm submit
@@ -950,9 +987,29 @@ AddSourceForm submit
 
 meanwhile, in the browser:
   sources page renders from            web/src/lib/sources/queries.ts
-    (sources + each one's LATEST job + live document counts)
+    (sources + each one's LATEST job + live document counts, and since
+     M7.5 that job's skipped_count + skipped_pages — "N pages indexed ·
+     M skipped", with a collapsed "why" list: url — reason)
   a queued/running job mounts          components/AutoRefresh — 4s
     router.refresh() until the job settles; idle pages poll nothing
+
+Re-crawl (M7.5) — the owner's button beside any crawlable source with no
+job queued or running:
+  Re-crawl form submit
+    → recrawlSourceAction                web/src/lib/sources/actions.ts
+      → isId("src") → currentUser → getOrgForMember → OWNER
+      → recrawlSource                    web/src/lib/realtime/index.ts
+          POST …/internal/orgs/<org>/sources/<src>/recrawl
+        → requireSecret → requireOrg     realtime/src/routes/internal.ts
+        → source is this org's and not an upload (else 404 / 422)
+        → INSERT ingest_jobs … ON CONFLICT (source_id)
+             WHERE state IN ('queued','running') DO NOTHING
+           (008's partial unique index: one LIVE job per source — five
+            concurrent clicks insert one; no read, no transaction)
+        → a row inserted → onEnqueue() → worker.wake()  → §3.2
+          none → {queued: false}, and nothing else happens
+      → revalidatePath(sources page)     the source now reads "queued…",
+                                         and AutoRefresh mounts
 ```
 
 ### §7.10 Reading a transcript — GET `/dashboard/[orgId]/conversations/[id]`

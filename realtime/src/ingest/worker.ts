@@ -4,7 +4,8 @@ import { createHash } from "node:crypto"
 import { sql } from "kysely"
 import type { Kysely } from "kysely"
 
-import type { Database } from "@/db/schema"
+import { MAX_RECORDED_SKIPPED_PAGES } from "@/db/schema"
+import type { Database, SkippedPage } from "@/db/schema"
 import { crawl, CrawlError } from "@/ingest/crawler"
 import type { CrawlEvent, CrawlSource } from "@/ingest/crawler"
 import { chunkBlocks } from "@shared/chunking/chunker"
@@ -29,7 +30,12 @@ import type { EmbeddingProvider } from "@providers/embedding/types"
  *     and a claim can never be half-taken.
  *   - A crashed worker leaves state='running' with a stale locked_at; the
  *     RECLAIM pass requeues those under the attempts cap and fails the rest.
- *     Work is lost only by exhausting attempts, never silently.
+ *     Work is lost only by exhausting attempts, never silently. Since M7.5
+ *     the lease is RENEWED with every page (and every failed fetch): a crawl
+ *     honoring a robots.txt Crawl-delay can legitimately outlast the stale
+ *     window, and "slow but making progress" must never read as "crashed" to
+ *     a second worker — the property that keeps "a second worker is a
+ *     deploy, not a rewrite" true.
  *   - stop() requeues the in-flight job between pages, so deploys don't
  *     burn an attempt on healthy work.
  *
@@ -38,6 +44,12 @@ import type { EmbeddingProvider } from "@providers/embedding/types"
  * network — holding a transaction open across it would pin a connection
  * (Neon free tier: pool of 5) for no atomicity gain, since a failed embed
  * simply leaves the previous document version in place.
+ *
+ * What a crawl did NOT take is recorded too (M7.5): every `skipped` and
+ * `error` event lands in the job's skipped_pages list (capped — §3.3.10) with
+ * skipped_count as the true total, so the dashboard can say "97 pages
+ * indexed · 3 skipped" and show which and why. Until then those events were
+ * console.warn lines a tenant could never see.
  */
 interface IngestWorkerOptions {
   db: Kysely<Database>
@@ -245,6 +257,29 @@ class IngestWorker {
     await this.#setSourceStatus(source.id, "crawling")
     const seenDocIds: string[] = []
     let docsDone = 0
+    // What the crawl left out, for the dashboard: the count is exact, the
+    // list stops at the schema's cap (skipped_count keeps counting).
+    let skippedCount = 0
+    const skippedPages: SkippedPage[] = []
+    const noteSkipped = (url: string, reason: string): void => {
+      skippedCount++
+      if (skippedPages.length < MAX_RECORDED_SKIPPED_PAGES) skippedPages.push({ url, reason })
+    }
+    // One UPDATE per fetch that produced something to say — a page or a
+    // failed page. It carries the progress counters AND renews the lease
+    // (locked_at = NOW()), so a crawl that is slow because it is polite is
+    // never reclaimed as one that died.
+    const recordProgress = (): Promise<unknown> =>
+      this.#db
+        .updateTable("ingest_jobs")
+        .set({
+          docs_done: docsDone,
+          skipped_count: skippedCount,
+          skipped_pages: JSON.stringify(skippedPages),
+          locked_at: sql`NOW()`,
+        })
+        .where("id", "=", job.id)
+        .execute()
 
     try {
       // The org's own embedding model, resolved ONCE for the whole job
@@ -278,20 +313,27 @@ class IngestWorker {
           await this.#db.updateTable("ingest_jobs").set({ docs_total: event.total }).where("id", "=", job.id).execute()
         } else if (event.kind === "error") {
           // Page-level failures don't fail the job (one dead link in a
-          // 100-page crawl); they are logged for the operator. Surfacing
-          // them per-page in the dashboard is M3's ingest-progress UI.
+          // 100-page crawl). Recorded for the tenant, and still logged for
+          // the operator because a burst of them is an operational signal.
           console.warn(`[ingest] ${job.id} page error: ${event.url}: ${event.message}`)
+          noteSkipped(event.url, event.message)
+          await recordProgress() // this cost a fetch: renew the lease too
+        } else if (event.kind === "skipped") {
+          // The site asked (robots.txt) and the crawler listened. Nothing was
+          // fetched, so nothing to log; the record is for the tenant.
+          noteSkipped(event.url, event.reason)
         } else {
           const docId = await this.#processPage(job, embedder, event.url, event.doc)
           seenDocIds.push(docId)
           docsDone++
-          await this.#db.updateTable("ingest_jobs").set({ docs_done: docsDone }).where("id", "=", job.id).execute()
+          await recordProgress()
         }
       }
 
       // Pages that were live last crawl but absent from this one are gone
       // from the site — soft-deleted so retrieval stops seeing them while
-      // history survives until a cleanup pass.
+      // history survives until a cleanup pass. A page robots.txt now closes
+      // is absent by the same rule: the site said not to keep it.
       let vanished = this.#db
         .updateTable("documents")
         .set({ deleted_at: new Date() })
@@ -302,7 +344,7 @@ class IngestWorker {
 
       await this.#db
         .updateTable("ingest_jobs")
-        .set({ docs_total: docsDone })
+        .set({ docs_total: docsDone, skipped_count: skippedCount, skipped_pages: JSON.stringify(skippedPages) })
         .where("id", "=", job.id)
         .execute()
       await this.#finishJob(job.id, "done", null)

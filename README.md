@@ -35,7 +35,7 @@ data, and most of them are CI gates.
 | Refusal threshold | **0.34** cosine distance for bge-small — 0% false refusals on the golden set, 100% correct refusals on off-topic questions, derived from an 80 + 40 question sweep, not picked by feel | [eval/RESULTS.md §threshold](eval/RESULTS.md) |
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
 | Widget bundle | **6.52 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
-| Security gate | **45 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
+| Security gate | **54 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
 | Tests | 683 across the repo, the integration suites against a real pgvector Postgres (19 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 Two things the plan wanted measured that this README does **not** claim a
@@ -60,7 +60,12 @@ with pgvector on Neon. The full file-by-file reference is
 **Ingest** (§3.10) — a source URL goes through an SSRF-guarded fetcher
 (every DNS answer must be public; redirects re-vetted per hop; a
 connect-time hook re-checks the address actually dialed, which closes DNS
-rebinding), an HTML/Markdown parser whose one contract is
+rebinding), a crawler that reads the site's `robots.txt` first and honors
+it on every fetch — a hand-written RFC 9309 parser, most-specific rule
+wins, Crawl-delay honored up to a cap, an unreachable file refusing the
+crawl as the RFC says, and every page it left out recorded with the reason
+so the dashboard can show *why* rather than a smaller count — an
+HTML/Markdown parser whose one contract is
 `block.text === source.slice(start, end)`, a heading-aware chunker, and the
 org's own embedding model. Storage is `halfvec(1024)` with one partial HNSW
 index per model and `org_id` denormalized onto the vector table — because
@@ -197,8 +202,8 @@ every CI run.
   sentence. What the design guarantees is narrower and stated: no uncited
   text, no attacker-controlled citation, and the system prompt never in
   anything the visitor sees, all asserted from outside.
-- **Not built:** file uploads (and with them PDF parsing), robots.txt. Each
-  is named where it would land.
+- **Not built:** file uploads (and with them PDF parsing). Named where it
+  would land.
 
 ---
 

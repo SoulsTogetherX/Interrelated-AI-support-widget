@@ -225,6 +225,22 @@ interface ChunkEmbeddingsTable {
   embedding: string
 }
 
+/** One page a crawl did not ingest, and why — an entry of
+ *  ingest_jobs.skipped_pages (migration 008). `reason` is a sentence the
+ *  crawler wrote for the tenant: "disallowed by robots.txt (User-agent: *,
+ *  Disallow: /private/)", "HTTP 404", "redirected off-origin to …". */
+interface SkippedPage {
+  url: string
+  reason: string
+}
+
+/** How many skipped pages one job row keeps in `skipped_pages`. Mirrors the
+ *  literal in migration 008's CHECK the way PADDED_DIM mirrors halfvec(1024):
+ *  the worker stops recording at this many while `skipped_count` keeps
+ *  counting, so "and N more" is arithmetic. A migration is frozen once
+ *  applied, so this constant follows the schema rather than the reverse. */
+const MAX_RECORDED_SKIPPED_PAGES = 50
+
 /** Ingest queue row, consumed with FOR UPDATE SKIP LOCKED. The
  *  (state='running') = (locked_by IS NOT NULL) CHECK makes an unowned
  *  running job — the silent way work gets lost — unrepresentable. */
@@ -235,10 +251,20 @@ interface IngestJobsTable {
   state: Generated<"queued" | "running" | "done" | "failed">
   attempts: Generated<number>
   locked_by: string | null
+  /** Set by the claim and RENEWED per page (M7.5): the stale-lease reclaim
+   *  measures from here, so a slow-but-healthy crawl is not mistaken for a
+   *  crashed one. */
   locked_at: ColumnType<Date | null, string | Date | null, string | Date | null>
   docs_total: number | null
   docs_done: number | null
   error: string | null
+  /** The TRUE number of pages skipped this crawl (008) — robots.txt, dead
+   *  links, off-origin redirects, unparseable bodies. */
+  skipped_count: Generated<number>
+  /** The first MAX_RECORDED_SKIPPED_PAGES of them. Written as a JSON string
+   *  (pg would serialize a JS array as a Postgres array literal), read back
+   *  parsed — jsonb comes off the wire as a value. */
+  skipped_pages: ColumnType<SkippedPage[], string | undefined, string>
   created_at: ColumnType<Date, string | Date | undefined, never>
 }
 
@@ -470,6 +496,7 @@ export type {
   ChunksTable,
   ChunkEmbeddingsTable,
   IngestJobsTable,
+  SkippedPage,
   ConversationsTable,
   MessagesTable,
   MessageCitationsTable,
@@ -479,4 +506,5 @@ export type {
   SubscriptionsTable,
   StripeEventsTable,
 }
+export { MAX_RECORDED_SKIPPED_PAGES }
 //#endregion

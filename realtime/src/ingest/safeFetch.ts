@@ -104,7 +104,17 @@ const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024 // generous for HTML; callers can lower
 const DEFAULT_MAX_REDIRECTS = 5
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
-const USER_AGENT = "InterrelatedBot/0.1"
+/** The crawler's PRODUCT TOKEN — the name a site's robots.txt addresses us
+ *  by (`User-agent: InterrelatedBot`). Exported so ingest/robots.ts matches
+ *  groups against the very token this header carries; two spellings would
+ *  make a site's rule for us silently apply to nobody. RFC 9309 §2.2.1
+ *  restricts the token to letters, `_` and `-`. */
+const USER_AGENT_PRODUCT = "InterrelatedBot"
+/** The full header: token/version plus the conventional `(+url)` a site
+ *  operator can follow to learn what the bot is and how it behaves —
+ *  identification is the first courtesy a crawler owes the sites it visits,
+ *  and robots.txt is only useful to an operator who knows whom to name. */
+const USER_AGENT = `${USER_AGENT_PRODUCT}/0.1 (+https://github.com/SoulsTogetherX/Interrelated-AI-support-widget-)`
 //#endregion
 
 //#region Host vetting
@@ -307,6 +317,6 @@ function translateFetchError(err: unknown, url: string): SafeFetchError {
   return new SafeFetchError("network", `fetch of ${url} failed`, err)
 }
 
-export { safeFetch, assertPublicUrl, SafeFetchError }
+export { safeFetch, assertPublicUrl, SafeFetchError, USER_AGENT_PRODUCT }
 export type { SafeFetchOptions, FetchedResource, HostGuard, Resolver, SafeFetchReason }
 //#endregion

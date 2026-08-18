@@ -220,4 +220,19 @@ export async function createSource(
     },
   }
 }
+
+/** Queue a fresh crawl of one source (M7.5) — through realtime for the same
+ *  reason connecting one is: the job row is not the whole effect, the wake
+ *  is. `queued: false` is a normal answer (a crawl is already queued or
+ *  running), not an error. */
+export async function recrawlSource(
+  orgId: string,
+  sourceId: string,
+): Promise<InternalResult<{ queued: boolean }>> {
+  const result = await call(`/internal/orgs/${orgId}/sources/${sourceId}/recrawl`, { method: "POST" })
+  if (!result.ok) {
+    return result
+  }
+  return { ok: true, value: { queued: result.value.queued === true } }
+}
 //#endregion

@@ -106,7 +106,10 @@ function constantTimeEquals(a: string, b: string): boolean {
  * Sources that already have work queued are skipped (a second job would
  * crawl the same site twice for one outcome), and uploads are skipped
  * because the worker fails them by design — manufacturing a job that is
- * guaranteed to fail is not progress.
+ * guaranteed to fail is not progress. The skip is decided by the read below
+ * AND enforced by 008's one-live-job-per-source index with ON CONFLICT DO
+ * NOTHING: a Re-crawl click landing between the read and the insert must not
+ * turn a unique violation into a rolled-back credential save.
  */
 async function enqueueReindex(
   trx: Transaction<Database>,
@@ -122,11 +125,13 @@ async function enqueueReindex(
       )
   `.execute(trx)
   if (rows.length === 0) return 0
-  await trx
+  const inserted = await trx
     .insertInto("ingest_jobs")
     .values(rows.map((row) => ({ id: newId("job"), org_id: orgId, source_id: row.id })))
+    .onConflict((oc) => oc.column("source_id").where("state", "in", ["queued", "running"]).doNothing())
+    .returning("id")
     .execute()
-  return rows.length
+  return inserted.length
 }
 //#endregion
 
@@ -368,6 +373,66 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       options.onEnqueue?.()
 
       res.json({ ok: true, sourceId, jobId })
+    },
+  )
+
+  /**
+   * Re-crawl one source (M7.5) — the action the sources page's new visibility
+   * exists for. Until now a source was crawled once, when connected, and
+   * again only when the org's embedding model changed; a tenant who saw
+   * "failed: nothing crawlable — disallowed by robots.txt" and fixed their
+   * robots.txt, or whose docs simply changed, had nowhere to click.
+   *
+   * Through realtime rather than an INSERT from web for the enqueue route's
+   * reason: the row is not the whole effect. The wake is, and the worker
+   * lives here. Idempotent the cheap way — a source with a job already
+   * queued or running answers `queued: false` and writes nothing, since a
+   * second job would crawl the same site twice for one outcome (the
+   * re-index helper above makes the same call). Uploads are refused with a
+   * sentence: the worker fails them by design, and manufacturing a job that
+   * is guaranteed to fail is not a re-crawl. A source that is not this org's,
+   * or does not exist, or is not even an id, is one 404 — the org guard's
+   * stance, one level down.
+   */
+  app.post(
+    "/internal/orgs/:orgId/sources/:sourceId/recrawl",
+    requireSecret,
+    requireOrg,
+    async (req: Request, res: Response) => {
+      const raw = req.params.sourceId
+      const sourceId = typeof raw === "string" ? raw : ""
+      if (!isId("src", sourceId)) {
+        res.status(404).end()
+        return
+      }
+      const source = await db
+        .selectFrom("sources")
+        .select(["id", "kind"])
+        .where("id", "=", sourceId)
+        .where("org_id", "=", res.locals.orgId as string)
+        .executeTakeFirst()
+      if (!source) {
+        res.status(404).end()
+        return
+      }
+      if (source.kind === "upload") {
+        res.status(422).json({ ok: false, error: "Uploaded files are not crawled; upload the file again to replace it." })
+        return
+      }
+
+      // One statement, no read before it: 008's partial unique index (one
+      // live job per source) turns a concurrent second click into a
+      // no-op the row count reports, instead of a second crawl.
+      const jobId = newId("job")
+      const inserted = await db
+        .insertInto("ingest_jobs")
+        .values({ id: jobId, org_id: res.locals.orgId as string, source_id: source.id })
+        .onConflict((oc) => oc.column("source_id").where("state", "in", ["queued", "running"]).doNothing())
+        .returning("id")
+        .executeTakeFirst()
+      if (inserted) options.onEnqueue?.()
+
+      res.json(inserted ? { ok: true, queued: true, jobId } : { ok: true, queued: false })
     },
   )
 

@@ -8,6 +8,8 @@
 
 //#region Imports
 import { db } from "@/lib/db"
+
+import type { SkippedPage } from "@shared/db/schema"
 //#endregion
 
 //#region Types
@@ -24,6 +26,12 @@ export interface SourceWithProgress {
     docsDone: number | null
     docsTotal: number | null
     error: string | null
+    /** Pages this crawl did not take — the TRUE count (M7.5, §3.3.10). */
+    skippedCount: number
+    /** …and the first MAX_RECORDED_SKIPPED_PAGES of them with their reasons:
+     *  "disallowed by robots.txt (User-agent: *, Disallow: /private/)",
+     *  "HTTP 404". What the page shows under "N skipped — why". */
+    skippedPages: SkippedPage[]
   } | null
 }
 //#endregion
@@ -45,7 +53,7 @@ export async function listSourcesWithProgress(orgId: string): Promise<SourceWith
   // (a tenant has a handful of sources; jobs per source stay small).
   const jobs = await db
     .selectFrom("ingest_jobs")
-    .select(["source_id", "state", "docs_done", "docs_total", "error", "created_at"])
+    .select(["source_id", "state", "docs_done", "docs_total", "error", "skipped_count", "skipped_pages", "created_at"])
     .where("source_id", "in", sourceIds)
     .orderBy("created_at", "desc")
     .execute()
@@ -74,7 +82,14 @@ export async function listSourcesWithProgress(orgId: string): Promise<SourceWith
       lastCrawledAt: s.last_crawled_at,
       documentCount: docCount.get(s.id) ?? 0,
       job: job
-        ? { state: job.state, docsDone: job.docs_done, docsTotal: job.docs_total, error: job.error }
+        ? {
+            state: job.state,
+            docsDone: job.docs_done,
+            docsTotal: job.docs_total,
+            error: job.error,
+            skippedCount: job.skipped_count,
+            skippedPages: job.skipped_pages,
+          }
         : null,
     }
   })

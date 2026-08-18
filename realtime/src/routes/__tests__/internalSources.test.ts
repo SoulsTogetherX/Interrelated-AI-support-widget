@@ -98,6 +98,64 @@ describe.skipIf(!hasDb)("internal sources API + wake-driven worker", () => {
     expect(enqueueCalls).toBe(before)
   })
 
+  it("re-crawls a source: one queued job per click-storm, the wake fired once (M7.5)", async () => {
+    const created = await post(`/internal/orgs/${orgId}/sources`, { kind: "url", location: "https://recrawl.example/" })
+    const { sourceId, jobId: firstJob } = (await created.json()) as { sourceId: string; jobId: string }
+    // Finish the connect-time job so the source is idle, as it would be
+    // after its first crawl.
+    await db.updateTable("ingest_jobs").set({ state: "done" }).where("id", "=", firstJob).execute()
+    const before = enqueueCalls
+
+    // Five concurrent clicks: exactly one job, one wake, four honest
+    // `queued: false` — the partial unique index deciding, not a read.
+    const answers = await Promise.all(
+      Array.from({ length: 5 }, () => post(`/internal/orgs/${orgId}/sources/${sourceId}/recrawl`, {})),
+    )
+    expect(answers.map((r) => r.status)).toEqual([200, 200, 200, 200, 200])
+    const bodies = (await Promise.all(answers.map((r) => r.json()))) as Array<{ queued: boolean; jobId?: string }>
+    expect(bodies.filter((b) => b.queued)).toHaveLength(1)
+    expect(bodies.filter((b) => !b.queued)).toHaveLength(4)
+    expect(enqueueCalls).toBe(before + 1)
+    const live = await db
+      .selectFrom("ingest_jobs").select("id")
+      .where("source_id", "=", sourceId).where("state", "in", ["queued", "running"]).execute()
+    expect(live).toHaveLength(1)
+    expect(live[0]?.id).toBe(bodies.find((b) => b.queued)?.jobId)
+
+    // Once that job is done, the source can be re-crawled again.
+    await db.updateTable("ingest_jobs").set({ state: "done" }).where("id", "=", live[0]?.id as string).execute()
+    const again = await post(`/internal/orgs/${orgId}/sources/${sourceId}/recrawl`, {})
+    const againBody = (await again.json()) as { queued: boolean; jobId: string }
+    expect(againBody.queued).toBe(true)
+    expect(enqueueCalls).toBe(before + 2)
+    // Park it: a queued job here would be the oldest in the queue, and the
+    // wake-driven worker test below runs one job per tick.
+    await db.updateTable("ingest_jobs").set({ state: "done" }).where("id", "=", againBody.jobId).execute()
+  })
+
+  it("re-crawl refuses what is not this org's, not a source, or not crawlable", async () => {
+    const before = enqueueCalls
+    // Another org's source: the same 404 a fabricated or malformed id gets.
+    const otherOrg = newId("org")
+    await db.insertInto("organizations").values({ id: otherOrg, name: "Other Sources Org" }).execute()
+    const foreign = newId("src")
+    await db.insertInto("sources").values({ id: foreign, org_id: otherOrg, kind: "url", location: "https://theirs.example/" }).execute()
+    expect((await post(`/internal/orgs/${orgId}/sources/${foreign}/recrawl`, {})).status).toBe(404)
+    expect((await post(`/internal/orgs/${orgId}/sources/${newId("src")}/recrawl`, {})).status).toBe(404)
+    expect((await post(`/internal/orgs/${orgId}/sources/not-an-id/recrawl`, {})).status).toBe(404)
+    // An upload is refused with a sentence, and nothing is queued.
+    const upload = newId("src")
+    await db.insertInto("sources").values({ id: upload, org_id: orgId, kind: "upload", location: "manual.pdf" }).execute()
+    const res = await post(`/internal/orgs/${orgId}/sources/${upload}/recrawl`, {})
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { error: string }).error).toMatch(/not crawled/)
+    // Without the secret, nothing at all.
+    const bare = await fetch(`${base}/internal/orgs/${orgId}/sources/${upload}/recrawl`, { method: "POST" })
+    expect(bare.status).toBe(401)
+    expect(enqueueCalls).toBe(before)
+    await db.deleteFrom("organizations").where("id", "=", otherOrg).execute()
+  })
+
   it("the PRODUCTION vet rejects private crawl targets", async () => {
     const prodApp = createApp({ internal: { secret: SECRET, ticketSecret: SECRET } })
     const prodServer = createServer(prodApp)

@@ -18,7 +18,9 @@ export type {
   ChunksTable,
   ChunkEmbeddingsTable,
   IngestJobsTable,
+  SkippedPage,
   ConversationsTable,
   MessagesTable,
   MessageCitationsTable,
 } from "@shared/db/schema"
+export { MAX_RECORDED_SKIPPED_PAGES } from "@shared/db/schema"

@@ -12,7 +12,8 @@ import { revalidatePath } from "next/cache"
 
 import { currentUser } from "@/lib/auth/requireUser"
 import { getOrgForMember } from "@/lib/orgs"
-import { createSource } from "@/lib/realtime"
+import { createSource, recrawlSource } from "@/lib/realtime"
+import { isId } from "@shared/utils/ids"
 //#endregion
 
 //#region Types
@@ -62,5 +63,33 @@ export async function addSourceAction(
     error: null,
     success: "Source connected — crawling starts now. Progress updates below.",
   }
+}
+
+/**
+ * Re-crawl one source (M7.5) — a plain form action, like the install page's
+ * one-click Allow: the re-rendered list IS the message (the source flips to
+ * "queued…" and the auto-refresh takes it from there), so there is no state
+ * to return. Same ladder as connecting a source, re-checked here because a
+ * Server Action is reachable as a direct POST; realtime re-establishes that
+ * the source belongs to the org regardless. A `queued: false` answer (a
+ * crawl already queued or running) needs nothing said either — the page
+ * already shows that state.
+ */
+export async function recrawlSourceAction(formData: FormData): Promise<void> {
+  const orgId = typeof formData.get("orgId") === "string" ? (formData.get("orgId") as string) : ""
+  const sourceId = typeof formData.get("sourceId") === "string" ? (formData.get("sourceId") as string) : ""
+  if (!isId("src", sourceId)) {
+    return
+  }
+  const user = await currentUser()
+  if (!user) {
+    return
+  }
+  const org = await getOrgForMember(orgId, user.id)
+  if (!org || org.role !== "owner") {
+    return
+  }
+  await recrawlSource(orgId, sourceId)
+  revalidatePath(`/dashboard/${orgId}/sources`)
 }
 //#endregion
