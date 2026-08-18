@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { mountWidget } from "../ui"
 import { QuotaError, RateLimitError } from "../api"
-import type { WidgetClient } from "../api"
+import type { StoredHandoff, WidgetClient } from "../api"
 import type { HandoffHandlers } from "../handoff"
 import type { AnswerEvent } from "@shared/grounding/events"
 //#endregion
@@ -13,11 +13,15 @@ import type { AnswerEvent } from "@shared/grounding/events"
  *  scripted error), recording every call — rendering is tested against
  *  the wire protocol, with the network layer out of the picture. Since
  *  M4.4 it also stands in for the handoff socket: openHandoff hands back a
- *  fake connection and keeps the handlers, so a test can play the server. */
-function fakeClient(script: Array<AnswerEvent[] | Error>) {
+ *  fake connection and keeps the handlers, so a test can play the server.
+ *  Since M7.4 it also stands in for the bookmark: `stored` is what a page
+ *  load finds, and every remember/forget is recorded. */
+function fakeClient(script: Array<AnswerEvent[] | Error>, stored: StoredHandoff | null = null) {
   const askCalls: Array<{ question: string; conversationId?: string }> = []
   const escalateCalls: string[] = []
   const sent: string[] = []
+  const opened: string[] = []
+  const bookmarks: Array<{ conversationId: string; panelOpen: boolean } | null> = []
   let sessionCalls = 0
   let hints = 0
   let handlers: HandoffHandlers | null = null
@@ -46,8 +50,10 @@ function fakeClient(script: Array<AnswerEvent[] | Error>) {
         : Promise.resolve(escalateResult)
     },
     handoffTicket: () => Promise.resolve("tkt_ui"),
-    openHandoff: (_conversationId, given) => {
+    openHandoff: (conversationId, given) => {
+      opened.push(conversationId)
       handlers = given
+      closed = false
       return {
         send: (text: string) => {
           if (!sendable) return false
@@ -58,10 +64,17 @@ function fakeClient(script: Array<AnswerEvent[] | Error>) {
         close: () => { closed = true },
       }
     },
+    rememberHandoff: (conversationId, panelOpen) => { bookmarks.push({ conversationId, panelOpen }) },
+    forgetHandoff: () => { bookmarks.push(null) },
+    storedHandoff: () => stored,
   }
 
   return {
-    client, askCalls, escalateCalls, sent,
+    client, askCalls, escalateCalls, sent, opened,
+    /** Every bookmark write in order — an object for remember, null for
+     *  forget — so a test can assert what the NEXT page load will find. */
+    bookmarks,
+    lastBookmark: () => bookmarks.at(-1),
     sessionCalls: () => sessionCalls,
     hints: () => hints,
     closed: () => closed,
@@ -380,6 +393,205 @@ describe("mountWidget", () => {
     expect(shadow().querySelector(".msg.agent img")).toBeNull()
     expect((window as unknown as Record<string, unknown>)["__pwned_socket"]).toBeUndefined()
     expect(shadow().textContent).toContain("<img src=x")
+  })
+  //#endregion
+
+  //#region Rejoin across a page load (M7.4)
+  const STORED: StoredHandoff = { conversationId: "con_stored", panelOpen: true }
+  const AGENT_HELLO = { id: "msg_a1", role: "agent" as const, text: "Hello, still here?", at: "2026-01-01T00:00:05.000Z" }
+
+  it("bookmarks a handoff on entering, follows the panel, and forgets it on ending — never the bot's thread", async () => {
+    const fake = fakeClient([[META, REFUSAL, NO_CLAIMS]])
+    mountWidget(host, fake.client)
+    query<HTMLButtonElement>(".bubble").click()
+    await askThrough("something obscure")
+    // A bot conversation is not bookmarked: rejoining one would continue a
+    // thread the widget cannot show, and nobody is waiting on it.
+    expect(fake.bookmarks).toEqual([])
+
+    query<HTMLButtonElement>(".escalate").click()
+    await vi.waitFor(() => {
+      if (shadow().querySelector(".status") === null) throw new Error("not in handoff yet")
+    })
+    expect(fake.lastBookmark()).toEqual({ conversationId: "con_ui", panelOpen: true })
+
+    // The bookmark records how the visitor left the panel, so the next
+    // page restores it rather than guessing.
+    query<HTMLButtonElement>(".head button").click()
+    expect(fake.lastBookmark()).toEqual({ conversationId: "con_ui", panelOpen: false })
+    query<HTMLButtonElement>(".bubble").click()
+    expect(fake.lastBookmark()).toEqual({ conversationId: "con_ui", panelOpen: true })
+
+    // Ended: forgotten, so the next page starts fresh instead of probing.
+    fake.server().onStatus("ended")
+    expect(fake.lastBookmark()).toBeNull()
+  })
+
+  it("rejoins a stored handoff at mount — nothing drawn until the server confirms, then the panel comes back as it was", () => {
+    const fake = fakeClient([], STORED)
+    mountWidget(host, fake.client)
+
+    // The socket is opened for the stored conversation at once (its ticket
+    // mint IS the probe), and no bubble-open mint is spent by the UI.
+    expect(fake.opened).toEqual(["con_stored"])
+    expect(fake.sessionCalls()).toBe(0)
+    // ...but a visitor looking at the page sees no handoff yet: no status
+    // line, panel closed, composer still the bot's, log untouched.
+    fake.server().onStatus("connecting")
+    expect(shadow().querySelector(".status")).toBeNull()
+    expect(shadow().querySelector(".root.open")).toBeNull()
+    expect(query<HTMLInputElement>(".foot input").placeholder).toBe("Ask a question…")
+    expect(shadow().querySelectorAll(".msg")).toHaveLength(0)
+
+    // Confirmed by `ready`: the panel returns open, as the visitor left it,
+    // with the socket's composer and NO greeting — the transcript that
+    // follows is the greeting.
+    fake.server().onStatus("waiting")
+    expect(query(".status").textContent).toContain("Waiting for someone")
+    expect(shadow().querySelector(".root.open")).not.toBeNull()
+    expect(query<HTMLInputElement>(".foot input").placeholder).toBe("Message the team…")
+    expect(shadow().querySelectorAll(".msg.assistant")).toHaveLength(0)
+    expect(fake.lastBookmark()).toEqual({ conversationId: "con_stored", panelOpen: true })
+
+    fake.server().onHistory([
+      { id: "msg_1", role: "visitor", text: "my invoice is wrong", at: "2026-01-01T00:00:00.000Z" },
+      { id: "msg_2", role: "assistant", text: "I don't know that one.", at: "2026-01-01T00:00:01.000Z" },
+      AGENT_HELLO,
+    ])
+    expect(shadow().querySelectorAll(".msg")).toHaveLength(3)
+    expect(query(".msg.agent").textContent).toContain("Hello, still here?")
+
+    // And it is a live handoff from here: sends go to the socket.
+    submit("yes — sorry, I clicked a link")
+    expect(fake.sent).toEqual(["yes — sorry, I clicked a link"])
+    expect(fake.askCalls).toEqual([])
+  })
+
+  it("keeps a rejoined panel closed when the visitor had closed it, and badges the bubble when the team writes", () => {
+    const fake = fakeClient([], { conversationId: "con_stored", panelOpen: false })
+    mountWidget(host, fake.client)
+    fake.server().onStatus("connected")
+
+    // Confirmed, but the visitor had closed the panel: it stays closed —
+    // the socket is live behind it, so the agent sees the visitor present.
+    expect(query(".status").textContent).toContain("chatting with the support team")
+    expect(shadow().querySelector(".root.open")).toBeNull()
+    expect(query(".bubble").classList.contains("unread")).toBe(false)
+
+    // The replayed backlog is not news, and neither is the visitor's own
+    // echo from another tab.
+    fake.server().onHistory([AGENT_HELLO])
+    fake.server().onMessage({ id: "msg_v", role: "visitor", text: "one sec", at: "2026-01-01T00:00:06.000Z" })
+    expect(query(".bubble").classList.contains("unread")).toBe(false)
+
+    // A person writing while the panel is closed is.
+    fake.server().onMessage({ id: "msg_a2", role: "agent", text: "Take your time.", at: "2026-01-01T00:00:07.000Z" })
+    expect(query(".bubble").classList.contains("unread")).toBe(true)
+    expect(query(".bubble").getAttribute("aria-label")).toContain("new message")
+
+    // Opening clears the badge and does NOT greet over the transcript.
+    query<HTMLButtonElement>(".bubble").click()
+    expect(query(".bubble").classList.contains("unread")).toBe(false)
+    expect(query(".bubble").getAttribute("aria-label")).toBe("Open support chat")
+    expect(shadow().textContent).not.toContain("Ask me anything")
+    expect(shadow().querySelectorAll(".msg.agent")).toHaveLength(2)
+    expect(shadow().querySelectorAll(".msg.visitor")).toHaveLength(1)
+    expect(fake.lastBookmark()).toEqual({ conversationId: "con_stored", panelOpen: true })
+  })
+
+  it("forgets a stale bookmark silently — the page is left as one that had no bookmark", async () => {
+    // The agent closed the conversation while the visitor was away: the
+    // socket's first ticket mint answers null, which it reports as `ended`.
+    const fake = fakeClient([[META, DONE]], { conversationId: "con_stale", panelOpen: true })
+    mountWidget(host, fake.client)
+    fake.server().onStatus("connecting")
+    fake.server().onStatus("ended")
+
+    // Nothing was drawn — no "the support chat has ended" on a page the
+    // visitor never escalated from — and the bookmark is gone.
+    expect(shadow().querySelector(".status")).toBeNull()
+    expect(shadow().querySelector(".root.open")).toBeNull()
+    expect(fake.lastBookmark()).toBeNull()
+
+    // From here the widget is exactly a fresh one: it greets on open, and
+    // the next question starts a NEW conversation rather than appending to
+    // one the server said was not this visitor's to rejoin.
+    query<HTMLButtonElement>(".bubble").click()
+    expect(shadow().textContent).toContain("Ask me anything")
+    await askThrough("fresh start")
+    expect(fake.askCalls).toEqual([{ question: "fresh start" }])
+    expect(query<HTMLInputElement>(".foot input").placeholder).toBe("Ask a question…")
+  })
+
+  it("gives up on an unconfirmed rejoin after the timeout and KEEPS the bookmark for the next page", async () => {
+    vi.useFakeTimers()
+    try {
+      const fake = fakeClient([[
+        { type: "meta", conversationId: "con_stored", messageId: "msg_q" },
+        { type: "handoff", status: "pending" },
+      ]], STORED)
+      mountWidget(host, fake.client)
+      fake.server().onStatus("connecting")
+      // The server never answers (an outage at load, or a mint that keeps
+      // failing): just short of the bound the probe still runs...
+      vi.advanceTimersByTime(59_999)
+      expect(fake.closed()).toBe(false)
+      // ...at the bound it stops, quietly — no forget, so the next page
+      // load tries again.
+      vi.advanceTimersByTime(1)
+      expect(fake.closed()).toBe(true)
+      expect(fake.bookmarks).toEqual([])
+      expect(shadow().querySelector(".status")).toBeNull()
+
+      // And the visitor is not stranded: the stored id was KEPT, so asking
+      // again lands in the thread a person owns and catches up through the
+      // pipeline's `handoff` event, on a fresh socket.
+      vi.useRealTimers()
+      query<HTMLButtonElement>(".bubble").click()
+      await askThrough("anyone?")
+      expect(fake.askCalls).toEqual([{ question: "anyone?", conversationId: "con_stored" }])
+      expect(fake.opened).toEqual(["con_stored", "con_stored"])
+      expect(query(".status").textContent).toContain("Waiting for someone")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("routes a question typed during an unconfirmed rejoin to the bot, and the confirmation still lands", async () => {
+    // The stored id is adopted at once, so the question joins the same
+    // thread — where a person owning it answers as `handoff` (§3.23), which
+    // enterHandoff leaves to the socket already probing.
+    const fake = fakeClient([[
+      { type: "meta", conversationId: "con_stored", messageId: "msg_q" },
+      { type: "handoff", status: "active" },
+    ]], STORED)
+    mountWidget(host, fake.client)
+    query<HTMLButtonElement>(".bubble").click()
+    await askThrough("hello?")
+    expect(fake.askCalls).toEqual([{ question: "hello?", conversationId: "con_stored" }])
+    expect(fake.sent).toEqual([])
+    // Not two sockets: the rejoin's is the handoff's.
+    expect(fake.opened).toEqual(["con_stored"])
+    expect(shadow().querySelector(".status")).toBeNull()
+
+    fake.server().onStatus("connected")
+    expect(query(".status").textContent).toContain("chatting with the support team")
+    expect(query<HTMLInputElement>(".foot input").placeholder).toBe("Message the team…")
+  })
+
+  it("does not stack status lines: a handoff after the last one ended replaces the line", async () => {
+    const fake = fakeClient([[META, REFUSAL, NO_CLAIMS], [META, REFUSAL, NO_CLAIMS]])
+    mountWidget(host, fake.client)
+    await escalateThrough(fake)
+    fake.server().onStatus("ended")
+    expect(query(".status").textContent).toContain("assistant is back")
+
+    await askThrough("one more thing")
+    query<HTMLButtonElement>(".escalate").click()
+    await vi.waitFor(() => {
+      if (!query(".status").textContent?.includes("Waiting")) throw new Error("not in handoff yet")
+    })
+    expect(shadow().querySelectorAll(".status")).toHaveLength(1)
   })
   //#endregion
 })

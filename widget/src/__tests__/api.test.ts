@@ -1,7 +1,7 @@
 //#region Imports
 import { beforeEach, describe, expect, it } from "vitest"
 
-import { ApiClient, QuotaError, RateLimitError } from "../api"
+import { ApiClient, HANDOFF_BOOKMARK_TTL_MS, QuotaError, RateLimitError } from "../api"
 import type { AnswerEvent } from "@shared/grounding/events"
 //#endregion
 
@@ -181,6 +181,59 @@ describe("ApiClient", () => {
     ]
     await expect(collect(makeClient().ask("q"))).rejects.toThrow(/chat failed \(401\)/)
   })
+
+  //#region The handoff bookmark (M7.4)
+  it("bookmarks a live handoff in storage and hands it to the next page load — with no request spent", () => {
+    // A page load with no bookmark: nothing to rejoin, and nothing fetched
+    // to find that out.
+    expect(makeClient().storedHandoff()).toBeNull()
+    expect(calls).toHaveLength(0)
+
+    makeClient().rememberHandoff("con_live", false)
+    const raw = localStorage.getItem("interrelated.handoff")
+    expect(raw).not.toBeNull()
+    // The bookmark is the conversation, the panel, and a timestamp — not the
+    // token (re-minted next page as always) and not the visitor id (stored
+    // beside it in this mode, refused from storage in strong mode).
+    expect(Object.keys(JSON.parse(raw as string) as object).sort()).toEqual(["at", "conversationId", "panelOpen"])
+
+    // A fresh client — the next page — finds it, still without a request.
+    expect(makeClient().storedHandoff()).toEqual({ conversationId: "con_live", panelOpen: false })
+    expect(calls).toHaveLength(0)
+
+    makeClient().forgetHandoff()
+    expect(makeClient().storedHandoff()).toBeNull()
+    expect(localStorage.getItem("interrelated.handoff")).toBeNull()
+  })
+
+  it("drops a bookmark past its TTL instead of probing it, and shrugs off one that is not ours", () => {
+    const stale = { conversationId: "con_old", panelOpen: true, at: Date.now() - HANDOFF_BOOKMARK_TTL_MS - 1 }
+    localStorage.setItem("interrelated.handoff", JSON.stringify(stale))
+    expect(makeClient().storedHandoff()).toBeNull()
+    expect(localStorage.getItem("interrelated.handoff")).toBeNull() // gone, not merely ignored
+    expect(calls).toHaveLength(0)
+
+    // Just inside the window it is still worth a probe.
+    const fresh = { conversationId: "con_new", panelOpen: true, at: Date.now() - HANDOFF_BOOKMARK_TTL_MS + 1000 }
+    localStorage.setItem("interrelated.handoff", JSON.stringify(fresh))
+    expect(makeClient().storedHandoff()).toEqual({ conversationId: "con_new", panelOpen: true })
+
+    // Storage on the customer's origin is writable by anything on the page:
+    // shapes that are not a bookmark are no bookmark, never a throw.
+    for (const junk of ["not json", "42", "null", JSON.stringify({ conversationId: 7, at: 1 }), JSON.stringify({ at: 1 })]) {
+      localStorage.setItem("interrelated.handoff", junk)
+      expect(makeClient().storedHandoff()).toBeNull()
+    }
+  })
+
+  it("treats a 400 for the ticket as nothing-to-rejoin, not as an outage to retry", async () => {
+    // Only a tampered bookmark can produce this (an id from `meta` is
+    // well-formed by construction), and a reconnect loop arguing with a 400
+    // forever is exactly what a bounded rejoin exists to avoid.
+    script = [MINT_OK(), jsonResponse(400, { error: "invalid conversationId" })]
+    expect(await makeClient().handoffTicket("con_garbage")).toBeNull()
+  })
+  //#endregion
 })
 
 describe("ApiClient in strong mode (data-session-url, M7.3)", () => {

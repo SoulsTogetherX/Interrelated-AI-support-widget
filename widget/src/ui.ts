@@ -2,7 +2,7 @@
 import type { AnswerEvent } from "@shared/grounding/events"
 import { QuotaError, RateLimitError } from "./api"
 import type { WidgetClient } from "./api"
-import type { HandoffConnection, HandoffStatus } from "./handoff"
+import type { HandoffConnection, HandoffHandlers, HandoffStatus } from "./handoff"
 import { MAX_HANDOFF_MESSAGE_CHARS } from "@shared/handoff/protocol"
 import type { HandoffHistoryMessage } from "@shared/handoff/protocol"
 import { WIDGET_CSS } from "./styles"
@@ -13,6 +13,22 @@ interface MountOptions {
   title?: string
   accent?: string
 }
+//#endregion
+
+//#region Constants
+/**
+ * How long a page-load REJOIN (M7.4) may go unconfirmed before the widget
+ * gives up on it for this page. The live handoff's reconnect loop is
+ * unbounded on purpose (handoff.ts — a waiting visitor must never be left
+ * with a dead panel), but a rejoin that the server has not yet confirmed
+ * has shown the visitor nothing, so giving up costs nothing visible: the
+ * bookmark is KEPT for the next page, and asking a question meanwhile still
+ * catches up through the pipeline's `handoff` event. What the bound buys is
+ * the case where the mint itself keeps failing — a signed-out user in
+ * strong mode, say — which would otherwise poll the customer's endpoint at
+ * the loop's ceiling for as long as the tab is open.
+ */
+const REJOIN_TIMEOUT_MS = 60_000
 //#endregion
 
 //#region DOM helpers
@@ -130,6 +146,22 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
    *  the socket, and the bot is not consulted at all (§3.23 keeps it quiet
    *  server-side too — this is the same rule enforced twice, on purpose). */
   let handoff: HandoffConnection | null = null
+  /**
+   * A stored handoff being REJOINED at page load (M7.4), until the server
+   * confirms it still exists. While set, `handoff` is the probing socket
+   * and NOTHING about it is rendered — no status line, no composer switch,
+   * and the composer still talks to the bot — because a bookmark can be
+   * stale (the agent closed the conversation while the visitor was away),
+   * and "the support chat has ended" must not appear on a page the visitor
+   * never escalated from. `panelOpen` is what to restore on confirmation;
+   * `timer` is the give-up bound (REJOIN_TIMEOUT_MS).
+   */
+  let rejoining: { panelOpen: boolean; timer: ReturnType<typeof setTimeout> } | null = null
+  /** The handoff status line above the log, when one is on screen. ONE at
+   *  a time: a new handoff replaces the previous one's, or "the support
+   *  chat has ended" from an earlier escalation would sit above "Waiting
+   *  for someone to join…". */
+  let statusBar: HTMLElement | null = null
   /** The live "Talk to a person" offer, if one is on screen. One at a time:
    *  a second refusal must not stack a second button. */
   let offer: HTMLElement | null = null
@@ -144,22 +176,51 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
   function notice(text: string): void {
     scrolledAppend(el("div", "msg notice", text))
   }
+
+  function isOpen(): boolean {
+    return root.classList.contains("open")
+  }
   //#endregion
 
   //#region Open / close
-  bubble.addEventListener("click", () => {
-    root.classList.toggle("open")
-    if (!root.classList.contains("open")) return
-    input.focus()
+  /**
+   * The one place the panel opens or closes, whether by the visitor's click
+   * or by a rejoin restoring what they had. Opening clears the unread badge
+   * and greets once — but NOT after a rejoin, which sets `greeted` itself:
+   * the transcript replayed over the log is the greeting there, and a "Hi!
+   * Ask me anything" appended under an agent's last message would read as
+   * the bot interrupting.
+   */
+  function setOpen(open: boolean): void {
+    root.classList.toggle("open", open)
+    if (!open) return
+    markUnread(false)
     if (!greeted) {
       greeted = true
       scrolledAppend(el("div", "msg assistant", "Hi! Ask me anything about the docs."))
     }
+  }
+
+  /** The bubble's badge: an agent wrote while the panel was closed. */
+  function markUnread(unread: boolean): void {
+    bubble.classList.toggle("unread", unread)
+    bubble.setAttribute("aria-label", unread ? "Open support chat — new message" : "Open support chat")
+  }
+
+  bubble.addEventListener("click", () => {
+    const open = !isOpen()
+    setOpen(open)
+    touchBookmark()
+    if (!open) return
+    input.focus()
     // Fire-and-forget: minting at open is the DB-warming handshake, and a
     // transient failure here must not block typing — ask() re-mints anyway.
     client.ensureSession().catch(() => {})
   })
-  closeButton.addEventListener("click", () => root.classList.remove("open"))
+  closeButton.addEventListener("click", () => {
+    setOpen(false)
+    touchBookmark()
+  })
   //#endregion
 
   //#region Handoff
@@ -170,7 +231,10 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
    * never twice at once.
    */
   function offerEscalation(): void {
-    if (handoff !== null || offer !== null || conversationId === undefined) return
+    // A rejoin still probing does not count as a person owning the thread:
+    // if it confirms, the replayed backlog wipes the offer with the rest of
+    // the log; if it was stale, the visitor still has their button.
+    if ((handoff !== null && rejoining === null) || offer !== null || conversationId === undefined) return
     const wrap = el("div", "offer")
     const button = el("button", "escalate", "Talk to a person")
     button.type = "button"
@@ -202,42 +266,149 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
   /**
    * Switches the panel from the bot to the socket. Reached two ways: the
    * button above, and a `handoff` answer event — which is how a tab that
-   * did NOT click catches up (another tab escalated, or the page was
-   * reloaded mid-handoff). Both land here, which is why it is idempotent.
+   * did NOT click catches up (another tab escalated, or the visitor asked
+   * again after a rejoin was abandoned). Both land here, which is why it is
+   * idempotent — including against a rejoin still in flight, whose socket
+   * is `handoff` already and will confirm on its own.
    */
   function enterHandoff(initial: HandoffStatus): void {
     if (handoff !== null || conversationId === undefined) return
+    showHandoffChrome(initial)
+    handoff = client.openHandoff(conversationId, socketHandlers())
+    touchBookmark()
+  }
+
+  /** The visible half of a handoff: the status line and the socket's
+   *  composer. Split from enterHandoff because a REJOIN shows it only once
+   *  the server has confirmed there is a handoff to show (below). */
+  function showHandoffChrome(initial: HandoffStatus): void {
+    statusBar?.remove()
     const bar = el("div", "status", HANDOFF_STATUS[initial])
     bar.setAttribute("role", "status")
     // Above the log, not in it: a status that scrolls away is a status a
     // waiting visitor cannot check. It deliberately SURVIVES leaveHandoff,
     // so "the chat ended" stays readable.
     panel.insertBefore(bar, log)
+    statusBar = bar
     // The socket's cap, mirrored in the input: a refusal the visitor can
     // see coming beats one the server delivers after they hit send.
     input.maxLength = MAX_HANDOFF_MESSAGE_CHARS
     input.placeholder = "Message the team…"
+  }
 
-    handoff = client.openHandoff(conversationId, {
+  /**
+   * The socket's callbacks — one set for a handoff entered here and for
+   * one rejoined at page load, because after confirmation they ARE the same
+   * handoff. The rejoin differs only in its first status: nothing is drawn
+   * until the server says the handoff exists (`waiting` or `connected`,
+   * which the socket derives from `ready`), and `ended` before that means
+   * the bookmark was stale — forgotten silently, with the widget left
+   * exactly as a page without a bookmark, since the visitor never saw a
+   * handoff on this page to be told the end of.
+   */
+  function socketHandlers(): HandoffHandlers {
+    return {
       onStatus: (status) => {
-        bar.textContent = HANDOFF_STATUS[status]
-        if (status === "ended") leaveHandoff()
+        if (rejoining !== null) {
+          if (status === "connecting") return
+          const { panelOpen, timer } = rejoining
+          clearTimeout(timer)
+          rejoining = null
+          if (status === "ended") {
+            handoff = null
+            conversationId = undefined
+            client.forgetHandoff()
+            return
+          }
+          // Confirmed: draw what a page that never left would be showing.
+          greeted = true
+          showHandoffChrome(status)
+          if (panelOpen) setOpen(true)
+        }
+        if (statusBar !== null) statusBar.textContent = HANDOFF_STATUS[status]
+        if (status === "ended") {
+          leaveHandoff()
+          return
+        }
+        // Every attach and reconnect re-stamps the bookmark: its expiry is
+        // measured from the last touch, so a long conversation with the
+        // panel left alone never expires under the visitor.
+        touchBookmark()
       },
       onHistory: renderTranscript,
-      onMessage: renderHandoffMessage,
+      onMessage: (message) => {
+        renderHandoffMessage(message)
+        // A person wrote while the panel was closed — the one thing worth a
+        // badge. The visitor's own echo (another tab) and the replayed
+        // backlog are not news.
+        if (!isOpen() && message.role !== "visitor") markUnread(true)
+      },
       onTyping: showComposing,
-    })
+    }
+  }
+
+  /** The bookmark's one writer: the live handoff and how the panel stands.
+   *  A no-op outside a confirmed handoff, so the bot's conversations are
+   *  never bookmarked (api.ts says why). */
+  function touchBookmark(): void {
+    if (handoff === null || rejoining !== null || conversationId === undefined) return
+    client.rememberHandoff(conversationId, isOpen())
   }
 
   /** The handoff closed: the bot owns the conversation again — which is
    *  literally true server-side (§3.23's getOpenHandoff stops finding one,
-   *  so the pipeline answers), so the composer goes back to asking. */
+   *  so the pipeline answers), so the composer goes back to asking, and the
+   *  bookmark goes with it — the next page starts fresh. */
   function leaveHandoff(): void {
     handoff?.close()
     handoff = null
+    client.forgetHandoff()
     showComposing(false)
     input.maxLength = 2000
     input.placeholder = "Ask a question…"
+  }
+
+  /**
+   * Page load, with a bookmark (M7.4): open the socket for the stored
+   * conversation and let its own ticket mint be the probe — a reconnect
+   * loop with backoff is exactly the right thing to point at "is this
+   * handoff still there?", since a transient failure retries and the
+   * server's `null` is terminal. Nothing is drawn until `ready` (see
+   * socketHandlers), and the attempt is bounded by REJOIN_TIMEOUT_MS. The
+   * conversation id is adopted at once so a question typed during the
+   * probe lands in the same thread — where the pipeline answers with the
+   * `handoff` event if a person owns it, which enterHandoff turns into the
+   * same confirmation.
+   */
+  function rejoinStoredHandoff(): void {
+    const stored = client.storedHandoff()
+    if (stored === null) return
+    conversationId = stored.conversationId
+    rejoining = {
+      panelOpen: stored.panelOpen,
+      timer: setTimeout(abandonRejoin, REJOIN_TIMEOUT_MS),
+    }
+    handoff = client.openHandoff(stored.conversationId, socketHandlers())
+  }
+
+  /**
+   * The server never confirmed inside the window: stop probing on THIS
+   * page and keep the bookmark for the next one. The conversation id is
+   * kept too — deliberately the opposite of the stale case above, where the
+   * server REFUSED it — so a question asked once the outage clears still
+   * lands in the thread a person may own, and the `handoff` event catches
+   * the visitor up on a fresh socket. (The price, stated: if the id was
+   * never this visitor's — a shared computer where the previous user's
+   * bookmark met an outage at load — their questions on this page get the
+   * opaque error until a reload, whose probe then settles it. Two rare
+   * things at once, against the common outage where a kept id is what
+   * makes the recovery automatic.)
+   */
+  function abandonRejoin(): void {
+    if (rejoining === null) return
+    rejoining = null
+    handoff?.close()
+    handoff = null
   }
 
   /**
@@ -285,11 +456,14 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
     event.preventDefault()
     const text = input.value.trim()
     if (text.length === 0) return
-    if (handoff !== null) {
+    if (handoff !== null && rejoining === null) {
       // Nothing is rendered here: the server broadcasts every message back
       // to its sender (§2.4.7), so the echo is the render — one order from
       // one source of truth, and no local copy to reconcile with the
-      // replay. A refused send keeps the text in the box.
+      // replay. A refused send keeps the text in the box. (During an
+      // unconfirmed rejoin the question goes to the BOT under the stored
+      // conversation id instead — where a person owning the thread answers
+      // as the `handoff` event, and the question is persisted for them.)
       if (!handoff.send(text)) {
         notice(FALLBACKS.unsent)
         return
@@ -387,6 +561,11 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
     }
   }
   //#endregion
+
+  // Last, once everything above is wired: a page that left mid-handoff
+  // picks it back up. Fire-and-forget by construction — nothing here waits
+  // on the network, and a page with no bookmark does not touch it.
+  rejoinStoredHandoff()
 }
 //#endregion
 

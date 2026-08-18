@@ -39,6 +39,47 @@ interface WidgetClient {
    * answers, now injecting a scripted socket too.
    */
   openHandoff(conversationId: string, handlers: HandoffHandlers): HandoffConnection
+  /**
+   * Remember that a person owns `conversationId`, so that a page RELOAD —
+   * or a click to the next page of the customer's site, which is the same
+   * event to a widget that lives one page at a time — rejoins the handoff
+   * instead of starting a new conversation (M7.4). Until this existed the
+   * conversation id lived in memory only, and a visitor who clicked a docs
+   * link while waiting for an agent lost the thread; the agent's replies
+   * then landed in a room the visitor was no longer in. `panelOpen` is
+   * whatever the visitor last had, restored with it: a panel they left open
+   * comes back open, one they closed stays closed (and badges).
+   *
+   * Only ever written while a handoff is LIVE — the bot's conversations are
+   * deliberately not bookmarked. Rejoining a bot thread would continue a
+   * conversation the widget has no way to show (the transcript arrives only
+   * over the socket, on attach), and the bot's answers do not depend on
+   * earlier turns; a handoff is the one state where a page change loses
+   * something a person on the other end is waiting on.
+   */
+  rememberHandoff(conversationId: string, panelOpen: boolean): void
+  /** The handoff ended, or the server said there is nothing to rejoin. */
+  forgetHandoff(): void
+  /**
+   * The handoff to rejoin at page load, if a fresh bookmark exists. A
+   * storage read and NOTHING else — no request is spent until the UI opens
+   * the socket, and a page load without a bookmark costs nothing at all.
+   * A bookmark past HANDOFF_BOOKMARK_TTL_MS is dropped here rather than
+   * probed: the server is the truth about whether the handoff is open (a
+   * ticket mint answers that), but a bookmark nobody has touched in a day
+   * is not worth a mint on every page for the rest of time — that is the
+   * "expiry" DATAFLOW §8.5 said this needed. The recovery path for a stale
+   * bookmark INSIDE the window is the socket's own: its first ticket mint
+   * comes back null and the UI forgets it (ui.ts).
+   */
+  storedHandoff(): StoredHandoff | null
+}
+
+/** What a page load finds to rejoin: the conversation, and whether the
+ *  panel was open when the visitor last saw it. */
+interface StoredHandoff {
+  conversationId: string
+  panelOpen: boolean
 }
 
 /**
@@ -96,6 +137,72 @@ function saveVisitor(id: string): void {
     localStorage.setItem(VISITOR_KEY, id)
   } catch {
     // Degraded mode — see above.
+  }
+}
+
+/**
+ * The handoff bookmark (M7.4): the conversation a person currently owns,
+ * kept beside the visitor id under the same guard, so the next page load
+ * can rejoin it. `at` is the last time the widget touched it — written on
+ * entering the handoff, on every attach, and on every panel toggle — and
+ * is what the TTL below is measured from.
+ *
+ * Deliberately NOT in the bookmark: the visitor id. In the default mode it
+ * is already stored beside this and travels with the mint; in strong mode
+ * it is the customer's own user id, which api.ts refuses to persist (§8.1
+ * — a stored copy would only be sent back on some later publishable-key
+ * mint that refuses it). Ownership is the server's check anyway: a ticket
+ * mint for a conversation that is not this visitor's answers 404, and the
+ * bookmark is dropped — the same recovery path as a closed handoff, so
+ * user B signing in on user A's browser gets nothing but one refused
+ * probe. Nor the token: a session is re-minted on the next page as it
+ * always was (one POST, the same handshake bubble-open makes), which is
+ * what keeps strong mode's "only signed-in users" true across pages — a
+ * cached token would outlive a sign-out by up to thirty minutes.
+ */
+const HANDOFF_KEY = "interrelated.handoff"
+/** How long a bookmark stays worth a probe. A day: an escalation left
+ *  overnight still rejoins in the morning; a page load a week later does
+ *  not spend a mint asking. Measured from the last touch, not the first,
+ *  so a long live conversation never expires under the visitor. */
+const HANDOFF_BOOKMARK_TTL_MS = 24 * 60 * 60 * 1000
+
+interface HandoffBookmark extends StoredHandoff {
+  at: number
+}
+
+function loadHandoffBookmark(): HandoffBookmark | null {
+  try {
+    const raw = localStorage.getItem(HANDOFF_KEY)
+    if (raw === null) return null
+    // Shape-checked, because this is storage on the customer's origin and
+    // anything on that page can write it: a bookmark that is not ours is
+    // no bookmark. The conversation id's own shape is the SERVER's to
+    // judge (a malformed one gets a 400 and the socket treats that as
+    // "nothing to rejoin" — see handoffTicket).
+    const parsed = JSON.parse(raw) as Partial<HandoffBookmark> | null
+    if (parsed === null || typeof parsed !== "object") return null
+    if (typeof parsed.conversationId !== "string" || typeof parsed.at !== "number") return null
+    return { conversationId: parsed.conversationId, panelOpen: parsed.panelOpen !== false, at: parsed.at }
+  } catch {
+    return null
+  }
+}
+
+function saveHandoffBookmark(bookmark: HandoffBookmark): void {
+  try {
+    localStorage.setItem(HANDOFF_KEY, JSON.stringify(bookmark))
+  } catch {
+    // Degraded mode: the handoff works for this page load and is simply
+    // not rejoined on the next — the same story as the visitor id.
+  }
+}
+
+function clearHandoffBookmark(): void {
+  try {
+    localStorage.removeItem(HANDOFF_KEY)
+  } catch {
+    // Nothing to clear where nothing could be written.
   }
 }
 //#endregion
@@ -233,11 +340,37 @@ class ApiClient implements WidgetClient {
   async handoffTicket(conversationId: string): Promise<string | null> {
     const response = await this.#authed("/v1/widget/handoff-ticket", { conversationId })
     // 404 is "no open handoff for this visitor" — which, after a successful
-    // escalate, means it was CLOSED: the one answer worth not retrying.
-    if (response.status === 404) return null
+    // escalate, means it was CLOSED: the one answer worth not retrying. 400
+    // is "that is not even a conversation id", which can only come from a
+    // tampered bookmark (M7.4 — the id from a `meta` event is well-formed by
+    // construction); it is the same terminal answer, because no retry will
+    // make the id well-formed and a reconnect loop arguing with a 400
+    // forever would be the failure mode a bounded rejoin exists to avoid.
+    if (response.status === 404 || response.status === 400) return null
     if (!response.ok) throw new Error(`handoff ticket failed (${response.status})`)
     const body = await response.json() as { ticket: string }
     return body.ticket
+  }
+
+  rememberHandoff(conversationId: string, panelOpen: boolean): void {
+    saveHandoffBookmark({ conversationId, panelOpen, at: Date.now() })
+  }
+
+  forgetHandoff(): void {
+    clearHandoffBookmark()
+  }
+
+  storedHandoff(): StoredHandoff | null {
+    const bookmark = loadHandoffBookmark()
+    if (bookmark === null) return null
+    if (Date.now() - bookmark.at > HANDOFF_BOOKMARK_TTL_MS) {
+      // Past the window: not probed, not kept. (A bookmark stamped in the
+      // FUTURE by a clock that jumped reads as fresh here and is settled by
+      // the server like any other — this check bounds cost, not truth.)
+      clearHandoffBookmark()
+      return null
+    }
+    return { conversationId: bookmark.conversationId, panelOpen: bookmark.panelOpen }
   }
 
   openHandoff(conversationId: string, handlers: HandoffHandlers): HandoffConnection {
@@ -284,6 +417,6 @@ class ApiClient implements WidgetClient {
 //#endregion
 
 //#region Exports
-export { ApiClient, QuotaError, RateLimitError }
-export type { WidgetClient, ApiClientOptions }
+export { ApiClient, QuotaError, RateLimitError, HANDOFF_BOOKMARK_TTL_MS }
+export type { WidgetClient, ApiClientOptions, StoredHandoff }
 //#endregion

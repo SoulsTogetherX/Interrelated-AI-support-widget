@@ -68,7 +68,13 @@ from the origin allowlist to the socket's single-use ticket, the internal
 API's SSRF vet and credential read-back denial behind a throwaway secret —
 plus nine poisoned pages in the retrieved context whose containment is
 asserted and whose relay is reported, all merge-blocking in the e2e job.
-**M6 COMPLETE — every milestone in the plan is.**
+**M6 COMPLETE — every milestone in the plan is.** M7 is the plan's own
+trust-model section and the README's named gaps, taken in order of size:
+one-click key rotation with a grace window (§7.12), traffic by origin
+(§7.13), the secret key and the server-minted session (§5.5, §7.14) — with
+which the trust model is built in full — and, as of M7.4, a handoff that
+survives a page load (§8.5): a bookmark whose staleness the server settles,
+so the next page rejoins the socket and draws nothing until it is confirmed.
 
 ---
 
@@ -1460,14 +1466,78 @@ ask() → {type:"handoff", status}               (§8.2: a person owns it)
   → enterHandoff(status)
 ```
 
-That is how a second tab, or a tab that reloaded, catches up. **The honest
-limit:** the widget keeps its conversation id in memory only, so a RELOAD
-starts a new conversation rather than rejoining the handoff — the visitor
-would have to ask once more to be told a person owns the thread. Replay
-therefore serves reconnects within a page load and the agent arriving
-mid-conversation, both of which are real; resuming across a reload needs a
-stored conversation id with an expiry and a recovery path for a stale one,
-and is named as future work rather than half-built.
+That is how a second tab catches up, and how a visitor whose rejoin was
+abandoned (below) still gets back in by asking.
+
+**Across a page load (M7.4).** A widget lives one page at a time, so to it a
+reload and a click to the next docs page are the same event — and until M7.4
+both lost the handoff: the conversation id lived in memory, the next page
+started a new conversation, and the agent's replies landed in a room the
+visitor was no longer in. Now the LIVE handoff is bookmarked and the next
+page rejoins it. The bookmark is written only while a person owns the thread
+(the bot's conversations are never bookmarked — nobody is waiting on them,
+and the widget could not show a rejoined bot thread anyway, since the
+transcript arrives only over the socket):
+
+```
+enterHandoff / a panel toggle / every attach   widget/src/ui.ts touchBookmark
+  → client.rememberHandoff(conversationId, panelOpen)     api.ts
+      localStorage["interrelated.handoff"] = {conversationId, panelOpen, at}
+      (guarded like the visitor id: Safari private mode = no bookmark, and
+       the handoff simply is not rejoined on the next page)
+leaveHandoff (`ended`, `closed`)  → client.forgetHandoff()  → removed
+```
+
+The next page load, before anything is drawn:
+
+```
+mountWidget → rejoinStoredHandoff()                        ui.ts
+  → client.storedHandoff()                                 api.ts
+      no bookmark               → null: NOTHING happens, no request at all
+      older than 24 h (at)      → dropped, null: not worth a mint on every
+                                  page for the rest of time
+      otherwise                 → {conversationId, panelOpen}
+  → conversationId adopted; rejoining = {panelOpen, 60 s timer}
+  → handoff = client.openHandoff(conversationId, handlers)
+      the socket's OWN first ticket mint is the probe (the connect path
+      above): a reconnect loop with backoff is exactly the right thing to
+      point at
+      "is this handoff still there?" — transient failure retries, and the
+      server's answer is terminal either way
+  → the socket reports:
+      "connecting"        → ignored (nothing drawn)
+      "ended"             → the ticket route said 404: closed while the
+                            visitor was away, or never theirs (a shared
+                            computer). Forgotten silently; conversation id
+                            dropped; the page is now exactly one that had no
+                            bookmark — no "the support chat has ended" on a
+                            page the visitor never escalated from
+      "waiting"/"connected" (from `ready`) → CONFIRMED: status line drawn,
+                            composer switched to the socket, `greeted` set
+                            (the transcript is the greeting), the panel
+                            re-opened iff panelOpen — without stealing focus
+                            — and the bookmark re-stamped
+      history             → replaces the log, as always
+  → 60 s with no confirmation → the probe is closed and the bookmark KEPT
+    (the next page tries again); the conversation id is kept too, so a
+    question asked once the outage clears lands in the thread a person may
+    own and the `handoff` event catches the visitor up
+```
+
+Two costs, stated. A visitor mid-handoff spends one session mint and one
+ticket mint per page load — the same handshake bubble-open makes, and per-IP
+bounded like it (10 mints a minute; a rejoin that meets the bucket retries
+inside the socket's backoff). And in strong mode the mint goes back through
+the customer's endpoint, so a signed-out user's stale bookmark is a
+60-second poll of that endpoint at the loop's ceiling, then silence — which
+is what the bound is for. Between the two states a question typed during the
+probe goes to the BOT under the stored id: a person owning the thread answers
+as `handoff`, which enterHandoff leaves to the socket already probing (one
+socket, never two).
+
+While the panel is closed and a person writes, the bubble carries an unread
+badge (one class, one `::after`); opening clears it. The replayed backlog and
+the visitor's own echo from another tab are not news and never badge.
 
 ### §8.6 The agent's end (M4.5)
 

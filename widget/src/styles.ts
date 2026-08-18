@@ -24,12 +24,20 @@ const WIDGET_CSS = `
   --accent: var(--ir-accent, #4f46e5);
 }
 .bubble {
+  position: relative;
   width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
   background: var(--accent); color: #fff; display: grid; place-items: center;
   box-shadow: 0 4px 14px rgba(0,0,0,.25); margin-left: auto;
 }
 .bubble:hover { filter: brightness(1.08) }
 .bubble svg { width: 26px; height: 26px; fill: currentColor }
+/* A person wrote while the panel was closed (M7.4). Drawn in CSS off one
+   class so the badge costs no DOM; the white ring keeps it legible on any
+   accent a host chooses. */
+.bubble.unread::after {
+  content: ""; position: absolute; top: 2px; right: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: #e5484d; border: 2px solid #fff;
+}
 .panel {
   display: none; flex-direction: column; overflow: hidden;
   width: 360px; max-width: calc(100vw - 40px); height: 520px; max-height: calc(100vh - 96px);

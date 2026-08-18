@@ -59,7 +59,15 @@ export default async function WidgetPage({
     `        data-key="${publishableKey ?? "YOUR-PUBLISHABLE-KEY"}"\n` +
     `        data-api="${apiForSnippet}"\n` +
     `        data-title="${org.name} Support"></script>`
-  const csp = `connect-src ${apiForSnippet}; script-src ${apiForSnippet};`
+  // connect-src names the API host TWICE — as https:// for the fetches and
+  // as wss:// for the handoff socket — because CSP's scheme matching only
+  // ever goes http→https, never http→ws (CSP3 §6.7.2.6): a directive that
+  // lists only the https origin lets chat work and silently blocks the
+  // human handoff, which is what a rejoin on the hostile fixture showed
+  // (M7.4). The socket URL is the api URL with its scheme swapped
+  // (widget/src/handoff.ts), so this is derived, not a second setting.
+  const socketForSnippet = apiForSnippet.replace(/^https:/, "wss:").replace(/^http:/, "ws:")
+  const csp = `connect-src ${apiForSnippet} ${socketForSnippet}; script-src ${apiForSnippet};`
   // Strong mode (layer 6, §9.19): the customer's server mints the session,
   // and the snippet names the endpoint on THEIR site that hands it over —
   // no publishable key on the page at all. The origin in the recipe is the
@@ -239,10 +247,15 @@ export default async function WidgetPage({
       <section className="install-card">
         <h2 className="install-cardtitle">3. If your site sends a CSP</h2>
         <p className="install-note">
-          Two directives, and only these two. The widget&apos;s styles ride{" "}
-          <code>adoptedStyleSheets</code>, which CSP does not govern, so no{" "}
-          <code>style-src</code> entry is needed — a claim we test against a
-          fixture page whose CSP deliberately withholds one.
+          Two directives, and only these two. The API host appears twice in{" "}
+          <code>connect-src</code> on purpose: once for the widget&apos;s
+          requests and once as <code>wss://</code> for the socket that carries
+          a human handoff — a CSP that lists only the <code>https://</code>{" "}
+          origin lets chat work and silently blocks the handoff. The
+          widget&apos;s styles ride <code>adoptedStyleSheets</code>, which CSP
+          does not govern, so no <code>style-src</code> entry is needed — a
+          claim we test against a fixture page whose CSP deliberately
+          withholds one.
         </p>
         <pre className="install-snippet">{csp}</pre>
         <CopyButton text={csp} label="Copy directives" />

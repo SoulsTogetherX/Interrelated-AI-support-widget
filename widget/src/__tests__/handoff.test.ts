@@ -72,6 +72,9 @@ function fakeClient(tickets: Array<string | null | Error>): WidgetClient {
       return Promise.resolve(next ?? null)
     },
     openHandoff: () => { throw new Error("not used") },
+    rememberHandoff: () => { throw new Error("not used") },
+    forgetHandoff: () => { throw new Error("not used") },
+    storedHandoff: () => { throw new Error("not used") },
   } as WidgetClient
 }
 
@@ -302,5 +305,36 @@ describe("HandoffSocket", () => {
     socket.drop() // the close event a real socket fires on the way out
     vi.advanceTimersByTime(60_000)
     expect(FakeSocket.live).toHaveLength(1)
+  })
+
+  it("reports nothing after close(), even when the mint in flight comes back null", async () => {
+    // A rejoin the widget gave up on (M7.4) closes the socket while its
+    // ticket mint may still be pending. If that mint then answers "no open
+    // handoff", the answer is nobody's business: a status reported after
+    // close() would land on a UI that has already moved on — here, it would
+    // make an abandoned rejoin forget a bookmark it meant to keep.
+    let answer!: (ticket: string | null) => void
+    const pending = new Promise<string | null>((resolve) => { answer = resolve })
+    const statuses: HandoffStatus[] = []
+    const socket = new HandoffSocket({
+      apiBase: "https://api.test",
+      conversationId: "con_1",
+      client: { ...fakeClient([]), handoffTicket: () => pending },
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+      handlers: {
+        onStatus: (status) => statuses.push(status),
+        onHistory: () => {},
+        onMessage: () => {},
+        onTyping: () => {},
+      },
+    })
+    socket.open()
+    expect(statuses).toEqual(["connecting"])
+    socket.close()
+    answer(null)
+    await pending
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(statuses).toEqual(["connecting"])
+    expect(FakeSocket.live).toHaveLength(0)
   })
 })

@@ -110,8 +110,44 @@ scrolling inside its own box. The probe's new section [I] found one bug of
 its own on its first run — its CONTROL consumed the response body inside a
 failure message and then failed to parse it — recorded in §6.3 beside the
 two M6.4 recorded, because that is the tradition.
-Remaining in M7: the README's other named gaps — resuming a handoff across a
-page reload, robots.txt, and file uploads (with them, PDF parsing). M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+M7.4 is done — **a handoff that survives a page load** (§8.1, §8.1c, §8.3,
+DATAFLOW §8.5). A widget lives one page at a time, so a reload and a click
+to the next docs page are the same event to it, and until now both lost the
+handoff: the conversation id lived in memory, and the agent's replies landed
+in a room the visitor was no longer in. Now the LIVE handoff is bookmarked
+in localStorage — conversation, whether the panel was open, and a timestamp;
+never the token, never the visitor id, never a bot conversation — and the
+next page rejoins it through the socket's own reconnect loop, whose first
+ticket mint IS the probe. Nothing is drawn until the server confirms
+(`ready`): a bookmark for a conversation the agent closed while the visitor
+was away is forgotten silently and the page is left exactly as one that had
+no bookmark, so "the support chat has ended" never appears on a page nobody
+escalated from. Once confirmed, the status line, the socket's composer, and
+the panel come back as they were (no greeting over the transcript, no focus
+stolen), the backlog replays, and a person writing while the panel is closed
+badges the bubble. Bounded twice: a bookmark untouched for 24 hours is
+dropped without a request, and an unconfirmed rejoin gives up after 60
+seconds keeping the bookmark for the next page (the case where the mint
+itself keeps failing — a signed-out user in strong mode — would otherwise
+poll the customer's endpoint for as long as the tab is open). Verified live
+in a real browser with the dashboard inbox as the agent: escalate on the
+Tailwind fixture, reload → the panel back in handoff mode with the
+transcript, one mint and one ticket per page load; the agent attaching and
+replying; a click to the Bootstrap fixture → rejoined with the agent's
+message; the panel closed and the page reloaded → closed but connected, the
+agent's next message raising the badge, opening clearing it; the agent
+closing → "ended" and the bookmark gone, the next reload spending no request
+at all; a stale bookmark → one mint, one 404, nothing drawn; an expired one
+→ dropped without a request. The same check on the HOSTILE fixture found a
+pre-existing gap: its strict CSP listed `connect-src http://localhost:3000`
+only, and Chrome refused the `ws://` upgrade — CSP's scheme matching goes
+http→https, never http→ws — so a handoff on a locked-down host had never
+worked; the fixture and the Install page's directive now name the socket
+origin too (§8.4, §9.11). The bundle is 6.52 KB gzipped against the 15 KB
+budget. Nothing server-side changed: the ticket route's 404 and the
+socket's replay-on-attach were already the whole of what a rejoin needs.
+Remaining in M7: the README's other named gaps — robots.txt, and file
+uploads (with them, PDF parsing). M6.1 is done — the security probe (§6.3, §3.27, §4.4,
 DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
 across the trust model's layers — origin allowlist and CORS posture, key
 state (a revoked key byte-identical to an unknown one), token tamper and
@@ -340,10 +376,10 @@ before it broadcasts) below ~100 messages/second, and a knee between 200
 and 250 msg/s whose arithmetic points at the 5-connection pool rather than
 at the socket layer. The write-up records two harness bugs that produced
 wrong numbers first, because a load result nobody can reproduce or
-criticize is a claim rather than a measurement. One thing is recorded
-honestly rather than half-built: resuming a handoff across a page RELOAD
-(the widget keeps its conversation id in memory only; DATAFLOW §8.5 states
-what that costs).
+criticize is a claim rather than a measurement. One thing was recorded
+honestly rather than half-built at the time: resuming a handoff across a
+page RELOAD (the widget kept its conversation id in memory only). M7.4 has
+since built it — §8.1's bookmark and §8.1c's rejoin, DATAFLOW §8.5.
 
 ---
 
@@ -3056,6 +3092,38 @@ lives here rather than in ui.ts so the UI keeps knowing nothing about
 network configuration; it is the same seam that lets DOM tests inject
 scripted answers, now injecting a scripted socket.
 
+**M7.4 — the handoff bookmark.** Three more members on the same client:
+`rememberHandoff(conversationId, panelOpen)`, `forgetHandoff()`, and
+`storedHandoff()`. The bookmark lives beside the visitor id under the same
+localStorage guard, and holds exactly three things — the conversation, how
+the visitor left the panel, and `at`, the last time the widget touched it.
+What it deliberately does NOT hold decides its safety. Not the token: a
+session is re-minted on the next page as it always was (one POST, the same
+handshake bubble-open makes), which is what keeps strong mode's "only
+signed-in users" true across pages — a cached token would outlive a
+sign-out by up to thirty minutes. Not the visitor id: in the default mode it
+is already stored beside this, and in strong mode it is the customer's own
+user id, which this file refuses to persist; ownership is the server's check
+anyway (a ticket mint for a conversation that is not this visitor's answers
+404 and the bookmark is dropped — the same recovery path as a closed
+handoff, so user B signing in on user A's browser gets one refused probe and
+nothing else). And never a bot conversation: only the UI's live handoff
+writes it (§8.1c's `touchBookmark`), because rejoining a bot thread would
+continue a conversation the widget has no way to show — the transcript
+arrives only over the socket — and nobody is waiting on it. `storedHandoff`
+is a storage read and nothing else: no request until the UI opens the
+socket, and a page with no bookmark costs nothing. It drops a bookmark older
+than `HANDOFF_BOOKMARK_TTL_MS` (24 h, measured from the last touch, so a
+long live conversation never expires under the visitor) rather than probing
+it — the "expiry" DATAFLOW §8.5 said this needed; the recovery for a stale
+bookmark INSIDE the window is the socket's own null ticket. Storage on the
+customer's origin is writable by anything on the page, so the value is
+shape-checked (junk is no bookmark, never a throw), and the id's own shape
+is the SERVER's to judge: `handoffTicket` now treats a 400 like a 404 —
+nothing to rejoin — because a tampered id is the only way to get one and a
+reconnect loop arguing with a 400 forever is precisely what a bounded rejoin
+exists to avoid.
+
 ### §8.1b `src/handoff.ts`
 The visitor's end of the handoff socket (§2.4.7) — sse.ts's sibling: the
 protocol is shared, the transport is not. It owns the one fact the UI
@@ -3069,7 +3137,15 @@ dies before authenticating has made no progress, and treating it as
 success is how a reconnect loop becomes a hot loop. The loop is
 unbounded, because giving up would leave a waiting visitor staring at a
 dead panel; it ends only on `close()` or on the null ticket that means
-the handoff is over. Composing hints are throttled here to the protocol's
+the handoff is over. (M7.4's page-load rejoin points this same loop at a
+stored conversation and bounds it from the OUTSIDE — §8.1c's 60-second
+timer — for the one case where the visitor has been shown nothing yet;
+the probe IS the loop. The class changed by one line for it: `#stopped`
+is now checked right after the ticket mint resolves, BEFORE the null case,
+so a socket closed while its mint was in flight reports nothing — a late
+"ended" would otherwise land on a UI that has moved on, and make an
+abandoned rejoin forget the bookmark it meant to keep.)
+Composing hints are throttled here to the protocol's
 refresh interval (the server floors them again at 250 ms — a client that
 honors the contract never meets that floor), and the incoming indicator's
 TTL timer lives here too: the RECEIVER expiring it is precisely why the
@@ -3099,6 +3175,54 @@ time (messages.content is visitor-facing text; the per-claim verdicts
 live in the dashboard, §9.10). A send that could not go returns false and
 the visitor's words stay in the box — a support message that silently
 vanished is worse than one that visibly did not send.
+
+**M7.4 — the rejoin.** A fourth entry point, taken at mount: if
+`client.storedHandoff()` finds a bookmark (§8.1), the UI adopts the
+conversation id, opens the socket for it, and sets `rejoining` — a state in
+which `handoff` is the probing socket and NOTHING is drawn: no status line,
+no composer switch, and the composer still talks to the bot. The socket's
+own first ticket mint is the probe, which is why there is no separate
+"is this still open?" request: a reconnect loop with backoff is exactly the
+right thing to point at that question — a transient failure retries, and the
+server's answer is terminal either way. `socketHandlers()` is one set of
+callbacks for a handoff entered here and one rejoined, because after
+confirmation they ARE the same handoff; the rejoin differs only in its first
+status. `ended` before confirmation means the bookmark was stale (the agent
+closed the conversation while the visitor was away, or it was never this
+visitor's): forgotten silently, conversation id dropped, and the page is left
+exactly as one that had no bookmark — "the support chat has ended" must not
+appear on a page nobody escalated from. `waiting`/`connected` (from `ready`)
+confirms: `showHandoffChrome` draws the status line and switches the
+composer, `greeted` is set (the replayed transcript is the greeting — a "Hi!
+Ask me anything" under an agent's last message would read as the bot
+interrupting), and the panel is re-opened iff the bookmark says the visitor
+had it open, through `setOpen`, which never steals focus (only the visitor's
+click does). The rejoin is bounded by `REJOIN_TIMEOUT_MS` (60 s): the live
+loop is unbounded on purpose (§8.1b), but an unconfirmed rejoin has shown
+the visitor nothing, so giving up costs nothing visible — the bookmark is
+KEPT for the next page and, unlike the stale case, so is the conversation
+id, so a question asked once an outage clears lands in the thread a person
+may own and the `handoff` event catches the visitor up on a fresh socket
+(the file states the price: a shared computer whose previous user's bookmark
+met an outage at load gets the opaque error until a reload). What the bound
+buys is the case where the mint itself keeps failing — a signed-out user in
+strong mode — which would otherwise poll the customer's endpoint at the
+loop's ceiling for as long as the tab is open. During the probe a question
+goes to the BOT under the stored id: a person owning the thread answers as
+`handoff`, which `enterHandoff` leaves to the socket already probing (its
+guard is `handoff !== null`; one socket, never two), and the escalation
+offer treats an unconfirmed rejoin as no handoff at all — if it confirms,
+the replayed backlog wipes the offer with the rest of the log. Two smaller
+things landed with it. `touchBookmark` is the bookmark's ONE writer — on
+entering, on every attach and reconnect (so a long conversation with the
+panel left alone never expires), and on every panel toggle — and a no-op
+outside a confirmed handoff, which is what keeps bot conversations out of
+storage. And a person writing while the panel is closed badges the bubble
+(one class, one `::after`, an aria-label that says "new message"); opening
+clears it; the replayed backlog and the visitor's own echo from another tab
+are not news. `statusBar` is now held rather than closed over so a handoff
+after the last one ended REPLACES the line instead of stacking under "the
+support chat has ended" — a wart the rejoin would have made routine.
 
 ### §8.2 `src/ui.ts` + `src/styles.ts`
 The rendering half, built on a three-line element factory with one iron
@@ -3159,12 +3283,46 @@ to the socket instead of the bot with unsent text kept, catching up on a
 to the assistant, and the XSS probe repeated for socket text — because
 agent prose is as attacker-reachable as model output.
 
+The rejoin (M7.4), on all three suites. handoff: a socket closed while its
+ticket mint is in flight reports nothing when that mint then answers null —
+no `ended`, no socket. api: the bookmark written and read back
+with no request spent (a page load without one costs nothing), holding
+exactly `conversationId`/`panelOpen`/`at` and nothing else; a bookmark past
+the TTL dropped from storage rather than probed while one just inside it
+is still offered; five junk shapes read as no bookmark; and a 400 for the
+ticket answered as null rather than thrown. ui, through the fake client's
+scripted `storedHandoff` and recorded bookmark writes: a handoff bookmarked
+on entering, following the panel's toggles, forgotten on ending — and a
+bot conversation never bookmarked at all; a stored handoff rejoined at
+mount with NOTHING drawn until `ready` (no status line, panel closed,
+composer the bot's, log empty, no bubble-open mint) and then the panel
+back open with the socket's composer, no greeting, the transcript replayed,
+and sends going to the socket; a bookmark saying the panel was closed
+keeping it closed while connected, the backlog and the visitor's own echo
+never badging, an agent's message badging the bubble, and opening clearing
+the badge without greeting over the transcript; a stale bookmark (`ended`
+before confirmation) forgotten silently with the page left as one that had
+no bookmark — greeting on open, the next question starting a NEW
+conversation; an unconfirmed rejoin closed at exactly the 60-second bound
+with the bookmark and the conversation id KEPT, and the next question
+catching up through `handoff` on a second socket; a question typed during
+the probe going to the bot under the stored id and the confirmation still
+landing on the ONE socket; and a handoff after the last one ended replacing
+the status line rather than stacking a second.
+
 ### §8.4 `fixtures/` + `scripts/serve.mjs`
 The three host pages the plan requires, each testing a distinct failure
 mode: Tailwind (preflight reset), Bootstrap (high-specificity components
 + a fixed navbar; also proves data-accent wins), and hostile —
 `* { all: unset }` plus a strict CSP whose every directive is explained
-in the page source (connect-src is the ONE thing customers must add;
+in the page source (connect-src is the ONE thing customers must add —
+and since M7.4 it names the API host TWICE, `http://…` and `ws://…`,
+because CSP's scheme matching goes http→https and never http→ws, so a
+directive listing only the http(s) origin lets chat work and silently
+blocks the handoff socket; the M7.4 rejoin check on this page found the
+socket refused at "Connecting…" with the ws: URL in the console as a CSP
+violation, a gap that had been there since M4.4's socket, verified only on
+the Tailwind fixture — the Install page prints both origins now, §9.11;
 style-src deliberately excludes anything the widget would need, pinning
 the adoptedStyleSheets path). serve.mjs hosts them on :4400 because
 file:// sends `Origin: null`, which the allowlist rightly rejects — the
@@ -3741,7 +3899,14 @@ to install the widget.
   the snippet with the org's real pk, and the exact two CSP directives —
   no `style-src` entry, because the widget's styles ride
   adoptedStyleSheets, a claim the hostile fixture page proves by
-  withholding one. `NEXT_PUBLIC_WIDGET_API_URL` is CONFIG, not derived:
+  withholding one. Since M7.4 `connect-src` names the API host TWICE, as
+  `https://…` and as `wss://…` (derived from the same URL by swapping the
+  scheme, exactly as widget/src/handoff.ts builds the socket URL): CSP's
+  scheme matching goes http→https and never http→ws, so a directive that
+  listed only the https origin let chat work and silently blocked the
+  handoff socket — found by the M7.4 rejoin check on the hostile fixture,
+  a gap that had been there since M4.4 (§8.4), and the page's note now says
+  why the host appears twice. `NEXT_PUBLIC_WIDGET_API_URL` is CONFIG, not derived:
   the dashboard is on Vercel and the widget API on Render, so this host
   cannot infer the other's; unset renders a visible placeholder and says
   so, rather than emitting a snippet that would fail silently on the

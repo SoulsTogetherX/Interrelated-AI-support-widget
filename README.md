@@ -34,9 +34,9 @@ data, and most of them are CI gates.
 | Retrieval latency (hybrid, warm, local model) | p50 70 ms · p95 107 ms | same run |
 | Refusal threshold | **0.34** cosine distance for bge-small — 0% false refusals on the golden set, 100% correct refusals on off-topic questions, derived from an 80 + 40 question sweep, not picked by feel | [eval/RESULTS.md §threshold](eval/RESULTS.md) |
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
-| Widget bundle | **5.66 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
+| Widget bundle | **6.52 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
 | Security gate | **45 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
-| Tests | 637 across the repo, the integration suites against a real pgvector Postgres | `npm test` per package |
+| Tests | 683 across the repo, the integration suites against a real pgvector Postgres (19 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 Two things the plan wanted measured that this README does **not** claim a
 number for, because they need a real provider key: time-to-first-token and
@@ -93,7 +93,13 @@ credential in a WebSocket handshake, and a URL is the worst place to keep
 one), an agent attaching *is* the claim, every message is persisted before
 it is broadcast with the sender's role taken from the ticket and never from
 the frame, and a reconnecting client gets the backlog exactly once even when
-messages land mid-attach.
+messages land mid-attach. The widget keeps a live handoff across a page
+reload — or a click to the next page of the site, which is the same event to
+a script that lives one page at a time — through a stored bookmark whose
+staleness the server settles: the next page rejoins the socket and draws
+nothing until the server confirms the handoff exists, so a conversation an
+agent closed while the visitor was away leaves the page exactly as if it had
+never happened.
 
 **Quotas and billing** (§3.26, §9.15) — plan ceilings are enforced before
 the model call against a per-org, per-day counter written in the same
@@ -191,9 +197,8 @@ every CI run.
   sentence. What the design guarantees is narrower and stated: no uncited
   text, no attacker-controlled citation, and the system prompt never in
   anything the visitor sees, all asserted from outside.
-- **Not built:** file uploads (and with them PDF parsing), resuming a
-  handoff across a page reload, robots.txt. Each is named where it would
-  land.
+- **Not built:** file uploads (and with them PDF parsing), robots.txt. Each
+  is named where it would land.
 
 ---
 

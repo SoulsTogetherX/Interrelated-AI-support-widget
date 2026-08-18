@@ -177,6 +177,11 @@ class HandoffSocket implements HandoffConnection {
       this.#scheduleReconnect()
       return
     }
+    // Closed while the mint was in flight (the widget gave up on a rejoin,
+    // M7.4, or tore the panel down): whatever the answer was, nobody is
+    // listening, and a status reported after close() would land on a UI
+    // that has already moved on. Checked BEFORE the null case on purpose.
+    if (this.#stopped) return
     // Null is the one terminal answer: the conversation went back to being
     // the bot's (or was resolved), and retrying forever would be a widget
     // arguing with a decision an agent already made.
@@ -185,7 +190,6 @@ class HandoffSocket implements HandoffConnection {
       this.#options.handlers.onStatus("ended")
       return
     }
-    if (this.#stopped) return
 
     let socket: WebSocket
     try {
