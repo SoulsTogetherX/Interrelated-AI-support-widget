@@ -3,11 +3,19 @@
 // 404s non-members without revealing whether the org exists.
 import Link from "next/link"
 
-import { getPublishableKey, listOrgsForUser, requireOrgMember } from "@/lib/orgs"
+import RotateKeyForm from "@/components/RotateKeyForm"
+import { ROTATION_GRACE_HOURS, listPublishableKeys } from "@/lib/keys"
+import { revokePublishableKeyNowAction } from "@/lib/keys/actions"
+import { listOrgsForUser, requireOrgMember } from "@/lib/orgs"
 import { getTodayUsage } from "@/lib/usage/queries"
 import "./page.css"
 
 export const metadata = { title: "Overview — Interrelated" }
+
+/** UTC to the minute — the dashboard's timestamp convention. */
+function utcMinute(at: Date): string {
+  return at.toISOString().slice(0, 16).replace("T", " ")
+}
 
 export default async function OrgOverviewPage({
   params,
@@ -16,12 +24,25 @@ export default async function OrgOverviewPage({
 }) {
   const { orgId } = await params
   const { user, org } = await requireOrgMember(orgId)
-  const [publishableKey, orgs, usage] = await Promise.all([
-    getPublishableKey(org.id),
+  const [keys, orgs, usage] = await Promise.all([
+    listPublishableKeys(org.id),
     listOrgsForUser(user.id),
     getTodayUsage(org.id),
   ])
   const otherOrgs = orgs.filter((o) => o.id !== org.id)
+  const isOwner = org.role === "owner"
+  // Standing is decided in SQL against Postgres's clock (lib/keys), which is
+  // the clock realtime's session route compares against — so what this page
+  // calls "retiring" is exactly what the widget still accepts.
+  const currentKey = keys.find((k) => k.status === "current") ?? null
+  const retiringKeys = keys.filter((k) => k.status === "retiring")
+  const revokedKeys = keys.filter((k) => k.status === "revoked")
+  // The list is newest-CREATED first; the most recent REVOCATION can be an
+  // older key whose window was ended early, so it is found, not assumed.
+  const latestRevocation = revokedKeys.reduce<Date | null>(
+    (latest, k) => (k.revokedAt && (!latest || k.revokedAt > latest) ? k.revokedAt : latest),
+    null,
+  )
 
   return (
     <div className="orghome">
@@ -83,12 +104,64 @@ export default async function OrgOverviewPage({
         {/* The pk is PUBLIC by design (trust model: it identifies the org,
             authorizes nothing by itself — the origin allowlist and rate
             limits do the guarding), so showing it in full is correct. */}
-        <code className="orghome-pk">{publishableKey ?? "no live key — rotation left this org keyless (unexpected)"}</code>
+        <code className="orghome-pk">
+          {currentKey?.publishableKey ?? "no live key — this org has no current key (unexpected)"}
+        </code>
         <p className="orghome-cardnote">
           This value goes in your site&apos;s widget snippet. It is safe to be
           public: it only identifies this organization, and the widget refuses
           to serve origins you haven&apos;t allowlisted.
         </p>
+        {isOwner && currentKey ? (
+          <RotateKeyForm orgId={org.id} keyId={currentKey.id} graceHours={ROTATION_GRACE_HOURS} />
+        ) : null}
+
+        {retiringKeys.length > 0 ? (
+          <>
+            <h3 className="orghome-subtitle">Retiring</h3>
+            {/* Still accepted by the widget until the instant shown — that
+                is what makes rotation safe to click: nothing breaks until the
+                snippet has had time to change. last_used_at is stamped by
+                every session mint, so "last used a minute ago" means the OLD
+                snippet is still deployed somewhere. */}
+            <ul className="orghome-keys">
+              {retiringKeys.map((k) => (
+                <li className="orghome-key" key={k.id}>
+                  <div className="orghome-keymain">
+                    <code className="orghome-keyvalue">{k.publishableKey}</code>
+                    <span className="orghome-keymeta">
+                      accepted until {k.revokedAt ? utcMinute(k.revokedAt) : "—"} UTC ·{" "}
+                      {k.lastUsedAt ? `last used ${utcMinute(k.lastUsedAt)} UTC` : "not used since rotation"}
+                    </span>
+                  </div>
+                  {isOwner ? (
+                    <form action={revokePublishableKeyNowAction}>
+                      <input type="hidden" name="orgId" value={org.id} />
+                      <input type="hidden" name="keyId" value={k.id} />
+                      <button className="orghome-revoke" type="submit">
+                        Revoke now
+                      </button>
+                    </form>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <p className="orghome-cardnote">
+              Revoking now stops new widget sessions on that key immediately; a
+              visitor already chatting keeps their session (up to 30 minutes),
+              because a session is bound to this organization, not to the key
+              that opened it.
+            </p>
+          </>
+        ) : null}
+
+        {revokedKeys.length > 0 ? (
+          <p className="orghome-cardnote">
+            {revokedKeys.length === 1 ? "One earlier key" : `${revokedKeys.length} earlier keys`}{" "}
+            revoked, most recently {latestRevocation ? `${utcMinute(latestRevocation)} UTC` : "—"}.
+            A revoked key is refused exactly like one that never existed.
+          </p>
+        ) : null}
       </section>
 
       <section className="orghome-card">

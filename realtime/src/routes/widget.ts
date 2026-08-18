@@ -1,6 +1,7 @@
 //#region Imports
 import { randomBytes } from "node:crypto"
 import type { Express, Request, Response } from "express"
+import { sql } from "kysely"
 import type { Kysely } from "kysely"
 
 import type { Database } from "@/db/schema"
@@ -183,15 +184,24 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         return
       }
 
+      // A key is live while revoked_at is NULL — or still in the FUTURE:
+      // rotation (web/src/lib/keys, M7.1) schedules the old key's revocation
+      // at the end of a grace window rather than killing it on the click, so
+      // a snippet the customer has not yet updated keeps working. Postgres's
+      // clock decides, not this process's: the dashboard wrote that instant
+      // with NOW() on Neon, and Render's clock is a different machine's.
       const key = await options.db.selectFrom("api_keys")
         .select(["id", "org_id"])
         .where("kind", "=", "public")
         .where("public_id", "=", publishableKey)
-        .where("revoked_at", "is", null)
+        .where((eb) => eb.or([
+          eb("revoked_at", "is", null),
+          eb("revoked_at", ">", sql<Date>`NOW()`),
+        ]))
         .executeTakeFirst()
       if (!key) {
-        // Unknown and revoked collapse into one answer — key state is not
-        // probeable from the outside.
+        // Unknown, revoked, and past-its-grace collapse into one answer —
+        // key state is not probeable from the outside.
         res.status(401).json({ error: "invalid publishable key" })
         return
       }

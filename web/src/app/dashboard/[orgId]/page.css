@@ -65,6 +65,74 @@
   color: var(--ink-muted);
 }
 
+/* Key rotation (M7.1): the retiring list under the current key. */
+.orghome-subtitle {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.orghome-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.orghome-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: var(--paper-soft);
+}
+
+/* min-width: 0 lets the key value truncate instead of pushing the button
+   out of the row on a phone — the same automatic-minimum trap §9.16 fixed
+   in the shell header. */
+.orghome-keymain {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.orghome-keyvalue {
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orghome-keymeta {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.orghome-revoke {
+  font: inherit;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  background: none;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.orghome-revoke:hover {
+  background: #fef2f2;
+}
+
 .orghome-steps {
   margin: 0;
   padding-left: 1.25rem;

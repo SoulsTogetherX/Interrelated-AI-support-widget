@@ -373,12 +373,29 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
     const K = 5
     const tenantChunks = new Map<string, Set<string>>()
 
-    // A dedicated single-connection Kysely: `SET enable_seqscan = off` is
-    // session-scoped, and on the shared 5-connection pool the SET and the
+    // A dedicated single-connection Kysely: the planner SETs below are
+    // session-scoped, and on the shared 5-connection pool a SET and the
     // search could land on different connections. One connection makes the
     // planner constraint airtight — these searches MUST go through HNSW,
-    // because a sequential scan (exact, unstarvable) would pass the
-    // regression test without exercising the thing it guards.
+    // because an exact plan (unstarvable) would pass the regression test
+    // without exercising the thing it guards.
+    //
+    // Two knobs, and the second is the one that matters. `enable_seqscan =
+    // off` was the original and is not sufficient: a sequential scan is not
+    // the only exact route. Every plan that is NOT the HNSW index scan has
+    // to SORT by distance to satisfy the ORDER BY, and at this fixture's
+    // size those plans cost about the same as HNSW-with-LIMIT — measured in
+    // M7.1's ladder, where the starvation check below went red for the
+    // first time: a documents → chunks → chunk_embeddings-by-primary-key
+    // plan under stale statistics, then a scan of the whole primary-key
+    // index for model='mock-384' (612 rows) plus a Sort under fresh ones,
+    // costed at 215 against the HNSW plan's ~209. A coin flip that
+    // statistics freshness tipped either way, which is why it passed alone
+    // and failed inside a full run (0/20 tenants starved under the exact
+    // plan; 19/20 under HNSW). `enable_sort = off` closes every exact route
+    // at once — the HNSW scan is the only path that needs no Sort — so the
+    // choice no longer depends on autoanalyze timing, and the pigeonhole in
+    // the sanity check holds by construction rather than by luck.
     let singleConn: Kysely<Database>
     let singlePool: Pool
 
@@ -405,6 +422,7 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       })
       singleConn = new Kysely<Database>({ dialect: new PostgresDialect({ pool: singlePool }) })
       await sql`SET enable_seqscan = off`.execute(singleConn)
+      await sql`SET enable_sort = off`.execute(singleConn)
     }, 60_000)
 
     afterAll(async () => {
@@ -429,8 +447,10 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       // iterative_scan off (pgvector's default), the index yields at most
       // ~ef_search=40 candidates; 20 tenants × k=5 = 100 > 40, so by
       // pigeonhole SOME tenant must come up short. If this ever fails, the
-      // regression test has stopped exercising HNSW (e.g. the planner
-      // started seqscanning) and needs re-fixturing.
+      // regression test has stopped exercising HNSW — the planner found an
+      // exact plan despite the SETs above (see the connection's comment for
+      // the two it found before `enable_sort = off`) — and needs
+      // re-fixturing.
       const queryVector = await embedOne("how do I configure the product?")
       let starved = 0
       for (const orgId of tenantChunks.keys()) {

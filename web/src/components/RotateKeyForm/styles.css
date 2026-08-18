@@ -1,0 +1,63 @@
+/* RotateKeyForm. */
+
+.rotatekey {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-top: 0.875rem;
+}
+
+.rotatekey-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.rotatekey-submit {
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.375rem 0.875rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rotatekey-submit:hover {
+  border-color: var(--accent);
+}
+
+.rotatekey-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.rotatekey-hint {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+  flex: 1;
+  min-width: 14rem;
+}
+
+.rotatekey-error {
+  margin: 0;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+}
+
+.rotatekey-success {
+  margin: 0;
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+}

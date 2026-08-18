@@ -1,6 +1,7 @@
 //#region Imports
 import { createServer } from "node:http"
 import type { Server } from "node:http"
+import { sql } from "kysely"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import pool, { db } from "@/db/pool"
@@ -183,11 +184,57 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
         id: newId("key"), org_id: orgId, kind: "public", public_id: revokedPk,
         secret_hash: null,
       }).execute()
-      await db.updateTable("api_keys").set({ revoked_at: new Date() })
+      // Revoked on the DATABASE's clock, which is the clock the route
+      // compares against. `new Date()` here would be this process's clock,
+      // and a Docker Desktop container that has drifted behind the host
+      // would still see the key as live for the width of the drift.
+      await db.updateTable("api_keys").set({ revoked_at: sql`NOW()` })
         .where("public_id", "=", revokedPk).execute()
       const revoked = await mintSession({ publishableKey: revokedPk })
       expect(revoked.status).toBe(401)
       expect(await revoked.json()).toEqual(await unknown.json())
+    })
+
+    it("keeps a rotated-out key live through its grace window, then refuses it like an unknown one", async () => {
+      // Rotation (web/src/lib/keys) does not revoke the old key on the
+      // click: it schedules revoked_at at the END of a grace window so a
+      // snippet the customer has not updated yet keeps working. The route
+      // treats a future revoked_at as live and a past one as gone — both
+      // decided by Postgres's NOW(), the clock the dashboard wrote with.
+      const retiringPk = "pk_live_retiring_key"
+      const retiringRowId = newId("key")
+      await db.insertInto("api_keys").values({
+        id: retiringRowId, org_id: orgId, kind: "public", public_id: retiringPk, secret_hash: null,
+      }).execute()
+      await db.updateTable("api_keys").set({ revoked_at: sql`NOW() + interval '1 hour'` })
+        .where("id", "=", retiringRowId).execute()
+
+      // Inside the window: mints, and the token is a real session — it chats.
+      const minted = await mintSession({ publishableKey: retiringPk })
+      expect(minted.status).toBe(200)
+      const { token } = (await minted.json()) as { token: string }
+      const answer = await chat(token, { question: CHUNK_TEXT })
+      expect(answer.status).toBe(200)
+      expect(answer.events.some((e) => e.type === "claim")).toBe(true)
+      // The mint still stamps last_used_at: that is how the dashboard can
+      // tell a customer their OLD snippet is still out there.
+      const row = await db.selectFrom("api_keys").select("last_used_at")
+        .where("id", "=", retiringRowId).executeTakeFirstOrThrow()
+      expect(row.last_used_at).not.toBeNull()
+
+      // The window closes: byte-identical to a key that never existed.
+      await db.updateTable("api_keys").set({ revoked_at: sql`NOW() - interval '1 second'` })
+        .where("id", "=", retiringRowId).execute()
+      const afterGrace = await mintSession({ publishableKey: retiringPk })
+      const unknown = await mintSession({ publishableKey: "pk_live_never_existed" })
+      expect(afterGrace.status).toBe(401)
+      expect(await afterGrace.json()).toEqual(await unknown.json())
+      // …and the token minted DURING the window is untouched: it is a
+      // 30-minute session bound to the org, not to the key that opened it.
+      // Ending a grace window stops NEW sessions; it does not cut off a
+      // visitor mid-conversation. Rotation is hygiene, not an eviction.
+      const stillChats = await chat(token, { question: CHUNK_TEXT })
+      expect(stillChats.status).toBe(200)
     })
 
     it("answers preflight with the CORS grant", async () => {

@@ -507,8 +507,13 @@ widget (M2.6) or curl-with-headers
       Origin header required           absent → 403 (a script; no free
                                        sessions — layer 3 bounds scripts)
       per-IP token bucket              realtime/src/widget/rateLimit.ts
-      api_keys lookup                  kind=public, live; unknown and
-                                       revoked → ONE uniform 401
+      api_keys lookup                  kind=public, LIVE = revoked_at IS
+                                       NULL OR revoked_at > NOW() (a key
+                                       inside its rotation grace window
+                                       is live — §7.12; Postgres's clock,
+                                       the one the dashboard wrote with);
+                                       unknown, revoked, and past-grace →
+                                       ONE uniform 401
       allowed_origins exact match      miss → 403 with NO CORS headers —
                                        an unlisted site's browser cannot
                                        even read the error
@@ -898,6 +903,82 @@ OriginForm submit
   removal is equally immediate: the same origin → 403, no CORS headers,
   so an unlisted site's browser cannot even read the error
 ```
+
+### §7.12 Rotating the publishable key — POST (Server Action) from `/dashboard/[orgId]` (M7.1)
+
+Trust-model layer 5. The dashboard writes two rows; realtime's session
+mint (§5.3) reads them — and the thing that makes the click safe is that
+the old key does not die on it.
+
+```
+RotateKeyForm submit  (hidden: orgId, keyId = the key the page showed as current)
+  → rotatePublishableKeyAction         web/src/lib/keys/actions.ts
+    → currentUser → getOrgForMember → OWNER
+    → rotatePublishableKey(orgId, keyId)   web/src/lib/keys/index.ts
+        BEGIN
+        UPDATE api_keys
+           SET revoked_at = NOW() + make_interval(hours => 24)
+         WHERE id = keyId AND org_id = orgId AND kind = 'public'
+           AND revoked_at IS NULL           ← the atomic claim (§3.23's
+                                              playbook): a second click,
+                                              a retried POST, two owners
+                                              at once — whoever loses
+                                              updates 0 rows and gets
+                                              {rotated:false}, writing
+                                              nothing; no lock, no
+                                              read-then-check
+        (0 rows) → ROLLBACK, {rotated:false}
+        INSERT api_keys (new id, org, kind=public, public_id = pk_live_<32>)
+        COMMIT → {rotated:true, publishableKey, graceEndsAt}
+    → revalidatePath(overview) + revalidatePath(install page)
+    → the form says: new key issued; the previous key works until
+      <graceEndsAt UTC> unless revoked sooner
+
+  the overview re-renders from Postgres — listPublishableKeys:
+    CASE WHEN revoked_at IS NULL     THEN 'current'
+         WHEN revoked_at > NOW()     THEN 'retiring'   ← the SAME comparison
+         ELSE                             'revoked'      the session route
+    END                                                  makes, so what the
+                                                         page calls retiring
+                                                         is what the widget
+                                                         still accepts
+  the install page's snippet now carries the NEW key, with a
+  rotation-in-progress notice naming the grace end
+
+"Revoke now" on a retiring key
+  → revokePublishableKeyNowAction     same ladder
+    → UPDATE api_keys SET revoked_at = NOW()
+       WHERE id = keyId AND org_id = orgId AND kind = 'public'
+         AND revoked_at IS NOT NULL AND revoked_at > NOW()
+       └ only a RETIRING key: the current one cannot be revoked without a
+         replacement (rotate instead — the org is never keyless by a
+         click), and an already revoked one keeps its honest instant
+
+…and what realtime does with each of those rows (§5.3), on Postgres's clock:
+  the CURRENT key   → revoked_at IS NULL     → mints
+  a RETIRING key    → revoked_at > NOW()     → mints, and stamps
+                                               last_used_at, which is how
+                                               the overview can say "last
+                                               used a minute ago" — i.e.
+                                               the old snippet is still
+                                               deployed somewhere
+  a REVOKED key     → revoked_at <= NOW()    → 401, byte-identical to a
+                                               key that never existed
+  a token minted while its key was live keeps working for its 30 minutes
+  after the key is revoked: it is bound to the org, not the key
+  (§3.17.1). Revocation stops NEW sessions; it does not evict a visitor
+  mid-conversation.
+```
+
+Why one clock, and why it is the database's: the dashboard runs on Vercel
+and the session route on Render, so the grace end is written by one machine
+and read by another, and Neon's `NOW()` is the only clock both can share.
+Every comparison above — the write, the route's read, the page's CASE, and
+the tests' `revoked_at - NOW()` — is made there. What rotation is worth for
+a PUBLIC key is stated in CLAUDE.md §9.17 rather than oversold: hygiene, a
+way to invalidate every deployed snippet at once without downtime, and the
+mechanism the secret key (layer 6) will need — not a defense against a
+scraper, which is what layers 1 and 3 are for.
 
 ---
 

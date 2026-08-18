@@ -36,7 +36,7 @@ data, and most of them are CI gates.
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
 | Widget bundle | **5.66 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
 | Security gate | **45 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
-| Tests | 610 across the repo, the integration suites against a real pgvector Postgres | `npm test` per package |
+| Tests | 619 across the repo, the integration suites against a real pgvector Postgres | `npm test` per package |
 
 Two things the plan wanted measured that this README does **not** claim a
 number for, because they need a real provider key: time-to-first-token and
@@ -140,11 +140,17 @@ headers so an unlisted site's browser cannot even read the error;
 **(2)** session tokens instead of per-message key use, bound to origin and
 visitor so replay from another site dies; **(3)** per-IP and per-visitor
 token buckets and a per-org daily ceiling from the plan, all enforced before
-the model call, so the worst case is a stopped widget rather than a bill.
-The honest limit, stated plainly: `Origin` is unforgeable from a browser and
-trivial from `curl`, so layers 1–2 defeat browser-based theft and layer 3 is
-what bounds scripted abuse. The security probe attacks every one of these
-from outside on every CI run.
+the model call, so the worst case is a stopped widget rather than a bill;
+**(5)** one-click key rotation with a 24-hour grace window — the new key
+works immediately, the old snippet keeps working until it is redeployed,
+"revoke now" ends the window early, and a revoked key is refused
+byte-identically to one that never existed. The honest limit, stated
+plainly: `Origin` is unforgeable from a browser and trivial from `curl`, so
+layers 1–2 defeat browser-based theft and layer 3 is what bounds scripted
+abuse — and rotation of a *public* key is hygiene rather than defense (a
+scraper simply re-scrapes), built now because the same mechanism is what
+will make a secret key safe to issue. The security probe attacks every one
+of these from outside on every CI run.
 
 ---
 
@@ -168,9 +174,10 @@ from outside on every CI run.
   sentence. What the design guarantees is narrower and stated: no uncited
   text, no attacker-controlled citation, and the system prompt never in
   anything the visitor sees, all asserted from outside.
-- **Not built:** file uploads (and with them PDF parsing), one-click key
-  rotation, per-origin traffic analytics, resuming a handoff across a page
-  reload, robots.txt. Each is named where it would land.
+- **Not built:** file uploads (and with them PDF parsing), per-origin
+  traffic analytics, server-side session minting with the secret key,
+  resuming a handoff across a page reload, robots.txt. Each is named where
+  it would land.
 
 ---
 

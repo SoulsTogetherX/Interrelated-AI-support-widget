@@ -8,7 +8,8 @@ import Link from "next/link"
 
 import CopyButton from "@/components/CopyButton"
 import OriginForm from "@/components/OriginForm"
-import { requireOrgMember, getPublishableKey } from "@/lib/orgs"
+import { listPublishableKeys } from "@/lib/keys"
+import { requireOrgMember } from "@/lib/orgs"
 import { listOrigins } from "@/lib/origins"
 import { removeOriginAction } from "@/lib/origins/actions"
 import "./page.css"
@@ -33,10 +34,16 @@ export default async function WidgetPage({
 }) {
   const { orgId } = await params
   const { org } = await requireOrgMember(orgId)
-  const [publishableKey, origins] = await Promise.all([
-    getPublishableKey(org.id),
+  const [keys, origins] = await Promise.all([
+    listPublishableKeys(org.id),
     listOrigins(org.id),
   ])
+  // The snippet always carries the CURRENT key. A rotation in progress is
+  // worth a sentence here, because this page is where the customer copies
+  // from — and the old snippet on their site is what the grace window is
+  // keeping alive.
+  const publishableKey = keys.find((k) => k.status === "current")?.publishableKey ?? null
+  const retiring = keys.filter((k) => k.status === "retiring")
   const isOwner = org.role === "owner"
   const api = widgetApiUrl()
   const apiForSnippet = api ?? "https://YOUR-REALTIME-HOST"
@@ -107,6 +114,18 @@ export default async function WidgetPage({
           <p className="install-warning">
             This organization has no live publishable key — unexpected;
             contact support before installing.
+          </p>
+        ) : null}
+        {retiring.length > 0 ? (
+          <p className="install-warning">
+            A key rotation is in progress: the snippet above carries your new
+            key. {retiring.length === 1 ? "Your previous key is" : `${retiring.length} previous keys are`}{" "}
+            still accepted until{" "}
+            {retiring
+              .map((k) => (k.revokedAt ? k.revokedAt.toISOString().slice(0, 16).replace("T", " ") : "—"))
+              .join(", ")}{" "}
+            UTC — deploy this snippet before then. Manage retiring keys from the{" "}
+            <Link href={`/dashboard/${org.id}`}>overview</Link>.
           </p>
         ) : null}
       </section>

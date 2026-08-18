@@ -118,8 +118,13 @@ export async function getOrgForMember(
   return row ?? null
 }
 
-/** The org's publishable widget key. Every org has exactly one live public
- *  key today (rotation, M3.8, revokes-and-reissues rather than deleting). */
+/** The org's CURRENT publishable widget key — the one row with revoked_at
+ *  IS NULL. Rotation (lib/keys, M7.1) schedules the old key out in the same
+ *  transaction that inserts the new one, so there is exactly one; keys in
+ *  their grace window carry a FUTURE revoked_at and are deliberately not
+ *  this — they are still accepted by the widget, but the snippet must say
+ *  the new value. The pages that need the whole picture (retiring, revoked)
+ *  read listPublishableKeys instead. */
 export async function getPublishableKey(orgId: string): Promise<string | null> {
   const row = await db
     .selectFrom("api_keys")
@@ -127,6 +132,7 @@ export async function getPublishableKey(orgId: string): Promise<string | null> {
     .where("org_id", "=", orgId)
     .where("kind", "=", "public")
     .where("revoked_at", "is", null)
+    .orderBy("created_at", "desc")
     .executeTakeFirst()
   return row?.public_id ?? null
 }

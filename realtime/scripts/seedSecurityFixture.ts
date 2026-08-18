@@ -35,6 +35,9 @@
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
+// A hoisted import is safe here where the pool's is not (§3.11): kysely's
+// `sql` tag reads no environment.
+import { sql } from "kysely"
 //#endregion
 
 //#region Env fallback
@@ -199,11 +202,16 @@ async function main(): Promise<void> {
       { id: newId("key"), org_id: id, kind: "public", public_id: publishableKey, secret_hash: null },
       { id: revokedRowId, org_id: id, kind: "public", public_id: revokedKey, secret_hash: null },
     ]).execute()
-    // The rotated-out key: created live and then revoked, exactly the path
-    // a real rotation takes (revoked_at is update-only in the schema types —
-    // a key is never born revoked). Its whole job in the fixture is to be
-    // refused exactly like a key that never existed.
-    await db.updateTable("api_keys").set({ revoked_at: new Date() })
+    // The rotated-out key: created live and then revoked, the rows a real
+    // rotation writes (revoked_at is update-only in the schema types — a key
+    // is never born revoked). Since M7.1 the dashboard performs rotation
+    // itself (web/src/lib/keys), but the e2e stack has no dashboard, so the
+    // fixture writes the same rows by hand — with the grace window already
+    // OVER, because its whole job is to be refused exactly like a key that
+    // never existed. Revoked on Postgres's clock, the clock the session
+    // route compares against; a `new Date()` from this process could sit
+    // ahead of a drifted database and leave the key live for the drift.
+    await db.updateTable("api_keys").set({ revoked_at: sql`NOW()` })
       .where("id", "=", revokedRowId).execute()
 
     const origin = `https://${host}`

@@ -15,8 +15,44 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M6 — security hardening as a CI gate — COMPLETE.
-Every milestone in the plan (M0–M6) is now complete.** M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+**Current milestone: M7 — the trust model's remaining layers — underway.
+Every milestone the plan SCHEDULED (M0–M6) is complete; M7 is the plan's
+own trust-model section (layers 4–6, which no milestone ever named) taken
+in order of size.** M7.1 is done — **one-click key rotation, layer 5**
+(§9.17, §3.18, §3.27, DATAFLOW §7.12): the schema had revoked-by-timestamp
+and uniqueness-among-live-keys since 001 precisely for this, and what was
+missing was the click. Rotation issues a new key and schedules the old one's
+revocation ROTATION_GRACE_HOURS (24) out; realtime's session route now
+treats a FUTURE `revoked_at` as live and a past one as gone, both decided by
+Postgres's clock — Vercel wrote it, Render reads it, and Neon is the one
+clock they share — so a snippet the customer has not redeployed keeps
+working and there is never a keyless window. "Revoke now" ends the window
+at once, only for a retiring key (the org can never be left keyless by a
+click; the current key retires by being rotated). Idempotence is the guarded
+UPDATE from §3.23's playbook — the action rotates FROM the key the page
+showed, and five concurrent clicks yield one rotation, proven by a test that
+fires them together. The honest limit is stated where the feature is: for a
+PUBLIC key rotation is hygiene rather than defense (an attacker who
+re-scrapes the page has the new one; layers 1 and 3 do the bounding), and
+ending a window does not evict live visitors (a session token is bound to
+the org, not the key, and lasts its 30 minutes — pinned by a test). Its real
+value is that the same rows and the same lookup rule are what will make the
+SECRET key (layer 6) safe to issue. Verified live: an org created in the
+dashboard, its origin allowlisted, the key rotated from the overview, the
+retiring key minting a real session against realtime while the new one did
+too, "Revoke now" flipping the old key to a 401 byte-identical to an unknown
+key's, the install page carrying the new key with a rotation-in-progress
+notice, and the retiring row truncating rather than overflowing at 375px.
+The full ladder also caught a latent flake that has nothing to do with
+keys and everything to do with the flagship regression test: the retrieval
+suite's starvation sanity check (§3.8) went red inside the full run and
+green alone, because at the fixture's size an exact plan (index scan plus
+Sort) and the HNSW plan sat at the planner's break-even and autoanalyze
+timing decided which ran; `enable_sort = off` on the test's single
+connection now closes every exact route, so the check bites by construction.
+Remaining in M7: layer 4 (per-origin traffic analytics) and layer 6
+(server-side session minting with the secret key), then the README's other
+named gaps. M6.1 is done — the security probe (§6.3, §3.27, §4.4,
 DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
 across the trust model's layers — origin allowlist and CORS posture, key
 state (a revoked key byte-identical to an unknown one), token tamper and
@@ -46,11 +82,14 @@ the plan's M6 list names are covered differently than a reader might
 expect, and are stated rather than fudged: "oversized uploads" — file uploads
 do not exist (deferred with PDF support, §3.10.3), so what the probe bounds is
 every payload the surface DOES accept, the 64 KB JSON body, the 2,000-char
-question, and the 4,000-char socket frame; and "rotated keys" — one-click
-rotation is a dashboard feature that has not been built, so the fixture
-performs a rotation by hand (a key created live, then revoked) and the probe
-asserts the property rotation depends on, that a rotated-out key is
-byte-identical to one that never existed. And one thing that could not be
+question, and the 4,000-char socket frame; and "rotated keys" — at M6.4
+one-click rotation was a dashboard feature that had not been built, so the
+fixture performed a rotation by hand (a key created live, then revoked) and
+the probe asserted the property rotation depends on, that a rotated-out key
+is byte-identical to one that never existed. M7.1 has since built the
+feature (§9.17); the fixture still writes those rows itself, because the
+e2e stack has no dashboard, and they are exactly the rows the dashboard's
+rotation writes. And one thing that could not be
 verified from here: the e2e job's YAML was exercised command-for-command
 against the prod compose stack on this machine, but its first run on GitHub's
 runners is the next push to `dev`.
@@ -872,7 +911,7 @@ ingest weeks later.
 | `users` | dashboard logins | email stored encrypted + blind index (columns predate the code because retrofitting encryption is a data migration) |
 | `org_members` | user↔org + role | **partial unique index: one owner per org** |
 | `sessions` | dashboard sessions | id IS sha256(cookie token) — a DB leak can't be replayed as logins |
-| `api_keys` | widget pk/sk credentials | one CHECK makes kind/column mismatches unrepresentable; uniqueness among live keys only (`WHERE revoked_at IS NULL`) so rotation revokes instead of deletes |
+| `api_keys` | widget pk/sk credentials | one CHECK makes kind/column mismatches unrepresentable; uniqueness among live keys only (`WHERE revoked_at IS NULL`) so rotation revokes instead of deletes. Since M7.1 `revoked_at` may sit in the FUTURE — that is the grace window (§9.17): the session route accepts a key while `revoked_at IS NULL OR revoked_at > NOW()`, on Postgres's clock |
 | `allowed_origins` | widget origin allowlist | regex CHECK rejects paths/trailing slashes — a stored `https://a.com/` would silently never match a browser `Origin` header |
 
 ### §3.3.1 The content pipeline tables
@@ -1209,13 +1248,24 @@ force-exits.
   keylessly). The centerpiece is the multi-tenant regression test from the
   plan: 20 orgs × 30 chunks share one HNSW index, and every org must
   retrieve exactly k — through a dedicated SINGLE-connection Kysely with
-  `enable_seqscan = off`, because on the shared pool the session SET and
-  the search could land on different connections, and a seqscan (exact,
-  unstarvable) would pass the test without exercising what it guards. Its
+  `enable_seqscan = off` AND, since M7.1, `enable_sort = off`, because on
+  the shared pool the session SET and the search could land on different
+  connections, and an exact plan (unstarvable) would pass the test without
+  exercising what it guards. Its
   companion asserts that with iterative scans OFF some tenant starves —
   20×k=100 > ef_search=40, so by pigeonhole the fixture MUST bite; if that
   ever fails, the planner stopped using HNSW and the regression test has
-  gone vacuous. Also pinned: soft-deleted documents invisible to both arms
+  gone vacuous. It DID fail, once, in M7.1's full ladder — green alone, red
+  inside a full run — and the diagnosis is recorded in the file: a seqscan
+  is not the only exact route. Every plan other than the HNSW scan has to
+  SORT by distance, and at 612 rows those plans (a documents → chunks →
+  embeddings-by-primary-key join under stale statistics; a scan of the
+  whole primary-key index for the model plus a Sort under fresh ones,
+  costed 215 against HNSW-with-LIMIT's ~209) sat at the planner's
+  break-even, so autoanalyze timing decided which ran, and under the exact
+  one 0/20 tenants starved (19/20 under HNSW). `enable_sort = off` closes
+  every exact route at once, so the pigeonhole holds by construction rather
+  than by luck. Also pinned: soft-deleted documents invisible to both arms
   even when the query is the deleted chunk's exact text; cross-tenant
   isolation under byte-identical texts (same mock vector, same tsv — only
   the org filter separates them); hostile lexical syntax never throws;
@@ -1237,7 +1287,13 @@ force-exits.
 - `routes/__tests__/widget.test.ts` — DB-gated, drives a REAL http
   listener. Session: allowlisted mint with CORS echo, unlisted origin
   rejected WITHOUT CORS, missing Origin, unknown/revoked keys collapse
-  to one uniform 401, preflight, per-IP mint flood. Chat: the grounded
+  to one uniform 401 (revoked on the DATABASE's clock since M7.1, so a
+  drifted container can never make the check pass by accident), the
+  grace-window case — a key with a future `revoked_at` mints AND its
+  token chats, its `last_used_at` is stamped, and once the window closes
+  it is byte-identical to an unknown key while the token minted inside
+  the window still chats, because a session is bound to the org and not
+  to the key that opened it — preflight, per-IP mint flood. Chat: the grounded
   SSE stream end to end (meta/claim/done with citations, persistence
   under the token's visitor), uniform 401 for missing/tampered/expired/
   wrong-secret tokens, token replay from a different origin, question
@@ -1834,8 +1890,14 @@ probe organizations the security and injection probes attack and writes
 what they need to know as a JSON fixture — the CONTRACT between this script
 and scripts/security-probe.mjs / scripts/injection-probe.mjs, documented
 once at the top of the file. Per org: a live pk and a REVOKED one (created
-live, then revoked — the path a real rotation takes; `revoked_at` is
-update-only in the schema types because a key is never born revoked), one
+live, then revoked — the rows a real rotation writes; `revoked_at` is
+update-only in the schema types because a key is never born revoked, and it
+is set with Postgres's `NOW()` rather than a `new Date()` from the seed
+process because NOW() is what the session route compares against and a
+container clock behind the host would otherwise leave the "revoked" key live
+for the width of the drift; since M7.1 the dashboard performs rotation
+itself, §9.17, but the e2e stack has no dashboard, so the fixture writes the
+same rows with the window already over), one
 allowlisted origin, and a small corpus stored one-document-per-chunk so a
 probe can say "this citation must point at THAT url". The two corpora share
 no vocabulary, so a cross-tenant retrieval hit could never be excused as
@@ -1895,7 +1957,11 @@ The only routes an untrusted browser ever calls, implementing the trust
 model in layer order. `POST /v1/widget/session`: Origin header required
 (absence means a script — no free sessions), per-IP mint bucket, pk
 lookup (unknown and revoked collapse into ONE 401 — key state is not
-probeable), exact-match allowlist check (failures carry NO CORS headers,
+probeable; since M7.1 "live" means `revoked_at IS NULL OR revoked_at >
+NOW()`, because rotation schedules the old key's revocation at the end of
+a grace window rather than on the click — §9.17 — and the comparison is
+made on Postgres's clock, the one the dashboard wrote with, never this
+process's), exact-match allowlist check (failures carry NO CORS headers,
 so an unlisted site's browser cannot even read the error), then the
 token mint — which is also the handshake that warms Neon while the
 visitor types (the free-tier design's DB-warming path). `POST
@@ -3002,7 +3068,13 @@ the page guard.
   "37 of 200" without the numbers being duplicated in a label. The bar
   clamps at 100%: a counter can overshoot by the answers in flight when
   the ceiling was reached, and a bar wider than its track reads as a
-  rendering bug rather than as the honest overshoot it is.
+  rendering bug rather than as the honest overshoot it is. Since M7.1 the
+  key card is also where rotation lives (§9.17): the current key, the
+  owner's Rotate button, the retiring keys with when each stops being
+  accepted and when it was last used, and a one-line history of revoked
+  ones. `getPublishableKey` (the one row with `revoked_at IS NULL`) still
+  serves callers that only need the current value; the pages that show
+  the whole picture read `listPublishableKeys`.
 - **Tests** — keyless: org-name boundaries (1/2, 64/65), pk format and
   its never-an-entity-id property (in shared's ids suite). DB-gated:
   the atomic create (all three rows, DB-default plan), member access vs
@@ -3281,7 +3353,10 @@ to install the widget.
   the dashboard is on Vercel and the widget API on Render, so this host
   cannot infer the other's; unset renders a visible placeholder and says
   so, rather than emitting a snippet that would fail silently on the
-  customer's site.
+  customer's site. Since M7.1 the snippet always carries the CURRENT key,
+  and while a rotation is in progress the page says so with the grace end
+  (§9.17): this is where the customer copies from, and the old snippet on
+  their site is what the window is keeping alive.
 - **Tests** — keyless: normalization of every realistic paste, port
   handling matching the browser (:443/:80 dropped, :8443 kept), the
   bare-host and `null` refusals, and a property that every accepted
@@ -3657,3 +3732,132 @@ them. Disabling ONLY the new declarations at runtime restores exactly
 453px, so the fix is what carries it rather than something incidental. At
 1265px the box measures 275.3px and the address shows in full — the
 truncation costs nothing where there is room.
+
+### §9.17 `src/lib/keys/` + RotateKeyForm — one-click key rotation (M7.1)
+
+Trust-model layer 5, the first increment of M7 (the plan's own trust-model
+section, layers 4–6, which no scheduled milestone ever named). The schema
+had been shaped for it since 001 — `api_keys` revokes by TIMESTAMP rather
+than by delete, and its uniqueness index covers live keys only, so a
+rotation is one INSERT and one UPDATE with the retired key left standing as
+the audit trail. M6.4 recorded the gap honestly and had the security fixture
+write those two rows by hand; this closes it.
+
+- **lib/keys/index.ts** — three functions and one constant, every timestamp
+  Postgres's own. `listPublishableKeys` returns every public key the org has
+  ever had, newest first, with its standing computed IN SQL against `NOW()`
+  — `current` (revoked_at NULL), `retiring` (revoked_at in the future),
+  `revoked` (past) — so the dashboard can never call a key "retiring" that
+  realtime already refuses: it is the identical comparison the session
+  route makes (§3.18). `rotatePublishableKey(orgId, fromKeyId)` schedules
+  the CURRENT key's revocation `ROTATION_GRACE_HOURS` (24) out and inserts
+  the new key in one transaction; `revokePublishableKeyNow(orgId, keyId)`
+  ends a retiring key's window at once. **The grace window is the whole
+  design.** Rotation does not kill the old key on the click: the new one is
+  usable immediately, the snippet already on the customer's site keeps
+  working until they redeploy, and there is never a keyless window — a
+  rotation that broke the widget until someone edited HTML would be a
+  rotation nobody performed. "Revoke now" is the incident-response half.
+  Two guards make it safe to click without ceremony: only a RETIRING key
+  can be revoked now (the current key cannot be revoked without a
+  replacement — the org must never be left keyless by a click; the way to
+  retire it is to rotate), and an already revoked key is left alone so its
+  `revoked_at` stays the honest instant it actually stopped.
+
+  Idempotence is the guarded UPDATE, §3.23's playbook: the caller names the
+  key it SAW as current, and `WHERE revoked_at IS NULL` is the atomic claim
+  — a second click, a retried POST, or two owners at once find the row
+  already scheduled and get `rotated: false` with nothing written, instead
+  of two rotations and three live keys. No lock, no read-then-check; the
+  race resolves in Postgres, and a test fires five rotations concurrently
+  to prove exactly one wins. Org scoping is in every WHERE, so an owner of
+  org A posting org B's key id gets the same `false` a malformed id gets,
+  and the two are indistinguishable on purpose. Written directly through
+  Kysely like the origin allowlist (§9.11): these rows hold no secret — the
+  pk is public by design — so routing them through realtime's internal API
+  would be ceremony without a reason.
+
+  **Why every clock here is Postgres's.** The dashboard runs on Vercel and
+  the session route on Render; the grace end is written by one and read by
+  the other, and Neon's `NOW()` is the ONE clock both can share — the
+  handoff socket's argument for message ordering (§3.25), applied to a
+  deadline. A grace end written with a Vercel `Date` would be off by the two
+  machines' skew, harmless over 24 hours and not harmless for "revoke now";
+  and the tests measure the window in SQL (`revoked_at - NOW()`) so a
+  host-versus-container skew can never make an assertion lie in either
+  direction. The same reasoning moved the fixture's and the widget suite's
+  "revoked" rows onto `NOW()` (§3.27, §3.8).
+
+  **The honest limit, stated where the feature is.** For a PUBLIC key,
+  rotation is hygiene rather than defense: the value is scraped from the
+  customer's page, so an attacker who re-scrapes has the new one, and what
+  bounds a scripted abuser is layer 1 (the allowlist) and layer 3 (the
+  buckets and daily ceiling). Nor does ending a window evict live visitors —
+  a session token is bound to the org, not to the key that opened it, and
+  lasts its 30 minutes (§3.17.1); revocation stops NEW sessions, and the
+  widget suite pins that a token minted inside the window still chats after
+  it closes. What rotation does buy: every deployed snippet can be
+  invalidated at once without downtime, and — the real reason to build it
+  now — the same rows and the same lookup rule are what will make the
+  SECRET key (layer 6) safe to issue: a bearer credential nobody can rotate
+  without an outage is one nobody rotates.
+
+- **lib/keys/actions.ts** — the providers/sources/origins trust ladder
+  verbatim (signed-in → member → OWNER), re-checked in the action because a
+  Server Action is reachable as a direct POST. `rotatePublishableKeyAction`
+  is useActionState-shaped and reports the grace end in the dashboard's UTC
+  convention; its success sentence says "unless you revoke it sooner",
+  because that sentence lives in the form's client-held state and survives
+  a later "Revoke now" re-render — found in the live check, where the
+  24-hour promise sat one line above the revocation that had just cut it
+  short. `revokePublishableKeyNowAction` is a plain form action: a `false`
+  return needs no message, since the re-rendered list IS the answer. Both
+  revalidate the overview AND the install page — the snippet must now say
+  the new value.
+
+- **components/RotateKeyForm/** — one button, one click, the plan's words.
+  No confirmation step, for M4.6's reason: the consequence is bounded and
+  stated beside the button (the current key keeps working through the
+  window; "revoke now" is a separate control), so "are you sure?" would be
+  ceremony over a decision the page has already explained. What guards an
+  accidental double click is the hidden `keyId`: the action rotates FROM the
+  key this page showed, and a second submit finds it already retiring.
+
+- **The pages** — the overview's key card (§9.7) shows the current key, the
+  owner's Rotate control, each retiring key with when it stops being
+  accepted and when it was LAST USED (realtime stamps `last_used_at` on
+  every mint, so "last used a minute ago" means the old snippet is still
+  deployed somewhere — the one signal a customer needs before revoking
+  early), and a one-line history of revoked keys. The install page (§9.11)
+  always carries the current key and says when a rotation is in progress.
+  The retiring row takes `min-width: 0` on its text column so the long
+  `pk_live_…` value truncates instead of pushing the button off a phone —
+  §9.16's automatic-minimum trap, avoided rather than fixed later.
+
+- **Tests** — `lib/keys/__tests__/keys.test.ts`, DB-gated: one current key
+  and no history at birth; rotation producing a new current key with the
+  old one retiring `ROTATION_GRACE_HOURS` from the DATABASE's now (measured
+  in SQL); the stale-key no-op (rotating from a key no longer current writes
+  nothing, same rows same timestamps); five concurrent rotations from one
+  key resolving into exactly one; revoke-now refusing the current key,
+  ending a retiring one on the DB clock, and leaving an already revoked one
+  byte-identical; both mutations refusing another tenant's key ids with the
+  other tenant's rows untouched; malformed ids refused before any query. The
+  realtime half is in `routes/__tests__/widget.test.ts` (§3.8): a key with a
+  future `revoked_at` mints AND its token chats, and once the window closes
+  the key is byte-identical to an unknown one while that token still chats.
+
+**Verified live** against the dev servers and the compose database: an org
+created in the dashboard, `https://rotation.example` allowlisted, the
+original key minting a real session (200); Rotate clicked on the overview —
+the new key in the card, the success sentence with the grace end, the old key
+under RETIRING with "last used" stamped by that very mint; the retiring key
+and the new key BOTH minting against realtime while an unknown key got 401;
+"Revoke now" moving the old key to the history line and its next mint
+returning a 401 whose body is byte-identical to the unknown key's, with the
+new key still minting; a second rotation, then the install page carrying the
+newest key in the snippet with the rotation-in-progress notice; and at 375px
+`scrollWidth === clientWidth === 375` with the key value truncated (286px of
+text in a 145px box) and the Revoke button intact at 91px, while at 1265px
+the value shows in full. Host and database clocks agreed to the second during
+the check, so none of it was masked by skew.
