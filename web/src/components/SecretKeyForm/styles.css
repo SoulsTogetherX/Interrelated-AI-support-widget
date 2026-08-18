@@ -1,0 +1,85 @@
+/* SecretKeyForm. */
+
+.secretkey {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-top: 0.875rem;
+}
+
+.secretkey-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.secretkey-submit {
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.375rem 0.875rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.secretkey-submit:hover {
+  border-color: var(--accent);
+}
+
+.secretkey-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.secretkey-hint {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+  flex: 1;
+  min-width: 14rem;
+}
+
+.secretkey-error {
+  margin: 0;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+}
+
+/* The one-time reveal. Success palette, and the value on its own line in a
+   scrolling box: an sk_live_… value is 40 characters, wider than a phone,
+   and it must be selectable in full rather than truncated — this is the
+   only time it will ever be shown. */
+.secretkey-reveal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 0.625rem 0.75rem;
+}
+
+.secretkey-revealnote {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.secretkey-value {
+  display: block;
+  background: var(--paper);
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  color: var(--ink);
+}

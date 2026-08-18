@@ -70,6 +70,14 @@ interface ProbeOrg {
    *  like an unknown key (same status, same body) — key state is not
    *  probeable. */
   revokedKey: string
+  /** The org's live SECRET key (M7.3, layer 6) — what its own backend would
+   *  present to POST /v1/sessions. Plaintext travels here because this is a
+   *  throwaway fixture; the database holds only its hash, exactly as the
+   *  dashboard would store it. */
+  secretKey: string
+  /** A secret key this org rotated OUT, window over: refused byte-identical
+   *  to an unknown one. */
+  revokedSecretKey: string
   /** The one allowlisted origin. Anything else must be refused WITHOUT
    *  CORS headers. */
   origin: string
@@ -172,7 +180,7 @@ async function main(): Promise<void> {
   }
 
   const { db } = await import("@/db/pool")
-  const { newId, newPublishableKey } = await import("@shared/utils/ids")
+  const { hashSecretKey, newId, newPublishableKey, newSecretKey, secretKeySuffix } = await import("@shared/utils/ids")
   const { padVector, toPgvector } = await import("@shared/utils/vectors")
   const { MockEmbeddingProvider } = await import("@providers/embedding/mock")
   const { SYSTEM_PROMPT } = await import("@/answer/prompt")
@@ -199,8 +207,8 @@ async function main(): Promise<void> {
     const revokedKey = newPublishableKey()
     const revokedRowId = newId("key")
     await db.insertInto("api_keys").values([
-      { id: newId("key"), org_id: id, kind: "public", public_id: publishableKey, secret_hash: null },
-      { id: revokedRowId, org_id: id, kind: "public", public_id: revokedKey, secret_hash: null },
+      { id: newId("key"), org_id: id, kind: "public", public_id: publishableKey, secret_hash: null, secret_suffix: null },
+      { id: revokedRowId, org_id: id, kind: "public", public_id: revokedKey, secret_hash: null, secret_suffix: null },
     ]).execute()
     // The rotated-out key: created live and then revoked, the rows a real
     // rotation writes (revoked_at is update-only in the schema types — a key
@@ -213,6 +221,24 @@ async function main(): Promise<void> {
     // ahead of a drifted database and leave the key live for the drift.
     await db.updateTable("api_keys").set({ revoked_at: sql`NOW()` })
       .where("id", "=", revokedRowId).execute()
+
+    // The SECRET keys (M7.3): stored as the dashboard stores them — hash and
+    // suffix, never the value — and in the order real history writes them,
+    // rotated-out first, current last, because 007's index allows one
+    // CURRENT secret per org. Revoked on Postgres's clock, as above.
+    const revokedSecretKey = newSecretKey()
+    const revokedSecretRowId = newId("key")
+    await db.insertInto("api_keys").values({
+      id: revokedSecretRowId, org_id: id, kind: "secret", public_id: null,
+      secret_hash: hashSecretKey(revokedSecretKey), secret_suffix: secretKeySuffix(revokedSecretKey),
+    }).execute()
+    await db.updateTable("api_keys").set({ revoked_at: sql`NOW()` })
+      .where("id", "=", revokedSecretRowId).execute()
+    const secretKey = newSecretKey()
+    await db.insertInto("api_keys").values({
+      id: newId("key"), org_id: id, kind: "secret", public_id: null,
+      secret_hash: hashSecretKey(secretKey), secret_suffix: secretKeySuffix(secretKey),
+    }).execute()
 
     const origin = `https://${host}`
     await db.insertInto("allowed_origins").values({ org_id: id, origin }).execute()
@@ -260,7 +286,7 @@ async function main(): Promise<void> {
     }
 
     return {
-      id, name, publishableKey, revokedKey, origin,
+      id, name, publishableKey, revokedKey, secretKey, revokedSecretKey, origin,
       corpus: corpus.map((c) => ({ url: c.url, text: c.text })),
       poisoned: poisoned.map((entry) => ({
         id: entry.id, category: entry.category, url: entry.url,
@@ -323,8 +349,8 @@ async function main(): Promise<void> {
   writeFileSync(resolve(outPath), `${JSON.stringify(fixture, null, 2)}\n`)
 
   console.log(`seeded ${ORG_A} (${a.id}), ${ORG_B} (${b.id}), ${ORG_C} (${c.id})`)
-  console.log(`  org A: pk ${a.publishableKey}, revoked ${a.revokedKey}, origin ${a.origin}, ${a.corpus.length} chunks`)
-  console.log(`  org B: pk ${b.publishableKey}, revoked ${b.revokedKey}, origin ${b.origin}, ${b.corpus.length} chunks`)
+  console.log(`  org A: pk ${a.publishableKey}, revoked ${a.revokedKey}, sk …${a.secretKey.slice(-4)}, origin ${a.origin}, ${a.corpus.length} chunks`)
+  console.log(`  org B: pk ${b.publishableKey}, revoked ${b.revokedKey}, sk …${b.secretKey.slice(-4)}, origin ${b.origin}, ${b.corpus.length} chunks`)
   console.log(`  credential canary: ${credentialCanary === null ? "none (CREDENTIAL_MASTER_KEY unset)" : "stored on org C"}`)
   console.log(`  system-prompt markers: ${systemPromptMarkers.length}`)
   console.log(`fixture written to ${resolve(outPath)}`)

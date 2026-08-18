@@ -1,7 +1,8 @@
 //#region Imports
+import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
 
-import { isId, newId, newPublishableKey } from "../ids"
+import { hashSecretKey, isId, newId, newPublishableKey, newSecretKey, secretKeySuffix } from "../ids"
 //#endregion
 
 //#region Constants
@@ -43,6 +44,37 @@ describe("newPublishableKey", () => {
   it("is never mistakable for an api_keys row id", () => {
     // The credential and the row id must stay visibly different shapes.
     expect(isId("key", newPublishableKey())).toBe(false)
+  })
+})
+
+describe("newSecretKey", () => {
+  it("produces sk_live_<32 base32 chars>, distinct per draw, and never a pk", () => {
+    // The sk_ prefix is what POST /v1/sessions gates on and what the
+    // publishable-key route refuses BEFORE any lookup: the two credentials
+    // must be told apart by shape alone.
+    const key = newSecretKey()
+    expect(key).toMatch(/^sk_live_[0-9abcdefghjkmnpqrstvwxyz]{32}$/)
+    expect(newSecretKey()).not.toBe(key)
+    expect(key.startsWith("pk_")).toBe(false)
+    expect(isId("key", key)).toBe(false)
+  })
+
+  it("hashes to the sha256 hex the schema's secret_hash CHECK expects (64 chars)", () => {
+    // Pinned against node:crypto directly: the dashboard writes this on
+    // issue and realtime recomputes it per request, so the function under
+    // test is the contract itself, not a wrapper someone may re-derive.
+    const key = newSecretKey()
+    const hash = hashSecretKey(key)
+    expect(hash).toBe(createHash("sha256").update(key).digest("hex"))
+    expect(hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(hashSecretKey(newSecretKey())).not.toBe(hash)
+  })
+
+  it("keeps a four-character suffix for display and nothing more", () => {
+    const key = newSecretKey()
+    const suffix = secretKeySuffix(key)
+    expect(suffix).toHaveLength(4)
+    expect(key.endsWith(suffix)).toBe(true)
   })
 })
 

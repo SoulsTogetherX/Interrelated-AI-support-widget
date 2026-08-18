@@ -15,7 +15,7 @@ import { PLANS } from "@shared/billing/plans"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import { MockLLMProvider } from "@providers/llm/mock"
 import type { AnswerEvent } from "@shared/grounding/events"
-import { newId } from "@shared/utils/ids"
+import { hashSecretKey, newId, newSecretKey, secretKeySuffix } from "@shared/utils/ids"
 import { padVector, toPgvector } from "@shared/utils/vectors"
 //#endregion
 
@@ -106,7 +106,7 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
     orgId = newId("org")
     await db.insertInto("organizations").values({ id: orgId, name: "Widget Route Co" }).execute()
     await db.insertInto("api_keys").values({
-      id: newId("key"), org_id: orgId, kind: "public", public_id: PK, secret_hash: null,
+      id: newId("key"), org_id: orgId, kind: "public", public_id: PK, secret_hash: null, secret_suffix: null,
     }).execute()
     await db.insertInto("allowed_origins").values({ org_id: orgId, origin: GOOD_ORIGIN }).execute()
 
@@ -153,11 +153,23 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
       expect(body.visitorId).toMatch(/^vis_[0-9a-f]{32}$/)
     })
 
-    it("honors a caller-supplied visitorId and rejects malformed ones", async () => {
-      const good = await mintSession({ visitorId: "my-stable-visitor" })
-      expect(((await good.json()) as { visitorId: string }).visitorId).toBe("my-stable-visitor")
+    it("honors a stored ANONYMOUS visitorId, and refuses malformed and identified ones alike", async () => {
+      // The widget hands back the vis_<hex> id the server gave it, so a
+      // reload keeps its thread.
+      const returning = `vis_${"7".repeat(32)}`
+      const good = await mintSession({ visitorId: returning })
+      expect(((await good.json()) as { visitorId: string }).visitorId).toBe(returning)
       const bad = await mintSession({ visitorId: "spaces are invalid" })
       expect(bad.status).toBe(400)
+      // An IDENTIFIED id — a customer's user id — is refused on THIS route
+      // (M7.3): only the customer's own server may mint one, through
+      // POST /v1/sessions with the secret key. Otherwise anyone on the
+      // allowlisted origin could mint a session as "user 42" and be user
+      // 42 to the agent reading the inbox. Same status as malformed: a
+      // browser has no business telling the two apart.
+      const impersonation = await mintSession({ visitorId: "42" })
+      expect(impersonation.status).toBe(400)
+      expect(await impersonation.json()).toEqual(await bad.json())
     })
 
     it("rejects an unlisted origin WITHOUT CORS headers — the browser can't even read it", async () => {
@@ -182,7 +194,7 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
       const revokedPk = "pk_live_revoked_key"
       await db.insertInto("api_keys").values({
         id: newId("key"), org_id: orgId, kind: "public", public_id: revokedPk,
-        secret_hash: null,
+        secret_hash: null, secret_suffix: null,
       }).execute()
       // Revoked on the DATABASE's clock, which is the clock the route
       // compares against. `new Date()` here would be this process's clock,
@@ -204,7 +216,7 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
       const retiringPk = "pk_live_retiring_key"
       const retiringRowId = newId("key")
       await db.insertInto("api_keys").values({
-        id: retiringRowId, org_id: orgId, kind: "public", public_id: retiringPk, secret_hash: null,
+        id: retiringRowId, org_id: orgId, kind: "public", public_id: retiringPk, secret_hash: null, secret_suffix: null,
       }).execute()
       await db.updateTable("api_keys").set({ revoked_at: sql`NOW() + interval '1 hour'` })
         .where("id", "=", retiringRowId).execute()
@@ -298,6 +310,224 @@ describe.skipIf(!DB_CONFIGURED)("widget routes", () => {
           statuses.push(response.status)
         }
         expect(statuses).toEqual([200, 200, 429])
+      } finally {
+        await new Promise((resolve) => floodServer.close(resolve))
+      }
+    })
+  })
+
+  describe("server-side session mint — POST /v1/sessions (layer 6)", () => {
+    // The customer's BACKEND mints here with the secret key; the browser
+    // never does. Seeded like the dashboard seeds it (web/src/lib/keys):
+    // the plaintext exists only in this process, the row holds its hash and
+    // its four-character suffix. Three keys, written in the order real
+    // history writes them — a revoked one, a retiring one, then the current
+    // one — because 007's one-current-secret-per-org index refuses a second
+    // current row, so an older key has to be rotated OUT before a newer one
+    // is issued, exactly as the dashboard's rotation does it.
+    const SK = newSecretKey()
+    const REVOKED_SK = newSecretKey()
+    const RETIRING_SK = newSecretKey()
+    let secretRowId: string
+    let retiringRowId: string
+
+    async function serverMint(
+      body: Record<string, unknown>,
+      bearer: string | null = SK,
+      base: string = baseUrl,
+    ): Promise<Response> {
+      return fetch(`${base}/v1/sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(bearer !== null ? { authorization: `Bearer ${bearer}` } : {}),
+        },
+        body: JSON.stringify(body),
+      })
+    }
+
+    beforeAll(async () => {
+      const secretRow = (key: string, id: string) => ({
+        id, org_id: orgId, kind: "secret" as const, public_id: null,
+        secret_hash: hashSecretKey(key), secret_suffix: secretKeySuffix(key),
+      })
+      // Revoked: created live, then revoked — on Postgres's clock, the clock
+      // the route compares against.
+      const revokedRowId = newId("key")
+      await db.insertInto("api_keys").values(secretRow(REVOKED_SK, revokedRowId)).execute()
+      await db.updateTable("api_keys").set({ revoked_at: sql`NOW()` }).where("id", "=", revokedRowId).execute()
+      // Retiring: the state rotation leaves the old key in — revoked_at in
+      // the future, still accepted until then.
+      retiringRowId = newId("key")
+      await db.insertInto("api_keys").values(secretRow(RETIRING_SK, retiringRowId)).execute()
+      await db.updateTable("api_keys").set({ revoked_at: sql`NOW() + interval '1 hour'` })
+        .where("id", "=", retiringRowId).execute()
+      // Current: the newest, and the only one with revoked_at NULL.
+      secretRowId = newId("key")
+      await db.insertInto("api_keys").values(secretRow(SK, secretRowId)).execute()
+    })
+
+    it("mints a session for an identified user of an allowlisted origin — and that token chats", async () => {
+      const response = await serverMint({ origin: GOOD_ORIGIN, visitorId: "user_42" })
+      expect(response.status).toBe(200)
+      // No CORS on this route, ever: a browser page cannot use a secret key
+      // even by mistake — the browser refuses to read this response.
+      expect(response.headers.get("access-control-allow-origin")).toBeNull()
+      const body = await response.json() as { token: string; expiresAt: number; visitorId: string }
+      expect(body.visitorId).toBe("user_42")
+      expect(body.expiresAt).toBeGreaterThan(Date.now())
+
+      // The token is an ordinary session, bound to the origin the server
+      // named: it chats from that origin …
+      const answer = await chat(body.token, { question: CHUNK_TEXT })
+      expect(answer.status).toBe(200)
+      expect(answer.events.some((e) => e.type === "claim")).toBe(true)
+      // … under the identity the server asserted …
+      const meta = answer.events[0] as Extract<AnswerEvent, { type: "meta" }>
+      const conversation = await db.selectFrom("conversations").select("visitor_id")
+        .where("id", "=", meta.conversationId).executeTakeFirstOrThrow()
+      expect(conversation.visitor_id).toBe("user_42")
+      // … and dies when replayed from anywhere else, exactly like a
+      // browser-minted token.
+      const replayed = await chat(body.token, { question: CHUNK_TEXT }, EVIL_ORIGIN)
+      expect(replayed.status).toBe(403)
+
+      // The mint stamped the key (the "last used" the dashboard shows) and
+      // counted the origin (layer 4 — a server mint is a widget load too).
+      const row = await db.selectFrom("api_keys").select("last_used_at")
+        .where("id", "=", secretRowId).executeTakeFirstOrThrow()
+      expect(row.last_used_at).not.toBeNull()
+      const counter = await db.selectFrom("origin_daily").select("minted")
+        .where("org_id", "=", orgId).where("day", "=", utcDay()).where("origin", "=", GOOD_ORIGIN)
+        .executeTakeFirstOrThrow()
+      expect(counter.minted).toBeGreaterThan(0)
+    })
+
+    it("refuses a missing, malformed, unknown, revoked, and publishable-key bearer with ONE 401", async () => {
+      // Every refusal here happens BEFORE anything is minted or counted, and
+      // every body is byte-identical: which kind of wrong key was presented
+      // is not information this route shares (the same posture as the
+      // publishable key's route).
+      const cases: Array<[string, string | null]> = [
+        ["missing", null],
+        ["garbage", "not-a-key"],
+        ["the PUBLISHABLE key", PK],
+        ["unknown", newSecretKey()],
+        ["revoked", REVOKED_SK],
+      ]
+      const bodies = new Set<string>()
+      for (const [label, bearer] of cases) {
+        const response = await serverMint({ origin: GOOD_ORIGIN, visitorId: "user_42" }, bearer)
+        expect(response.status, label).toBe(401)
+        expect(response.headers.get("access-control-allow-origin"), label).toBeNull()
+        bodies.add(await response.text())
+      }
+      expect(bodies.size).toBe(1)
+      // …and the revoked key was one row the org's own secret should have
+      // outlived: the live one still mints.
+      expect((await serverMint({ origin: GOOD_ORIGIN, visitorId: "user_42" })).status).toBe(200)
+    })
+
+    it("keeps a rotated-out secret key live through its grace window, on the database's clock", async () => {
+      // The same rule as the publishable key (M7.1): rotation schedules the
+      // old key's revocation rather than performing it, so a backend the
+      // customer has not redeployed keeps minting until the window closes.
+      const inside = await serverMint({ origin: GOOD_ORIGIN, visitorId: "user_7" }, RETIRING_SK)
+      expect(inside.status).toBe(200)
+      const { token } = (await inside.json()) as { token: string }
+      // …and the mint stamped the retiring row, which is how the owner learns
+      // the OLD backend config is still deployed somewhere.
+      const stamped = await db.selectFrom("api_keys").select("last_used_at")
+        .where("id", "=", retiringRowId).executeTakeFirstOrThrow()
+      expect(stamped.last_used_at).not.toBeNull()
+
+      await db.updateTable("api_keys").set({ revoked_at: sql`NOW() - interval '1 second'` })
+        .where("id", "=", retiringRowId).execute()
+      const after = await serverMint({ origin: GOOD_ORIGIN, visitorId: "user_7" }, RETIRING_SK)
+      const unknown = await serverMint({ origin: GOOD_ORIGIN, visitorId: "user_7" }, newSecretKey())
+      expect(after.status).toBe(401)
+      expect(await after.text()).toBe(await unknown.text())
+      // The session minted inside the window is bound to the org, not the
+      // key: it keeps chatting for its 30 minutes.
+      expect((await chat(token, { question: CHUNK_TEXT })).status).toBe(200)
+    })
+
+    it("refuses an unlisted origin with 403 (counted, no CORS) and tells the tenant's server why", async () => {
+      // A server naming an origin the org never allowlisted: refused like a
+      // copied snippet would be, and COUNTED like one, so the dashboard's
+      // traffic table shows the origin with its Allow button. Unlike the
+      // browser route the body carries a sentence — the caller has proven
+      // it is the tenant, and this is its own configuration to fix.
+      const before = await db.selectFrom("origin_daily").select("refused")
+        .where("org_id", "=", orgId).where("day", "=", utcDay()).where("origin", "=", EVIL_ORIGIN)
+        .executeTakeFirst()
+      const unlisted = await serverMint({ origin: EVIL_ORIGIN, visitorId: "user_42" })
+      expect(unlisted.status).toBe(403)
+      expect(unlisted.headers.get("access-control-allow-origin")).toBeNull()
+      const unlistedBody = await unlisted.json() as { error: string; detail: string }
+      expect(unlistedBody.error).toBe("origin not allowed")
+      expect(unlistedBody.detail).toMatch(/not on the organization's allowlist/)
+      const after = await db.selectFrom("origin_daily").select("refused")
+        .where("org_id", "=", orgId).where("day", "=", utcDay()).where("origin", "=", EVIL_ORIGIN)
+        .executeTakeFirstOrThrow()
+      expect(after.refused - (before?.refused ?? 0)).toBe(1)
+
+      // A value that is not an origin at all (a trailing slash, the commonest
+      // typo) gets the SHAPE sentence instead — and no row of its own: it is
+      // counted under the malformed sentinel like any other refused
+      // non-origin (§3.28).
+      const malformed = await serverMint({ origin: `${GOOD_ORIGIN}/`, visitorId: "user_42" })
+      expect(malformed.status).toBe(403)
+      expect(((await malformed.json()) as { detail: string }).detail).toMatch(/scheme:\/\/host/)
+      // Missing entirely: a 400 that says what to send.
+      const missing = await serverMint({ visitorId: "user_42" })
+      expect(missing.status).toBe(400)
+    })
+
+    it("refuses an anonymous-shaped, malformed, or missing visitorId with 400 and mints nothing", async () => {
+      // The anonymous namespace (vis_<hex>) is the browser route's; a server
+      // asserting an identity must use its own id, or the two namespaces
+      // could overlap and "identified by your server" would stop being true.
+      for (const visitorId of [`vis_${"a".repeat(32)}`, "spaces are invalid", "alice@example.com", undefined]) {
+        const response = await serverMint({ origin: GOOD_ORIGIN, ...(visitorId !== undefined ? { visitorId } : {}) })
+        expect(response.status, String(visitorId)).toBe(400)
+        const body = await response.json() as { error: string; token?: string }
+        expect(body.error).toBe("invalid visitorId")
+        expect(body.token).toBeUndefined()
+      }
+    })
+
+    it("grants nothing to a browser preflight — no CORS headers on OPTIONS or on the answer", async () => {
+      // A page that tried to call this route with a secret key would send a
+      // preflight first; without an allow-origin header the browser stops
+      // there. Express answers OPTIONS on a route with an Allow header of its
+      // own, which is fine — it is the ABSENCE of CORS that matters.
+      const preflight = await fetch(`${baseUrl}/v1/sessions`, {
+        method: "OPTIONS",
+        headers: { origin: GOOD_ORIGIN, "access-control-request-method": "POST" },
+      })
+      expect(preflight.headers.get("access-control-allow-origin")).toBeNull()
+      const withOrigin = await fetch(`${baseUrl}/v1/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: GOOD_ORIGIN, authorization: `Bearer ${SK}` },
+        body: JSON.stringify({ origin: GOOD_ORIGIN, visitorId: "user_42" }),
+      })
+      expect(withOrigin.status).toBe(200)
+      expect(withOrigin.headers.get("access-control-allow-origin")).toBeNull()
+    })
+
+    it("rate limits server-side minting per IP, before the key is even looked at", async () => {
+      const { server: floodServer, baseUrl: floodUrl } = await listen(buildApp({
+        serverMintLimiter: new RateLimiter({ capacity: 2, refillPerSecond: 0.001 }),
+      }))
+      try {
+        const statuses: number[] = []
+        for (let i = 0; i < 3; i++) {
+          statuses.push((await serverMint({ origin: GOOD_ORIGIN, visitorId: "user_42" }, "sk_live_guess", floodUrl)).status)
+        }
+        // Two guesses cost two lookups and are refused as unknown; the third
+        // is refused as a flood — the bucket bounds guessing at a secret.
+        expect(statuses).toEqual([401, 401, 429])
       } finally {
         await new Promise((resolve) => floodServer.close(resolve))
       }

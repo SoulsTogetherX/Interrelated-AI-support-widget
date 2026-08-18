@@ -9,6 +9,7 @@ import { notFound } from "next/navigation"
 
 import { requireOrgMember } from "@/lib/orgs"
 import { getConversation } from "@/lib/conversations/queries"
+import { IDENTIFIED_SUFFIX, describeVisitor } from "@/lib/conversations/visitors"
 import "./page.css"
 
 import type { CitationView } from "@/lib/conversations/queries"
@@ -32,11 +33,16 @@ export default async function ConversationPage({
   if (!conversation) {
     notFound()
   }
+  // An identified visitor is named in full with the reason the name can be
+  // trusted (M7.3): only the tenant's own server, holding the secret key,
+  // can put a non-anonymous id in a session.
+  const visitor = describeVisitor(conversation.visitorId)
 
   return (
     <div className="transcript">
       <h1 className="transcript-title">
-        Conversation with visitor {conversation.visitorId.slice(0, 12)}…
+        Conversation with {visitor.noun} {visitor.name}
+        {visitor.identified ? IDENTIFIED_SUFFIX : null}
       </h1>
       <p className="transcript-status">status: {conversation.status}</p>
 

@@ -120,6 +120,20 @@ await check("POST /v1/widget/escalate without a session returns 401", async () =
   if (res.status !== 401) throw new Error(`status ${res.status}`)
 })
 
+// The secret-key mint (M7.3, layer 6): mounted (not 404) and closed (401
+// without a bearer) — and it must never speak CORS, since a page that could
+// use a secret key is the one thing this route exists to make impossible.
+await check("POST /v1/sessions without a secret key returns 401 and no CORS", async () => {
+  const res = await fetch(`${base}/v1/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://smoke.example" },
+    body: JSON.stringify({ origin: "https://smoke.example", visitorId: "probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 401) throw new Error(`status ${res.status}`)
+  if (res.headers.get("access-control-allow-origin") !== null) throw new Error("CORS header on the secret-key route")
+})
+
 // ── Demo surface (M2.7) ─────────────────────────────────────────────────────
 // /demo must answer 200 in BOTH states (configured → the widget page;
 // unconfigured → setup instructions) — a recruiter must never see a 500.

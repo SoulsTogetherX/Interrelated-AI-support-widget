@@ -8,7 +8,7 @@ import Link from "next/link"
 
 import CopyButton from "@/components/CopyButton"
 import OriginForm from "@/components/OriginForm"
-import { listPublishableKeys } from "@/lib/keys"
+import { listPublishableKeys, listSecretKeys } from "@/lib/keys"
 import { requireOrgMember } from "@/lib/orgs"
 import { listOrigins } from "@/lib/origins"
 import { allowOriginNowAction, removeOriginAction } from "@/lib/origins/actions"
@@ -37,8 +37,9 @@ export default async function WidgetPage({
 }) {
   const { orgId } = await params
   const { org } = await requireOrgMember(orgId)
-  const [keys, origins, traffic] = await Promise.all([
+  const [keys, secretKeys, origins, traffic] = await Promise.all([
     listPublishableKeys(org.id),
+    listSecretKeys(org.id),
     listOrigins(org.id),
     listOriginTraffic(org.id, TRAFFIC_DAYS),
   ])
@@ -49,6 +50,7 @@ export default async function WidgetPage({
   // keeping alive.
   const publishableKey = keys.find((k) => k.status === "current")?.publishableKey ?? null
   const retiring = keys.filter((k) => k.status === "retiring")
+  const currentSecret = secretKeys.find((k) => k.status === "current") ?? null
   const isOwner = org.role === "owner"
   const api = widgetApiUrl()
   const apiForSnippet = api ?? "https://YOUR-REALTIME-HOST"
@@ -58,6 +60,37 @@ export default async function WidgetPage({
     `        data-api="${apiForSnippet}"\n` +
     `        data-title="${org.name} Support"></script>`
   const csp = `connect-src ${apiForSnippet}; script-src ${apiForSnippet};`
+  // Strong mode (layer 6, §9.19): the customer's server mints the session,
+  // and the snippet names the endpoint on THEIR site that hands it over —
+  // no publishable key on the page at all. The origin in the recipe is the
+  // first allowlisted one, so what they copy matches what the route checks.
+  const strongOrigin = origins[0]?.origin ?? "https://app.example.com"
+  const strongSnippet =
+    `<script src="${apiForSnippet}/widget.js" async\n` +
+    `        data-session-url="/api/support-session"\n` +
+    `        data-api="${apiForSnippet}"\n` +
+    `        data-title="${org.name} Support"></script>`
+  const endpointRecipe =
+    `// GET /api/support-session — on YOUR server, behind YOUR login. Node 18+ shown;\n` +
+    `// any language works: one authenticated POST, and pass the answer through.\n` +
+    `app.get("/api/support-session", async (req, res) => {\n` +
+    `  const user = await requireSignedInUser(req)          // your session check\n` +
+    `  const upstream = await fetch("${apiForSnippet}/v1/sessions", {\n` +
+    `    method: "POST",\n` +
+    `    headers: {\n` +
+    `      authorization: \`Bearer \${process.env.INTERRELATED_SECRET_KEY}\`,\n` +
+    `      "content-type": "application/json",\n` +
+    `    },\n` +
+    `    body: JSON.stringify({\n` +
+    `      origin: "${strongOrigin}",   // the origin this page runs on — allowlisted above\n` +
+    `      visitorId: String(user.id),  // your stable user id: letters, digits, _ and - (not an email)\n` +
+    `    }),\n` +
+    `  })\n` +
+    `  res.status(upstream.status)\n` +
+    `    .set("cache-control", "no-store")\n` +
+    `    .type("json")\n` +
+    `    .send(await upstream.text())                       // {token, expiresAt, visitorId} — verbatim\n` +
+    `})`
 
   return (
     <div className="install">
@@ -213,6 +246,58 @@ export default async function WidgetPage({
         </p>
         <pre className="install-snippet">{csp}</pre>
         <CopyButton text={csp} label="Copy directives" />
+      </section>
+
+      <section className="install-card">
+        <h2 className="install-cardtitle">4. Optional — sessions minted by your server</h2>
+        {/* Layer 6 (§9.19), stated as what it changes: WHO proves the visitor
+            is allowed. With the publishable key, the browser does, and the
+            allowlist plus rate limits bound a copied snippet; with the secret
+            key, YOUR server does — only a user you have signed in gets a
+            session, under an id you chose, and the page carries nothing worth
+            copying. */}
+        <p className="install-note">
+          By default the page above proves nothing about the visitor — the widget is for anyone on
+          your allowlisted site. If your users sign in, your server can mint the widget session
+          instead: it calls us with your <strong>secret key</strong> and your user&apos;s id, hands the
+          token to the page, and the page carries no publishable key at all. Only your logged-in users
+          can open a chat, and the transcript shows <em>which</em> user — an identity your server
+          asserted, which a browser cannot forge.
+        </p>
+        <p className="install-note">
+          {currentSecret ? (
+            <>
+              This organization has a secret key ending in <code>…{currentSecret.suffix}</code>
+              {currentSecret.lastUsedAt ? " (in use)" : " (not used yet)"}. Rotate or revoke it from the{" "}
+              <Link href={`/dashboard/${org.id}`}>overview</Link>.
+            </>
+          ) : (
+            <>
+              No secret key yet — {isOwner ? "generate one" : "the owner can generate one"} on the{" "}
+              <Link href={`/dashboard/${org.id}`}>overview</Link>. It is shown once and belongs in your
+              server&apos;s configuration, never in a page.
+            </>
+          )}
+        </p>
+        <h3 className="install-subtitle">a. An endpoint on your server, behind your login</h3>
+        <pre className="install-snippet">{endpointRecipe}</pre>
+        <CopyButton text={endpointRecipe} label="Copy endpoint recipe" />
+        <p className="install-note">
+          A 403 with <code>origin not allowed</code> means the origin your server named is not
+          allowlisted in section 1 — the attempt shows up in the table there with an Allow button. The
+          token lasts 30 minutes; the widget calls your endpoint again on its own when it expires, so
+          the endpoint should not be cacheable and should keep answering while the user is signed in.
+        </p>
+        <h3 className="install-subtitle">b. The snippet, without a publishable key</h3>
+        <pre className="install-snippet">{strongSnippet}</pre>
+        <CopyButton text={strongSnippet} label="Copy strong-mode snippet" />
+        <p className="install-note">
+          <code>data-session-url</code> replaces <code>data-key</code>: the widget fetches its session
+          from that URL on your site (same-origin, with the user&apos;s cookies) instead of minting one
+          with a publishable key. Signed-out users get whatever your endpoint answers them — a 401
+          renders as the widget being unable to start, so most sites simply omit the snippet on pages
+          that do not require sign-in.
+        </p>
       </section>
 
       <p className="install-back">

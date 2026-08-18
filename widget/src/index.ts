@@ -23,10 +23,19 @@ const capturedSocketFactory = (url: string): WebSocket => new CapturedWebSocket(
  * The IIFE entry. Reads its configuration from the <script> tag itself:
  *
  *   <script src=".../widget.js" async
- *           data-key="pk_live_…"
+ *           data-key="pk_live_…"                  (default mode)
  *           data-api="https://api.example.com"
- *           data-title="Acme Support"        (optional)
- *           data-accent="#0f766e">           (optional)
+ *           data-title="Acme Support"             (optional)
+ *           data-accent="#0f766e">                (optional)
+ *   </script>
+ *
+ * or, in strong mode (trust-model layer 6 — the customer's own server
+ * mints the session with the SECRET key for a user it has signed in, and
+ * the page carries no publishable key at all):
+ *
+ *   <script src=".../widget.js" async
+ *           data-session-url="/api/support-session"
+ *           data-api="https://api.example.com">
  *   </script>
  *
  * document.currentScript is live during initial evaluation (async
@@ -38,9 +47,10 @@ function boot(): void {
   const script = document.currentScript
   if (!(script instanceof HTMLScriptElement)) return
   const key = script.dataset["key"]
+  const sessionUrl = script.dataset["sessionUrl"]
   const api = script.dataset["api"]
-  if (key === undefined || api === undefined) {
-    console.warn("[interrelated] widget needs data-key and data-api on its <script> tag")
+  if ((key === undefined && sessionUrl === undefined) || api === undefined) {
+    console.warn("[interrelated] widget needs data-api and either data-key or data-session-url on its <script> tag")
     return
   }
   // Two copies of the snippet must not produce two bubbles.
@@ -56,7 +66,7 @@ function boot(): void {
       host,
       new ApiClient({
         apiBase: api,
-        publishableKey: key,
+        ...(sessionUrl !== undefined ? { sessionUrl } : { publishableKey: key as string }),
         fetchImpl: capturedFetch,
         socketFactory: capturedSocketFactory,
       }),

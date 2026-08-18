@@ -146,6 +146,29 @@
   background: #fef2f2;
 }
 
+/* The secret key card (M7.3). A lead note sits ABOVE the key rather than
+   below it, because what the key is for has to be read before "Generate"
+   makes sense; the current key line is suffix-only by construction. */
+.orghome-cardnote--lead {
+  margin: 0 0 0.75rem;
+}
+
+.orghome-secret {
+  margin: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* Revoke on the CURRENT secret key: a row of its own under the form, the
+   button first so the sentence beside it reads as its consequence. */
+.orghome-revokecurrent {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
 .orghome-steps {
   margin: 0;
   padding-left: 1.25rem;

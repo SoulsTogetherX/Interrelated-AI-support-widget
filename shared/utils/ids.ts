@@ -4,7 +4,7 @@
 // browser's crypto through the same interface shape, but does NOT import this
 // file — it has a zero-dependency copy, because importing shared/ would drag
 // tooling assumptions into a bundle with a 15 KB budget).
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 //#endregion
 
 //#region Type Defs
@@ -108,6 +108,48 @@ export function isId(prefix: IdPrefix, value: string): boolean {
  */
 export function newPublishableKey(): string {
   return `pk_live_${toBase32(randomBytes(ID_BYTES))}`
+}
+
+/**
+ * Generates a SECRET widget key: `sk_live_<32 chars of base32>` — trust-model
+ * layer 6, the credential a customer's own backend presents to
+ * POST /v1/sessions to mint a session for a user it has authenticated
+ * (realtime/src/routes/widget.ts). Same shape and entropy as the publishable
+ * key, different prefix on purpose: the session routes gate on the prefix
+ * before any lookup, so a secret pasted where a publishable key belongs (or
+ * the reverse) is refused for its shape and never reaches a query. Minted by
+ * the dashboard (web/src/lib/keys), which shows the value exactly ONCE and
+ * stores only its hash — the same posture as dashboard session cookies.
+ */
+export function newSecretKey(): string {
+  return `sk_live_${toBase32(randomBytes(ID_BYTES))}`
+}
+
+/**
+ * The storage form of a secret key: sha256 hex, which is what
+ * `api_keys.secret_hash` holds and what the session route looks a bearer up
+ * by. Lives beside the generator because it is the OTHER half of the same
+ * cross-package contract — the dashboard writes this on issue, realtime
+ * computes it per request — and two packages hashing "the same way" by
+ * convention is how one of them ends up hashing differently. Plain sha256
+ * rather than a slow KDF, deliberately: the input is 160 random bits, not a
+ * human password, so there is nothing for a slow hash to defend against and
+ * every mint would pay it (the same argument sessions.id makes).
+ */
+export function hashSecretKey(secretKey: string): string {
+  return createHash("sha256").update(secretKey).digest("hex")
+}
+
+/**
+ * The last four characters of a secret key — the only fragment the dashboard
+ * keeps in plaintext (`api_keys.secret_suffix`), so an owner can tell which
+ * key their server holds ("sk_live_…k3p9") without the value ever being shown
+ * again. Four base32 characters are 20 of 160 bits; the rest stays
+ * unguessable. The provider-credential vault keeps a suffix for the same
+ * reason (realtime/src/credentials/vault.ts).
+ */
+export function secretKeySuffix(secretKey: string): string {
+  return secretKey.slice(-4)
 }
 
 export type { IdPrefix }

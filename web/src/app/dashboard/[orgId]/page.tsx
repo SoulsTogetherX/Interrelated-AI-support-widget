@@ -4,8 +4,9 @@
 import Link from "next/link"
 
 import RotateKeyForm from "@/components/RotateKeyForm"
-import { ROTATION_GRACE_HOURS, listPublishableKeys } from "@/lib/keys"
-import { revokePublishableKeyNowAction } from "@/lib/keys/actions"
+import SecretKeyForm from "@/components/SecretKeyForm"
+import { ROTATION_GRACE_HOURS, listPublishableKeys, listSecretKeys } from "@/lib/keys"
+import { revokePublishableKeyNowAction, revokeSecretKeyNowAction } from "@/lib/keys/actions"
 import { listOrgsForUser, requireOrgMember } from "@/lib/orgs"
 import { refusedSummary } from "@/lib/traffic/queries"
 import { getTodayUsage } from "@/lib/usage/queries"
@@ -27,8 +28,9 @@ export default async function OrgOverviewPage({
 }) {
   const { orgId } = await params
   const { user, org } = await requireOrgMember(orgId)
-  const [keys, orgs, usage, refused] = await Promise.all([
+  const [keys, secretKeys, orgs, usage, refused] = await Promise.all([
     listPublishableKeys(org.id),
+    listSecretKeys(org.id),
     listOrgsForUser(user.id),
     getTodayUsage(org.id),
     refusedSummary(org.id, TRAFFIC_DAYS),
@@ -47,6 +49,12 @@ export default async function OrgOverviewPage({
     (latest, k) => (k.revokedAt && (!latest || k.revokedAt > latest) ? k.revokedAt : latest),
     null,
   )
+  // The secret key (layer 6, §9.19): same standing rule, same clock. Most
+  // orgs have none — server-side sessions are optional — and the card says
+  // what having one buys before offering to issue it.
+  const currentSecret = secretKeys.find((k) => k.status === "current") ?? null
+  const retiringSecrets = secretKeys.filter((k) => k.status === "retiring")
+  const revokedSecrets = secretKeys.filter((k) => k.status === "revoked")
 
   return (
     <div className="orghome">
@@ -179,6 +187,95 @@ export default async function OrgOverviewPage({
             {revokedKeys.length === 1 ? "One earlier key" : `${revokedKeys.length} earlier keys`}{" "}
             revoked, most recently {latestRevocation ? `${utcMinute(latestRevocation)} UTC` : "—"}.
             A revoked key is refused exactly like one that never existed.
+          </p>
+        ) : null}
+      </section>
+
+      <section className="orghome-card">
+        <h2 className="orghome-cardtitle">Secret key — server-side sessions</h2>
+        {/* Layer 6 (§9.19). The value is never on this page except in the
+            moment it is issued: the row holds a hash and these four
+            characters. Optional by design — most orgs run on the publishable
+            key alone, and the card says what the secret one buys. */}
+        <p className="orghome-cardnote orghome-cardnote--lead">
+          Optional. With a secret key, <em>your</em> server mints widget sessions for users it has
+          signed in, and your page carries no publishable key at all — nothing worth copying, and
+          only your logged-in users can open a chat. The recipe is on the{" "}
+          <Link href={`/dashboard/${org.id}/widget`}>Install page</Link>. Never put this key in a
+          page or a snippet: it belongs in your server&apos;s configuration.
+        </p>
+        {currentSecret ? (
+          <p className="orghome-secret">
+            <code className="orghome-keyvalue">sk_live_…{currentSecret.suffix}</code>
+            <span className="orghome-keymeta">
+              {" "}issued {utcMinute(currentSecret.createdAt)} UTC ·{" "}
+              {currentSecret.lastUsedAt
+                ? `last used ${utcMinute(currentSecret.lastUsedAt)} UTC`
+                : "not used yet"}
+            </span>
+          </p>
+        ) : (
+          <p className="orghome-secret orghome-keymeta">No secret key issued.</p>
+        )}
+        {isOwner ? (
+          <SecretKeyForm
+            orgId={org.id}
+            currentKeyId={currentSecret?.id ?? null}
+            graceHours={ROTATION_GRACE_HOURS}
+          />
+        ) : null}
+        {isOwner && currentSecret ? (
+          <form action={revokeSecretKeyNowAction} className="orghome-revokecurrent">
+            <input type="hidden" name="orgId" value={org.id} />
+            <input type="hidden" name="keyId" value={currentSecret.id} />
+            <button className="orghome-revoke" type="submit">
+              Revoke — stop server-side sessions
+            </button>
+            {/* Allowed on the CURRENT secret key where it is not on the
+                current publishable one: an org without a secret key is
+                simply not using this mode, not a dead widget. */}
+            <span className="orghome-keymeta">
+              Immediate. Sessions already minted keep working for up to 30 minutes.
+            </span>
+          </form>
+        ) : null}
+
+        {retiringSecrets.length > 0 ? (
+          <>
+            <h3 className="orghome-subtitle">Retiring</h3>
+            <ul className="orghome-keys">
+              {retiringSecrets.map((k) => (
+                <li className="orghome-key" key={k.id}>
+                  <div className="orghome-keymain">
+                    <code className="orghome-keyvalue">sk_live_…{k.suffix}</code>
+                    <span className="orghome-keymeta">
+                      accepted until {k.revokedAt ? utcMinute(k.revokedAt) : "—"} UTC ·{" "}
+                      {k.lastUsedAt ? `last used ${utcMinute(k.lastUsedAt)} UTC` : "not used since rotation"}
+                    </span>
+                  </div>
+                  {isOwner ? (
+                    <form action={revokeSecretKeyNowAction}>
+                      <input type="hidden" name="orgId" value={org.id} />
+                      <input type="hidden" name="keyId" value={k.id} />
+                      <button className="orghome-revoke" type="submit">
+                        Revoke now
+                      </button>
+                    </form>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <p className="orghome-cardnote">
+              A retiring key still mints sessions until the instant shown — &quot;last used&quot;
+              tells you whether the old value is still deployed somewhere before you cut it short.
+            </p>
+          </>
+        ) : null}
+
+        {revokedSecrets.length > 0 ? (
+          <p className="orghome-cardnote">
+            {revokedSecrets.length === 1 ? "One earlier secret key" : `${revokedSecrets.length} earlier secret keys`}{" "}
+            revoked. A revoked key is refused exactly like one that never existed.
           </p>
         ) : null}
       </section>

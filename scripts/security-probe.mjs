@@ -4,8 +4,9 @@
 // gives. Where smoke-test.mjs asks "is the surface mounted and closed?",
 // this asks "does each layer of the trust model actually hold against the
 // requests it exists to stop?" — the origin allowlist, key state, session
-// tokens, tenant isolation, input bounds, the handoff socket, and the rate
-// limits — with a seeded tenant to attack rather than posture alone.
+// tokens, tenant isolation, input bounds, the handoff socket, server-side
+// session minting with the secret key (M7.3), and the rate limits — with a
+// seeded tenant to attack rather than posture alone.
 //
 // Zero dependencies, like every probe here: Node 22's stdlib is enough
 // (fetch, the global WebSocket client, node:http for raw upgrade handshakes),
@@ -38,6 +39,7 @@
 //     is asserted first, and a failed control fails the run rather than
 //     letting everything after it pass vacuously.
 
+import { randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 
 //#region Arguments
@@ -280,13 +282,19 @@ if (!fixture) {
   }
 
   const stamp = Date.now().toString(36)
+  // Browser-minted visitor ids must be ANONYMOUS-shaped (vis_ + 32 hex —
+  // what the widget stores and hands back); since M7.3 the route refuses
+  // any other shape, because a non-anonymous id is a server-asserted
+  // identity, and section [I] checks exactly that refusal.
+  const anonymousVisitor = () => `vis_${randomBytes(16).toString("hex")}`
+  const visitorA1 = anonymousVisitor()
   let sessionA1, sessionA2, sessionB1
   await check("the allowlisted origin mints sessions, with CORS echoing exactly that origin", async () => {
-    sessionA1 = await mint(orgA, `probe_a1_${stamp}`)
-    sessionA2 = await mint(orgA, `probe_a2_${stamp}`)
-    sessionB1 = await mint(orgB, `probe_b1_${stamp}`)
+    sessionA1 = await mint(orgA, visitorA1)
+    sessionA2 = await mint(orgA, anonymousVisitor())
+    sessionB1 = await mint(orgB, anonymousVisitor())
     expect(typeof sessionA1.token === "string" && sessionA1.token.length > 20, "no token in mint response")
-    expect(sessionA1.visitorId === `probe_a1_${stamp}`, "visitor id was not honored")
+    expect(sessionA1.visitorId === visitorA1, "visitor id was not honored")
   })
   if (!sessionA1 || !sessionA2 || !sessionB1) {
     console.error("\ncannot continue without sessions")
@@ -648,6 +656,107 @@ if (!fixture) {
   }
   //#endregion
 
+  //#region I. Layer 6 — server-side sessions with the secret key (M7.3)
+  // POST /v1/sessions: the customer's OWN backend presents the secret key to
+  // mint a session for a user it signed in. What must hold: every wrong key
+  // is one uniform 401 (a revoked secret indistinguishable from an unknown
+  // one, and the PUBLISHABLE key refused here); the secret key is refused
+  // where the publishable one belongs; the origin still has to be
+  // allowlisted; identity lives in a namespace a browser cannot claim; and
+  // the route never speaks CORS, so a secret key on a page cannot work even
+  // by mistake. Every check has its positive control: the real key on the
+  // real origin mints, and that token chats.
+  console.log("\n[I] server-side sessions (secret key)")
+  if (!orgA.secretKey) {
+    skip("[I] server-side session checks", "fixture predates M7.3 (no secretKey) — re-run npm run seed-security")
+  } else {
+    const serverMint = (body, bearer, extraHeaders = {}) => postJson("/v1/sessions", body, {
+      ...(bearer === null ? {} : { authorization: `Bearer ${bearer}` }),
+      ...extraHeaders,
+    })
+    const identified = `probe_user_${stamp}`
+
+    let unknownSecretBody = null
+    await check("a missing, garbage, unknown, and REVOKED secret key are one byte-identical 401 with no CORS", async () => {
+      const unknown = await serverMint({ origin: orgA.origin, visitorId: identified }, `sk_live_${"0".repeat(32)}`)
+      expect(unknown.status === 401, `unknown: status ${unknown.status}`)
+      expect(unknown.headers.get("access-control-allow-origin") === null, "CORS header on the refusal")
+      unknownSecretBody = await unknown.text()
+      for (const [label, bearer] of [["missing", null], ["garbage", "not-a-key"], ["revoked", orgA.revokedSecretKey]]) {
+        const res = await serverMint({ origin: orgA.origin, visitorId: identified }, bearer)
+        expect(res.status === 401, `${label}: status ${res.status}`)
+        expect((await res.text()) === unknownSecretBody, `${label}: body differs from the unknown-key answer`)
+      }
+    })
+
+    await check("the PUBLISHABLE key is refused as a bearer here, and the SECRET key is refused where the publishable one belongs", async () => {
+      // The two credentials are told apart by shape before any lookup: each
+      // presented in the other's place is refused for what it looks like.
+      const pkHere = await serverMint({ origin: orgA.origin, visitorId: identified }, orgA.publishableKey)
+      expect(pkHere.status === 401, `pk as bearer: status ${pkHere.status}`)
+      expect((await pkHere.text()) === unknownSecretBody, "pk-as-bearer body differs from the unknown-key answer")
+      const skThere = await postJson("/v1/widget/session", { publishableKey: orgA.secretKey }, { origin: orgA.origin })
+      expect(skThere.status === 401, `sk as publishable key: status ${skThere.status}`)
+      expect((await skThere.text()) === unknownKeyBody, "sk-as-pk body differs from the unknown-pk answer")
+    })
+
+    await check("a valid secret key naming an UNLISTED origin is refused with 403 and no CORS — the allowlist still decides", async () => {
+      const res = await serverMint({ origin: "https://thief.example", visitorId: identified }, orgA.secretKey)
+      expect(res.status === 403, `status ${res.status}`)
+      expect(res.headers.get("access-control-allow-origin") === null, "CORS header on the refusal")
+      const body = await res.json()
+      expect(body.error === "origin not allowed", `error ${body.error}`)
+    })
+
+    await check("an anonymous-shaped visitorId (vis_…) is refused with 400 — that namespace is the browser's", async () => {
+      const res = await serverMint({ origin: orgA.origin, visitorId: anonymousVisitor() }, orgA.secretKey)
+      expect(res.status === 400, `status ${res.status}`)
+      const body = await res.json()
+      expect(body.token === undefined, "a token was minted for a refused visitor id")
+    })
+
+    let serverSession = null
+    await check("CONTROL: the real key, the allowlisted origin, and a user id mint a session — with no CORS on the answer", async () => {
+      const res = await serverMint({ origin: orgA.origin, visitorId: identified }, orgA.secretKey)
+      // Read ONCE, then assert: a template literal that awaited res.text()
+      // inside the failure message would consume the body even on success,
+      // and the parse below would then fail a check that had passed. (The
+      // first run of this section failed exactly that way.)
+      const text = await res.text()
+      expect(res.status === 200, `status ${res.status} ${text}`)
+      expect(res.headers.get("access-control-allow-origin") === null, "CORS header on the mint — a page could use a secret key")
+      serverSession = JSON.parse(text)
+      expect(typeof serverSession.token === "string" && serverSession.token.length > 20, "no token")
+      expect(serverSession.visitorId === identified, "visitor id was not the one the server asserted")
+    })
+
+    if (serverSession !== null) {
+      await check("that token chats from its origin under the asserted identity, and dies replayed from another", async () => {
+        const { status, events } = await chat(serverSession, orgA.origin, { question: knownA.text })
+        expect(status === 200, `status ${status}`)
+        expect(events.some((e) => e.type === "claim"), `no claim (got ${events.map((e) => e.type).join(",")})`)
+        const replayed = await postJson("/v1/widget/chat", { question: "hello" }, { origin: "https://thief.example", ...bearer(serverSession) })
+        expect(replayed.status === 403, `replay status ${replayed.status}`)
+      })
+    }
+
+    await check("the browser route refuses that same user id — a copied snippet cannot impersonate a server-identified user", async () => {
+      // The impersonation the namespace split exists to stop: anyone on the
+      // allowlisted origin minting "as" the user the server just identified.
+      const res = await postJson("/v1/widget/session", { publishableKey: orgA.publishableKey, visitorId: identified }, { origin: orgA.origin })
+      expect(res.status === 400, `status ${res.status}`)
+    })
+
+    await check("a browser preflight to the secret-key route is granted nothing", async () => {
+      const res = await request("/v1/sessions", {
+        method: "OPTIONS",
+        headers: { origin: orgA.origin, "access-control-request-method": "POST", "access-control-request-headers": "authorization" },
+      })
+      expect(res.headers.get("access-control-allow-origin") === null, `preflight granted ${res.headers.get("access-control-allow-origin")}`)
+    })
+  }
+  //#endregion
+
   //#region G. Rate limits — LAST, because they drain the buckets
   console.log("\n[G] rate limits (drains buckets — nothing runs after this)")
 
@@ -670,6 +779,18 @@ if (!fixture) {
       else await res.arrayBuffer()
     }
     expect(limited, "no 429 within 30 rapid mints")
+  })
+
+  await check("an IP that guesses at secret keys in a tight loop is told 429 (M7.3)", async () => {
+    // The server-mint bucket is deliberately more generous than the browser
+    // one (a customer's backend mints for many users) — but it exists, and
+    // it bounds a flood of guesses before each one costs a hash and a
+    // lookup. Sent in parallel: the bucket refills at one per second, and a
+    // sequential loop of 401s could refill it faster than it drains.
+    const statuses = await Promise.all(Array.from({ length: 90 }, () =>
+      postJson("/v1/sessions", { origin: orgA.origin, visitorId: "guesser" }, { authorization: "Bearer sk_live_guess" }, { patient: false })
+        .then(async (res) => { await res.arrayBuffer(); return res.status })))
+    expect(statuses.includes(429), `no 429 within 90 rapid guesses (${[...new Set(statuses)].join(",")})`)
   })
 
   await check("the service is still healthy after the floods", async () => {

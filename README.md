@@ -132,7 +132,9 @@ Three credentials that must never be confused: the tenant's **provider key**
 only as a suffix, never in an error, with a read-back denial test and a live
 probe that greps for a canary); the **publishable key** in the snippet
 (identifies the org, authorizes nothing by itself); and an optional
-**secret key** for server-side session minting.
+**secret key** the tenant's own backend uses to mint sessions for users it
+has signed in — shown once, stored as a hash, and never accepted from a
+browser.
 
 The layers, in order of how much work they do: **(1)** an exact-match origin
 allowlist checked before any database read, refusals carrying no CORS
@@ -150,13 +152,22 @@ attacker text and are bounded by shape and by a per-day cap; **(5)**
 one-click key rotation with a 24-hour grace window — the new key works
 immediately, the old snippet keeps working until it is redeployed, "revoke
 now" ends the window early, and a revoked key is refused byte-identically
-to one that never existed. The honest limit, stated
-plainly: `Origin` is unforgeable from a browser and trivial from `curl`, so
-layers 1–2 defeat browser-based theft and layer 3 is what bounds scripted
-abuse — and rotation of a *public* key is hygiene rather than defense (a
-scraper simply re-scrapes), built now because the same mechanism is what
-will make a secret key safe to issue. The security probe attacks every one
-of these from outside on every CI run.
+to one that never existed; **(6)** the strong mode — the tenant's own server
+mints the session with a *secret* key for a user it has signed in, the page
+carries `data-session-url` instead of a publishable key, so there is nothing
+on it worth copying and only that tenant's logged-in users can open a chat.
+The route that mints those never speaks CORS (a secret key pasted into a
+page stops at preflight), and server-asserted identities live in a
+namespace the browser route refuses — anyone on an allowlisted origin can
+mint an anonymous session, nobody can mint one *as user 42* — which is what
+lets the transcript say "identified by your server" and mean it. The honest
+limit, stated plainly: `Origin` is unforgeable from a browser and trivial
+from `curl`, so layers 1–2 defeat browser-based theft and layer 3 is what
+bounds scripted abuse; rotation of a *public* key is hygiene rather than
+defense (a scraper simply re-scrapes), and it is the secret key that turns
+the same mechanism into one — layer 6 is the real answer for tenants who
+need one. The security probe attacks every one of these from outside on
+every CI run.
 
 ---
 
@@ -180,9 +191,9 @@ of these from outside on every CI run.
   sentence. What the design guarantees is narrower and stated: no uncited
   text, no attacker-controlled citation, and the system prompt never in
   anything the visitor sees, all asserted from outside.
-- **Not built:** file uploads (and with them PDF parsing), server-side
-  session minting with the secret key, resuming a handoff across a page
-  reload, robots.txt. Each is named where it would land.
+- **Not built:** file uploads (and with them PDF parsing), resuming a
+  handoff across a page reload, robots.txt. Each is named where it would
+  land.
 
 ---
 

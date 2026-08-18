@@ -91,10 +91,14 @@ interface SessionsTable {
  *  - "public": the pk_… value pasted into the customer's <script> tag.
  *    Identifies the org; deliberately not a secret (see the trust-model
  *    section of CLAUDE.md).
- *  - "secret": the sk_… value for server-side session minting. Only its
- *    sha256 is stored, same reasoning as sessions.id.
+ *  - "secret": the sk_… value a customer's backend presents to
+ *    POST /v1/sessions (trust-model layer 6, M7.3). Only its sha256 is
+ *    stored, same reasoning as sessions.id; the dashboard shows the value
+ *    once at issue and keeps a four-character suffix for display.
  *  Revocation is a timestamp, not a delete, so rotation keeps an audit trail
- *  and old keys can serve through a grace window. */
+ *  and old keys can serve through a grace window — for both kinds alike:
+ *  the session routes accept a key while revoked_at IS NULL OR revoked_at >
+ *  NOW(), on Postgres's clock (M7.1). */
 interface ApiKeysTable {
   id: string
   org_id: string
@@ -103,8 +107,14 @@ interface ApiKeysTable {
    *  keys is a partial index (WHERE revoked_at IS NULL) so a rotated-out
    *  value could in principle be reissued later without a conflict. */
   public_id: string | null
-  /** sha256 hex of the sk_… value. NULL for public keys. */
+  /** sha256 hex of the sk_… value (shared/utils/ids.ts hashSecretKey). NULL
+   *  for public keys. UNIQUE across every row since 007 — a rotated-out
+   *  secret must never be reissued, unlike a public id. */
   secret_hash: string | null
+  /** The sk_… value's last four characters — the only plaintext fragment
+   *  kept (secretKeySuffix). Paired with the kind by a CHECK: present iff
+   *  kind = 'secret'. Since 007. */
+  secret_suffix: string | null
   last_used_at: ColumnType<Date | null, never, string | Date>
   revoked_at: ColumnType<Date | null, never, string | Date>
   created_at: ColumnType<Date, string | Date | undefined, never>

@@ -38,12 +38,28 @@
 // makes for message ordering (§3.25). A grace end written with a Vercel
 // Date would be off by the two machines' skew, which for 24 hours is
 // harmless and for "revoke now" is not.
+//
+// M7.3 added the SECRET key's half (trust-model layer 6, CLAUDE.md §9.19):
+// the same rows, the same standing rule, the same grace window — realtime's
+// POST /v1/sessions reads them with the identical NOW() comparison — with
+// two differences that follow from the key being a secret. It is shown ONCE:
+// the row holds sha256(value) and a four-character suffix, and the plaintext
+// exists only in the action's return value on its way to the owner's screen
+// (the sessions-table posture, applied to a credential a customer's server
+// will hold). And "revoke" is allowed on the CURRENT secret key, where it is
+// refused for the current publishable key: an org with no publishable key
+// has a dead widget, but an org with no secret key is simply not using
+// server-side sessions — a legitimate state, and the way a customer turns
+// the mode off. The "Generate" race has no key to guard on (nothing to rotate
+// FROM), so 007's one-current-secret-per-org index is what makes two owners
+// clicking at once yield one key: the second INSERT is a unique violation
+// this file reports as "already issued".
 //#endregion
 
 //#region Imports
 import { sql } from "kysely"
 
-import { isId, newId, newPublishableKey } from "@shared/utils/ids"
+import { hashSecretKey, isId, newId, newPublishableKey, newSecretKey, secretKeySuffix } from "@shared/utils/ids"
 
 import { db } from "@/lib/db"
 //#endregion
@@ -75,6 +91,34 @@ export interface PublishableKey {
 
 export type RotationResult =
   | { rotated: true; publishableKey: string; graceEndsAt: Date }
+  | { rotated: false }
+
+/** The same standing rule, applied to a secret key. */
+export type SecretKeyStatus = PublishableKeyStatus
+
+/** What the dashboard may know about a secret key: never the value. */
+export interface SecretKey {
+  id: string
+  /** The value's last four characters — "sk_live_…k3p9" is how an owner
+   *  matches a row to the key their server holds. */
+  suffix: string
+  status: SecretKeyStatus
+  createdAt: Date
+  /** Stamped by realtime on every server-side mint — for a retiring key
+   *  this is how the owner can tell their OLD backend config is still
+   *  deployed somewhere before revoking it early. */
+  lastUsedAt: Date | null
+  revokedAt: Date | null
+}
+
+/** The one and only time the plaintext exists outside the customer's own
+ *  server: in this return value, on its way to the owner's screen. */
+export type SecretIssueResult =
+  | { issued: true; keyId: string; secretKey: string; suffix: string }
+  | { issued: false }
+
+export type SecretRotationResult =
+  | { rotated: true; keyId: string; secretKey: string; suffix: string; graceEndsAt: Date }
   | { rotated: false }
 //#endregion
 
@@ -154,7 +198,7 @@ export async function rotatePublishableKey(orgId: string, fromKeyId: string): Pr
         org_id: orgId,
         kind: "public",
         public_id: publishableKey,
-        secret_hash: null,
+        secret_hash: null, secret_suffix: null,
       })
       .execute()
     // returning() types the column as Date | null; the SET just made it
@@ -182,6 +226,149 @@ export async function revokePublishableKeyNow(orgId: string, keyId: string): Pro
     .where("kind", "=", "public")
     .where("revoked_at", "is not", null)
     .where("revoked_at", ">", sql<Date>`NOW()`)
+    .executeTakeFirst()
+  return result.numUpdatedRows > 0n
+}
+//#endregion
+
+//#region Secret keys (M7.3)
+/** Every secret key the org has ever had, newest first — suffix and standing
+ *  only, never a value (nothing here could show one: the row holds a hash).
+ *  Standing is the same CASE as the publishable list, against the same
+ *  NOW() realtime's POST /v1/sessions compares with. */
+export async function listSecretKeys(orgId: string): Promise<SecretKey[]> {
+  const rows = await db
+    .selectFrom("api_keys")
+    .select([
+      "id",
+      "secret_suffix",
+      "created_at",
+      "last_used_at",
+      "revoked_at",
+      sql<SecretKeyStatus>`CASE
+        WHEN revoked_at IS NULL THEN 'current'
+        WHEN revoked_at > NOW() THEN 'retiring'
+        ELSE 'revoked'
+      END`.as("status"),
+    ])
+    .where("org_id", "=", orgId)
+    .where("kind", "=", "secret")
+    .orderBy("created_at", "desc")
+    .execute()
+  return rows.map((r) => ({
+    id: r.id,
+    // secret_suffix is NOT NULL for kind='secret' by 007's CHECK; the
+    // fallback only satisfies the type.
+    suffix: r.secret_suffix ?? "",
+    status: r.status,
+    createdAt: r.created_at,
+    lastUsedAt: r.last_used_at,
+    revokedAt: r.revoked_at,
+  }))
+}
+
+/** Postgres's unique-violation SQLSTATE — the one error the two inserts
+ *  below turn into an ordinary answer instead of a thrown one. */
+const UNIQUE_VIOLATION = "23505"
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === UNIQUE_VIOLATION
+}
+
+/** Issues the org's FIRST secret key (or its first since the last was
+ *  revoked). The plaintext is returned exactly once and stored nowhere: the
+ *  row carries sha256(value) and the display suffix. Idempotence comes from
+ *  the schema — 007's partial unique index allows one CURRENT secret per
+ *  org — so two owners clicking "Generate" together get one key and one
+ *  `issued: false`, with no read-then-check to race. */
+export async function issueSecretKey(orgId: string): Promise<SecretIssueResult> {
+  const secretKey = newSecretKey()
+  const suffix = secretKeySuffix(secretKey)
+  const keyId = newId("key")
+  try {
+    await db
+      .insertInto("api_keys")
+      .values({
+        id: keyId,
+        org_id: orgId,
+        kind: "secret",
+        public_id: null,
+        secret_hash: hashSecretKey(secretKey),
+        secret_suffix: suffix,
+      })
+      .execute()
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { issued: false }
+    }
+    throw err
+  }
+  return { issued: true, keyId, secretKey, suffix }
+}
+
+/** Rotates the secret key: the CURRENT one (named by the caller, as the
+ *  publishable rotation names it) is scheduled to retire in
+ *  ROTATION_GRACE_HOURS and a new one is issued in the same transaction —
+ *  so the customer's backend keeps minting on the old value until they have
+ *  redeployed with the new one, and there is never a window with no working
+ *  key. The guarded UPDATE is the atomic claim (a second click finds the row
+ *  already retiring and gets `rotated: false`); the new key is shown once,
+ *  like the first. */
+export async function rotateSecretKey(orgId: string, fromKeyId: string): Promise<SecretRotationResult> {
+  if (!isId("key", fromKeyId)) {
+    return { rotated: false }
+  }
+  return db.transaction().execute(async (trx) => {
+    const scheduled = await trx
+      .updateTable("api_keys")
+      .set({ revoked_at: sql`NOW() + make_interval(hours => ${ROTATION_GRACE_HOURS})` })
+      .where("id", "=", fromKeyId)
+      .where("org_id", "=", orgId)
+      .where("kind", "=", "secret")
+      .where("revoked_at", "is", null)
+      .returning("revoked_at")
+      .executeTakeFirst()
+    if (!scheduled) {
+      return { rotated: false }
+    }
+    const secretKey = newSecretKey()
+    const suffix = secretKeySuffix(secretKey)
+    const keyId = newId("key")
+    await trx
+      .insertInto("api_keys")
+      .values({
+        id: keyId,
+        org_id: orgId,
+        kind: "secret",
+        public_id: null,
+        secret_hash: hashSecretKey(secretKey),
+        secret_suffix: suffix,
+      })
+      .execute()
+    return { rotated: true, keyId, secretKey, suffix, graceEndsAt: scheduled.revoked_at as Date }
+  })
+}
+
+/** Revokes a secret key at once — a RETIRING one (ending its grace window
+ *  early, the incident-response half) or the CURRENT one (turning
+ *  server-side sessions off: an org without a secret key is a legitimate
+ *  state, unlike an org without a publishable key). An already revoked key
+ *  is left alone so revoked_at stays the honest instant it stopped. Returns
+ *  whether a row changed. */
+export async function revokeSecretKeyNow(orgId: string, keyId: string): Promise<boolean> {
+  if (!isId("key", keyId)) {
+    return false
+  }
+  const result = await db
+    .updateTable("api_keys")
+    .set({ revoked_at: sql`NOW()` })
+    .where("id", "=", keyId)
+    .where("org_id", "=", orgId)
+    .where("kind", "=", "secret")
+    .where((eb) => eb.or([
+      eb("revoked_at", "is", null),
+      eb("revoked_at", ">", sql<Date>`NOW()`),
+    ]))
     .executeTakeFirst()
   return result.numUpdatedRows > 0n
 }

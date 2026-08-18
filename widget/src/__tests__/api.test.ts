@@ -11,8 +11,11 @@ import type { AnswerEvent } from "@shared/grounding/events"
 // contract, so the fakes speak exactly that dialect.
 interface Call {
   url: string
+  method: string
   headers: Record<string, string>
   body: Record<string, unknown>
+  credentials: RequestCredentials | undefined
+  cache: RequestCache | undefined
 }
 
 function sseResponse(events: object[]): Response {
@@ -30,8 +33,11 @@ let script: Response[]
 const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   calls.push({
     url: String(input),
+    method: init?.method ?? "GET",
     headers: (init?.headers ?? {}) as Record<string, string>,
     body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    credentials: init?.credentials,
+    cache: init?.cache,
   })
   const next = script.shift()
   if (next === undefined) throw new Error("fake fetch script exhausted")
@@ -174,5 +180,84 @@ describe("ApiClient", () => {
       jsonResponse(401, { error: "invalid session" }),
     ]
     await expect(collect(makeClient().ask("q"))).rejects.toThrow(/chat failed \(401\)/)
+  })
+})
+
+describe("ApiClient in strong mode (data-session-url, M7.3)", () => {
+  // The customer's server minted the session with the SECRET key; the widget
+  // only fetches it from an endpoint on their site. The publishable key is
+  // nowhere in the page — and so nowhere in these requests.
+  const SERVER_MINT = () => jsonResponse(200, { token: "srv.sig", expiresAt: 9999999999999, visitorId: "user_42" })
+
+  function makeStrongClient(): ApiClient {
+    return new ApiClient({
+      apiBase: "https://api.test/",
+      sessionUrl: "/api/support-session",
+      fetchImpl: fakeFetch,
+      socketFactory: noSocket,
+    })
+  }
+
+  it("fetches the session from the customer's URL — GET, with cookies, uncached, and no publishable key anywhere", async () => {
+    script = [SERVER_MINT()]
+    await makeStrongClient().ensureSession()
+    expect(calls).toHaveLength(1)
+    const [mint] = calls
+    expect(mint!.url).toBe("/api/support-session")
+    // GET keeps the endpoint outside every framework's CSRF check; the
+    // cookies are what let the customer's server say WHO this is; no-store
+    // because a cached token is one that expires mid-chat.
+    expect(mint!.method).toBe("GET")
+    expect(mint!.credentials).toBe("include")
+    expect(mint!.cache).toBe("no-store")
+    expect(JSON.stringify(mint)).not.toContain("pk_")
+    expect(JSON.stringify(mint)).not.toContain("publishableKey")
+  })
+
+  it("uses the server-minted token on chat, and does NOT persist the identified visitor id", async () => {
+    // The customer's server names the user on every mint. Storing the id
+    // would only ever send it back on some later publishable-key mint on
+    // another of the customer's pages — where realtime refuses anything but
+    // the anonymous shape (that refusal is what keeps a browser from
+    // claiming a server-asserted identity), and the widget would break.
+    localStorage.setItem("interrelated.visitor", "vis_returning")
+    const done = { type: "done", claimsTotal: 0, claimsShown: 0 }
+    script = [SERVER_MINT(), sseResponse([done])]
+    const events = await collect(makeStrongClient().ask("q"))
+    expect(events).toEqual([done])
+    expect(calls[1]!.url).toBe("https://api.test/v1/widget/chat")
+    expect(calls[1]!.headers["authorization"]).toBe("Bearer srv.sig")
+    expect(localStorage.getItem("interrelated.visitor")).toBe("vis_returning") // untouched
+  })
+
+  it("re-mints through the customer's URL on a 401 — expiry stays invisible in strong mode too", async () => {
+    const done = { type: "done", claimsTotal: 0, claimsShown: 0 }
+    script = [SERVER_MINT(), jsonResponse(401, { error: "invalid session" }), SERVER_MINT(), sseResponse([done])]
+    const events = await collect(makeStrongClient().ask("q"))
+    expect(events).toEqual([done])
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/support-session", "https://api.test/v1/widget/chat",
+      "/api/support-session", "https://api.test/v1/widget/chat",
+    ])
+  })
+
+  it("surfaces the customer's refusal (a signed-out user) as a mint failure, not a hang or a loop", async () => {
+    script = [jsonResponse(401, { error: "sign in first" })]
+    await expect(makeStrongClient().ensureSession()).rejects.toThrow(/session mint failed \(401\)/)
+    expect(calls).toHaveLength(1)
+  })
+
+  it("prefers the session URL when both are configured, and refuses to construct with neither", () => {
+    // Given both, strong mode wins: the point of it is that the publishable
+    // key need not be on the page, so a leftover one must not be used.
+    script = [SERVER_MINT()]
+    const both = new ApiClient({
+      apiBase: "https://api.test/", publishableKey: "pk_leftover", sessionUrl: "/api/support-session",
+      fetchImpl: fakeFetch, socketFactory: noSocket,
+    })
+    void both.ensureSession()
+    expect(calls[0]!.url).toBe("/api/support-session")
+    expect(() => new ApiClient({ apiBase: "https://api.test/", fetchImpl: fakeFetch, socketFactory: noSocket }))
+      .toThrow(/publishableKey or a sessionUrl/)
   })
 })

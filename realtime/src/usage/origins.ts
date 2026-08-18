@@ -74,13 +74,22 @@ const MAX_ORIGIN_CHARS = 253
 //#endregion
 
 //#region Helpers
+/** True when a string is shaped like a browser Origin (scheme://host[:port],
+ *  no path, no whitespace, within the DNS length ceiling). What decides
+ *  whether a refused value is counted as itself; also what the secret-key
+ *  mint route (§3.18) uses to tell an authenticated tenant's server "that is
+ *  not an origin" apart from "that origin is not allowlisted". */
+function looksLikeOrigin(value: string): boolean {
+  return value.length <= MAX_ORIGIN_CHARS && ORIGIN_SHAPE.test(value)
+}
+
 /** The string a refused Origin is counted under: itself when it is shaped
  *  like an origin (or is "null"), the malformed sentinel otherwise. Case is
  *  kept — a case-variant of an allowlisted origin is refused precisely
  *  because it differs, and the tenant should see the string that was sent. */
 function normalizeRefusedOrigin(origin: string): string {
   if (origin === "null") return origin
-  if (origin.length <= MAX_ORIGIN_CHARS && ORIGIN_SHAPE.test(origin)) return origin
+  if (looksLikeOrigin(origin)) return origin
   return MALFORMED_ORIGIN
 }
 //#endregion
@@ -147,6 +156,7 @@ async function upsert(
 export {
   recordOriginMint,
   normalizeRefusedOrigin,
+  looksLikeOrigin,
   MAX_DISTINCT_REFUSED_ORIGINS_PER_DAY,
   OTHER_ORIGIN,
   MALFORMED_ORIGIN,

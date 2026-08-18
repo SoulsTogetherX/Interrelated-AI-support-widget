@@ -41,9 +41,27 @@ interface WidgetClient {
   openHandoff(conversationId: string, handlers: HandoffHandlers): HandoffConnection
 }
 
+/**
+ * Where the session comes from — the one thing the strong mode changes
+ * (trust-model layer 6, M7.3). Either the widget mints it itself with the
+ * PUBLISHABLE key (POST /v1/widget/session, the default), or it fetches it
+ * from a URL on the CUSTOMER's own site, whose server minted it with the
+ * SECRET key for a user it has signed in. Everything after the mint is
+ * identical: same token, same routes, same 401 → re-mint dance — a
+ * re-mint in strong mode is simply another fetch of that URL, so an expiring
+ * token stays invisible there too.
+ */
+type SessionSource =
+  | { kind: "publishable"; publishableKey: string }
+  | { kind: "url"; sessionUrl: string }
+
 interface ApiClientOptions {
   apiBase: string
-  publishableKey: string
+  /** Exactly one of the two: `publishableKey` (the default mode) or
+   *  `sessionUrl` (strong mode). Given both, strong mode wins — the point of
+   *  it is that the publishable key need not be on the page at all. */
+  publishableKey?: string
+  sessionUrl?: string
   /** The fetch captured at script load (index.ts) — the host page may
    *  monkeypatch window.fetch after us, and the widget must not inherit
    *  whatever an analytics snippet did to it. */
@@ -85,7 +103,7 @@ function saveVisitor(id: string): void {
 //#region Client
 class ApiClient implements WidgetClient {
   readonly #apiBase: string
-  readonly #publishableKey: string
+  readonly #source: SessionSource
   readonly #fetch: typeof fetch
   readonly #socketFactory: SocketFactory
   #token: string | null = null
@@ -94,7 +112,16 @@ class ApiClient implements WidgetClient {
 
   constructor(options: ApiClientOptions) {
     this.#apiBase = options.apiBase.replace(/\/$/, "")
-    this.#publishableKey = options.publishableKey
+    if (options.sessionUrl !== undefined) {
+      this.#source = { kind: "url", sessionUrl: options.sessionUrl }
+    } else if (options.publishableKey !== undefined) {
+      this.#source = { kind: "publishable", publishableKey: options.publishableKey }
+    } else {
+      // index.ts refuses to mount without one of the two; this is the
+      // programming-error case, and a loud one beats a widget that mints
+      // against nothing.
+      throw new Error("ApiClient needs a publishableKey or a sessionUrl")
+    }
     this.#fetch = options.fetchImpl
     this.#socketFactory = options.socketFactory
   }
@@ -118,20 +145,52 @@ class ApiClient implements WidgetClient {
   }
 
   async #mint(): Promise<void> {
-    const response = await this.#fetch(`${this.#apiBase}/v1/widget/session`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        publishableKey: this.#publishableKey,
-        ...(this.#visitorId !== null ? { visitorId: this.#visitorId } : {}),
-      }),
-    })
+    const response = this.#source.kind === "url"
+      ? await this.#fetchServerMintedSession(this.#source.sessionUrl)
+      : await this.#fetch(`${this.#apiBase}/v1/widget/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          publishableKey: this.#source.publishableKey,
+          ...(this.#visitorId !== null ? { visitorId: this.#visitorId } : {}),
+        }),
+      })
     if (response.status === 429) throw new RateLimitError("rate limited")
     if (!response.ok) throw new Error(`session mint failed (${response.status})`)
-    const body = await response.json() as { token: string; visitorId: string }
+    // Both sources answer the same shape — the customer's endpoint proxies
+    // realtime's response verbatim — so one parse serves both.
+    const body = await response.json() as { token: string; visitorId?: string }
     this.#token = body.token
-    this.#visitorId = body.visitorId
-    saveVisitor(body.visitorId)
+    if (this.#source.kind === "publishable" && typeof body.visitorId === "string") {
+      // The anonymous handle is persisted so a reload keeps its thread. A
+      // server-identified id is deliberately NOT: the customer's server
+      // names the user on every mint, and a stored copy would only be sent
+      // back on some later publishable-key mint — where the route refuses
+      // anything but the anonymous shape, by design (it is how a browser is
+      // kept from claiming a server-asserted identity).
+      this.#visitorId = body.visitorId
+      saveVisitor(body.visitorId)
+    }
+  }
+
+  /**
+   * Strong mode's mint: GET the customer's endpoint with the page's own
+   * cookies, and let THEIR server decide who this is. GET rather than POST
+   * so the endpoint sits outside every framework's CSRF check by default
+   * (Rails, Django, and friends refuse an unadorned POST) — a token mint has
+   * no state to protect from forgery, and a cross-origin page cannot read
+   * the answer. `credentials: "include"` is what makes it same-origin-with-
+   * cookies for the relative URL the snippet carries and still work for a
+   * customer who points it at their API host with credentialed CORS.
+   * `no-store` because a cached token is a token that expires mid-chat.
+   */
+  #fetchServerMintedSession(sessionUrl: string): Promise<Response> {
+    return this.#fetch(sessionUrl, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      credentials: "include",
+      cache: "no-store",
+    })
   }
 
   /**

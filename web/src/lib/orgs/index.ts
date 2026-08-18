@@ -70,7 +70,7 @@ export async function createOrgForUser(
         org_id: orgId,
         kind: "public",
         public_id: publishableKey,
-        secret_hash: null,
+        secret_hash: null, secret_suffix: null,
       })
       .execute()
   })

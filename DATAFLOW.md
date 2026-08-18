@@ -520,6 +520,14 @@ widget (M2.6) or curl-with-headers
                                        origin) → 403 with NO CORS headers
                                        — an unlisted site's browser cannot
                                        even read the error
+      visitorId, if given, must be     shared/utils/visitorIds.ts (§5.5):
+      ANONYMOUS-shaped (vis_<32 hex>)  the id this route itself mints and
+                                       the widget stores; an IDENTIFIED id
+                                       (a customer's user id) is refused
+                                       with the same 400 as a malformed
+                                       one — only the secret-key route may
+                                       mint those, or anyone on the origin
+                                       could mint a session AS user 42
       api_keys.last_used_at = NOW()    ← this handshake is also what warms
                                        Neon while the visitor types
       recordOriginMint(minted)         realtime/src/usage/origins.ts —
@@ -579,11 +587,21 @@ visitor clicks the bubble
   → ensureSession()                      widget/src/api.ts
       POST /v1/widget/session (→ §5.3)   ALSO the Neon-warming handshake;
       visitor id from guarded localStorage; token held in memory
+      — or, in STRONG MODE (data-session-url instead of data-key, M7.3):
+      GET <session-url>                  a URL on the CUSTOMER's own site
+        credentials: include, no-store   (§5.5): their server minted the
+                                         session with the SECRET key for
+                                         the signed-in user; the answer is
+                                         realtime's, proxied verbatim; the
+                                         identified visitor id is NOT
+                                         written to localStorage
 
 visitor asks
   → ask(question, conversationId?)       widget/src/api.ts
       POST /v1/widget/chat, Bearer token
-      401 → ONE silent re-mint + retry   30-min expiry, invisible
+      401 → ONE silent re-mint + retry   30-min expiry, invisible — in
+                                         strong mode the re-mint is another
+                                         GET of the session URL
       429 → QuotaError | RateLimitError  distinct visitor-facing states
       → readAnswerEvents(body)           widget/src/sse.ts
   → per event                            widget/src/ui.ts
@@ -593,6 +611,82 @@ visitor asks
       refusal → ordinary assistant bubble
       error   → notice + input recovery (the widget never bricks)
 ```
+
+### §5.5 Strong mode — the customer's server mints the session (M7.3)
+
+Trust-model layer 6. Everything from the token onward is §5.3; what
+changes is WHO proves the visitor is allowed. By default the browser does
+(publishable key + Origin, and the allowlist plus rate limits bound a
+copied snippet). Here the customer's own backend does — with the SECRET
+key, for a user it has signed in — and the page carries no publishable key
+at all.
+
+```
+the customer's page (no data-key)
+  <script src=".../widget.js" data-session-url="/api/support-session" data-api="…">
+  bubble opens → GET /api/support-session   widget/src/api.ts, with the
+                                            page's own cookies (§5.4)
+
+the customer's server (their code — the Install page's recipe, §7.14)
+  requireSignedInUser(req)                  THEIR login decides who this is
+  → POST {api}/v1/sessions                  realtime/src/routes/widget.ts
+      Authorization: Bearer sk_live_…       from the server's environment
+      {origin: "https://app.example.com",   the origin the page runs on
+       visitorId: user.id}                  their stable user id
+  ← pass realtime's answer through, status included, cache-control: no-store
+
+POST /v1/sessions  (realtime — never CORS: no preflight handler, no echo,
+                    so a browser page cannot use a secret key even by
+                    mistake; it stops at preflight)
+      per-IP bucket (60 / 1 per s)          more generous than the browser
+                                            mint — one IP is a backend
+                                            minting for many users; what it
+                                            bounds is guessing at a secret
+      bearer without sk_ prefix             → 401 (the publishable key,
+                                            garbage, nothing: refused for
+                                            shape, no lookup)
+      api_keys lookup                       kind=secret, secret_hash =
+                                            sha256(bearer)
+                                            (shared/utils/ids.ts), LIVE =
+                                            revoked_at IS NULL OR
+                                            revoked_at > NOW() — the same
+                                            grace-window rule as the
+                                            publishable key, on Postgres's
+                                            clock; unknown, revoked, and
+                                            past-grace → the byte-identical
+                                            401
+      visitorId must be IDENTIFIED-shaped   anything well-formed that is not
+                                            vis_<hex> (shared/utils/
+                                            visitorIds.ts); the anonymous
+                                            namespace is the browser's →
+                                            400 with a sentence (the caller
+                                            proved it is the tenant)
+      origin required, and ALLOWLISTED      miss → recordOriginMint(refused)
+                                            (§7.13 — the tenant's traffic
+                                            table shows it with an Allow
+                                            button) → 403 with a sentence:
+                                            unlisted, or not an origin at all
+      api_keys.last_used_at = NOW()         "last used" beside "accepted
+                                            until" — the same clock
+      recordOriginMint(minted)              a server mint is a widget load
+      → mintSessionToken {org, origin, visitor: user.id, exp}
+      → 200 {token, expiresAt, visitorId}   the browser mint's shape, so the
+                                            endpoint proxies it verbatim
+
+back in the page
+  the widget holds the token in memory and chats on it exactly as in §5.3;
+  the conversation row's visitor_id IS the customer's user id, which the
+  dashboard names "user 42 — identified by your server" (§7.10) — trustworthy
+  because the browser mint refuses that shape, so only the secret key could
+  have put it there
+```
+
+What the impersonation control looks like from outside (the security
+probe's section [I], §12.2): a browser on the allowlisted origin minting with
+the publishable key and `visitorId: "42"` gets a 400 and no session; the
+secret key presented on the browser route, and the publishable key presented
+here, are each refused for their shape; and the token a server minted dies
+replayed from any other origin, like every other token.
 
 ## §6 The test and CI flows (how the above gets verified)
 
@@ -1050,6 +1144,67 @@ so it would only repeat the Origin), no per-mint log — a counter per
 (org, day, origin), which is what a week-per-origin read wants and what
 keeps the read from growing with the customer's success (CLAUDE.md §3.3.8,
 §3.28, §9.18).
+
+### §7.14 The secret key — issued once, rotated, revoked (M7.3)
+
+Trust-model layer 6's dashboard half. The same rows and the same standing
+rule as §7.12; what differs follows from the key being a secret.
+
+```
+SecretKeyForm submit  (hidden: orgId, keyId = the current secret key's id, or "")
+  → secretKeyAction                    web/src/lib/keys/actions.ts
+    → currentUser → getOrgForMember → OWNER
+    keyId = ""  → issueSecretKey(orgId)          web/src/lib/keys/index.ts
+        secretKey = newSecretKey()               sk_live_<32 base32>
+        INSERT api_keys (kind=secret,
+          secret_hash = sha256(secretKey),        the ONLY copies the row
+          secret_suffix = last 4 chars)           will ever hold
+        unique violation on
+          api_keys_one_current_secret_per_org  → {issued:false} — another
+                                                  owner (or tab) got there
+                                                  first; the page now shows
+                                                  that key. Idempotence by
+                                                  SCHEMA: a first issue has
+                                                  no key to rotate FROM
+        → {issued:true, keyId, secretKey, suffix}
+    keyId set   → rotateSecretKey(orgId, keyId)
+        BEGIN
+        UPDATE api_keys SET revoked_at = NOW() + 24h
+         WHERE id = keyId AND org = orgId AND kind = 'secret'
+           AND revoked_at IS NULL           ← the atomic claim (§7.12)
+        (0 rows) → ROLLBACK, {rotated:false}
+        INSERT the new secret row (hash + suffix)
+        COMMIT → {rotated:true, keyId, secretKey, suffix, graceEndsAt}
+    → revalidatePath(overview) + revalidatePath(install page)
+    → the action's RETURN VALUE carries the plaintext — the one time it
+      exists outside the customer's server — into the form's client state,
+      where SecretKeyForm shows it with a Copy button while the page's
+      current key IS the row it belongs to; navigate away and it is gone.
+      The database never held it.
+
+the overview re-renders — listSecretKeys:
+  the same CASE as the publishable list (current / retiring / revoked
+  against NOW()), suffix and standing only: "sk_live_…k3p9 · issued · last
+  used"; the install page's section 4 names the suffix and carries the
+  endpoint recipe and the data-session-url snippet
+
+Revoke  (the CURRENT key — "stop server-side sessions" — or a retiring one)
+  → revokeSecretKeyNowAction            same ladder
+    → UPDATE api_keys SET revoked_at = NOW()
+       WHERE id = keyId AND org = orgId AND kind = 'secret'
+         AND (revoked_at IS NULL OR revoked_at > NOW())
+       └ the current key CAN be revoked here, where the publishable one
+         cannot: an org with no secret key is simply not using server-side
+         sessions. An already revoked key keeps its honest instant.
+
+…and what realtime does with each of those rows on POST /v1/sessions (§5.5):
+  the CURRENT key   → mints, and stamps last_used_at
+  a RETIRING key    → mints until its instant — the customer's backend that
+                      has not been redeployed keeps working; "last used"
+                      tells the owner it is still out there
+  a REVOKED key     → 401, byte-identical to a key that never existed
+  a token minted while its key was live keeps working for its 30 minutes
+```
 
 ---
 
@@ -1761,9 +1916,21 @@ runs where the database already is, and the probes need nothing installed.
   shape violations → 422 sentences; GET org B → credentials: []      (nothing was stored)
   GET with an Origin header → no access-control-allow-origin ever
 
+[I] server-side sessions (M7.3)         POST /v1/sessions with the fixture's secret keys
+  no bearer / garbage / unknown sk / REVOKED sk → one 401, byte-identical, no CORS
+  the PUBLISHABLE key as bearer → that same 401; the SECRET key as publishableKey
+    on /v1/widget/session → the unknown-pk 401           (told apart by shape, no lookup)
+  real sk + origin thief.example → 403, no CORS           (the allowlist still decides)
+  real sk + visitorId vis_<hex> → 400, no token           (that namespace is the browser's)
+  CONTROL  real sk + allowlisted origin + "probe_user_…" → 200 token, no CORS on the answer
+           that token chats from A's origin (claim) and dies from thief.example (403)
+  /v1/widget/session with A's pk + that same user id → 400  (no impersonation from a page)
+  OPTIONS /v1/sessions with an Origin → no access-control-allow-origin
+
 [G] rate limits                          LAST — drains the buckets
   12 rapid chats as one visitor → a 429 WITH the CORS echo
   30 rapid mints from one IP → a 429
+  90 PARALLEL secret-key guesses → a 429                  (parallel: the bucket refills at 1/s)
   health → 200
 ```
 

@@ -47,7 +47,7 @@ async function seedOrg(name: string, pk: string): Promise<string> {
   const orgId = newId("org")
   await db.insertInto("organizations").values({ id: orgId, name }).execute()
   await db.insertInto("api_keys").values({
-    id: newId("key"), org_id: orgId, kind: "public", public_id: pk, secret_hash: null,
+    id: newId("key"), org_id: orgId, kind: "public", public_id: pk, secret_hash: null, secret_suffix: null,
   }).execute()
   await db.insertInto("allowed_origins").values({ org_id: orgId, origin: ORIGIN }).execute()
   const sourceId = newId("src")

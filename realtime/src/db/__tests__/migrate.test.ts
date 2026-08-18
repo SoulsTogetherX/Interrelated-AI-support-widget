@@ -1,4 +1,5 @@
 //#region Imports
+import { randomBytes } from "node:crypto"
 import { sql } from "kysely"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
@@ -110,8 +111,54 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
           kind: "public",
           public_id: "pk_test_mismatch",
           secret_hash: "a".repeat(64),
+          secret_suffix: null,
         }).execute(),
       ).rejects.toThrow(/check/i)
+    })
+
+    it("pairs the secret suffix with the kind exactly, and keys a secret's hash uniquely (007)", async () => {
+      const orgId = newId("org")
+      const otherOrg = newId("org")
+      await db.insertInto("organizations").values([
+        { id: orgId, name: "Secret Key Co" }, { id: otherOrg, name: "Other Secret Co" },
+      ]).execute()
+      // Fresh hashes rather than fixed strings: the hash index is GLOBAL, so
+      // a literal reused by any other suite against the same database would
+      // collide and fail this test for the wrong reason.
+      const hashA = randomBytes(32).toString("hex")
+      const hashB = randomBytes(32).toString("hex")
+      const secretRow = (hash: string, suffix: string | null) => ({
+        id: newId("key"), org_id: orgId, kind: "secret" as const,
+        public_id: null, secret_hash: hash, secret_suffix: suffix,
+      })
+      try {
+        // A secret key without its display suffix, or with one of the wrong
+        // length, and a public key CARRYING one: each is the pairing CHECK
+        // refusing a row that would mean the dashboard and the schema disagree
+        // about what a secret key looks like.
+        await expect(db.insertInto("api_keys").values(secretRow(hashA, null)).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("api_keys").values(secretRow(hashA, "abcde")).execute()).rejects.toThrow(/check/i)
+        await expect(
+          db.insertInto("api_keys").values({
+            id: newId("key"), org_id: orgId, kind: "public",
+            public_id: `pk_test_with_suffix_${hashA.slice(0, 8)}`, secret_hash: null, secret_suffix: "k3p9",
+          }).execute(),
+        ).rejects.toThrow(/check/i)
+        // The well-formed row is accepted …
+        await db.insertInto("api_keys").values(secretRow(hashA, "k3p9")).execute()
+        // … a second CURRENT secret for the same org is refused (the index that
+        // makes two simultaneous "Generate" clicks yield one key) …
+        await expect(
+          db.insertInto("api_keys").values(secretRow(hashB, "m2q4")).execute(),
+        ).rejects.toThrow(/api_keys_one_current_secret_per_org/)
+        // … while the same HASH is refused even under another org — a secret
+        // value exists once, ever.
+        await expect(
+          db.insertInto("api_keys").values({ ...secretRow(hashA, "k3p9"), org_id: otherOrg }).execute(),
+        ).rejects.toThrow(/api_keys_secret_hash/)
+      } finally {
+        await db.deleteFrom("organizations").where("id", "in", [orgId, otherOrg]).execute()
+      }
     })
 
     it("rejects origins with paths or trailing slashes", async () => {

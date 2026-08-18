@@ -32,9 +32,12 @@ local_cache/
 # eval/RESULTS.md — measurements someone chose to publish, not run droppings.
 eval/results/
 
-# Editor and OS noise.
+# Editor and OS noise. .claude/ holds Claude Code's local launch config
+# (which dev servers to start for a live check) — machine-local, like
+# .vscode/.
 .vscode/
 .idea/
+.claude/
 Thumbs.db
 .DS_Store
 

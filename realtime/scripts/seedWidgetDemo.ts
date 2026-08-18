@@ -123,7 +123,7 @@ async function main(): Promise<void> {
   if (!key) {
     await db.insertInto("api_keys").values({
       id: newId("key"), org_id: org.id, kind: "public",
-      public_id: PUBLISHABLE_KEY, secret_hash: null,
+      public_id: PUBLISHABLE_KEY, secret_hash: null, secret_suffix: null,
     }).execute()
     console.log(`created publishable key ${PUBLISHABLE_KEY}`)
   }

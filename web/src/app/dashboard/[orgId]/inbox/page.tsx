@@ -9,6 +9,7 @@ import Link from "next/link"
 
 import { requireOrgMember } from "@/lib/orgs"
 import { listOpenHandoffs } from "@/lib/handoff/queries"
+import { describeVisitor } from "@/lib/conversations/visitors"
 import AutoRefresh from "@/components/AutoRefresh"
 import "./page.css"
 
@@ -67,7 +68,11 @@ export default async function InboxPage({ params }: { params: Promise<{ orgId: s
                   {handoff.preview ?? "(no messages yet)"}
                 </span>
                 <span className="inbox-meta">
-                  visitor {handoff.visitorId.slice(0, 12)}… · {REASON_LABEL[handoff.reason] ?? handoff.reason}
+                  {/* "user 42" when the tenant's server identified them
+                      (M7.3): the id an agent can act on, and one a browser
+                      cannot forge. */}
+                  {describeVisitor(handoff.visitorId).noun} {describeVisitor(handoff.visitorId).name}
+                  {" · "}{REASON_LABEL[handoff.reason] ?? handoff.reason}
                   {" · "}
                   waiting {waited(handoff.requestedAt, now)}
                   {handoff.claimedBy !== null && (
