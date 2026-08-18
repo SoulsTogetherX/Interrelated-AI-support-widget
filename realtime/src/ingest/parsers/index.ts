@@ -5,6 +5,7 @@ import { TextDecoder } from "node:util"
 
 import { parseHtml } from "@/ingest/parsers/html"
 import { parseMarkdown } from "@/ingest/parsers/markdown"
+import { parsePdf } from "@/ingest/parsers/pdf"
 import type { ParsedDocument } from "@/ingest/parsers/types"
 //#endregion
 
@@ -31,11 +32,12 @@ type DocumentFormat = "html" | "markdown" | "pdf"
  * because the markdown parser degrades gracefully to plain-text paragraphs
  * while the HTML parser would silently strip nothing.
  *
- * PDF is still DETECTED but not parsed: there is no PDF parser until file
- * uploads exist (M3) — crawled docs sites are HTML/Markdown, and a chat
- * widget has no other way to receive a PDF. Detection is kept so a crawled
- * PDF is skipped with a clear error instead of being garbled into
- * "paragraphs" of binary soup by the markdown fallback.
+ * PDF detection leads the order and is the one check that cannot be fooled:
+ * a PDF served as text/plain (misconfigured servers do it daily) would
+ * otherwise fall through to the markdown fallback and be "parsed" into
+ * paragraphs of binary soup. Since M7.6 detection is followed by an actual
+ * parser (§3.10.7); before that it was followed by a refusal, which is why
+ * this order was worth keeping even while the format was unsupported.
  */
 function detectFormat(resource: RawResource): DocumentFormat {
   if (resource.body.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf"
@@ -79,11 +81,10 @@ function decodeText(body: Buffer, charset: string | null): string {
 /** The parser layer's single entry point: bytes in, ParsedDocument out. */
 async function parseResource(resource: RawResource): Promise<ParsedDocument> {
   const format = detectFormat(resource)
-  if (format === "pdf") {
-    // The crawler catches this and reports the page as skipped (an `error`
-    // event), the same fate as any unparseable resource — the crawl goes on.
-    throw new Error("PDF parsing is not supported until uploads land (M3); page skipped")
-  }
+  // A PDF is BYTES, not text: no charset applies, and decoding one would
+  // destroy it. It takes the buffer straight, and is the only branch that
+  // loads a dependency (dynamically — §3.10.7).
+  if (format === "pdf") return parsePdf(resource.body)
   const text = decodeText(resource.body, resource.charset)
   return format === "html" ? parseHtml(text) : parseMarkdown(text)
 }

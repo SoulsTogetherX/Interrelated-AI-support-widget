@@ -201,11 +201,14 @@ describe("detectFormat / parseResource", () => {
     expect(detectFormat(raw({ contentType: "application/pdf" }))).toBe("pdf")
   })
 
-  it("refuses to parse a detected PDF instead of garbling it", async () => {
-    // No PDF parser until M3 uploads. The important property is that a PDF
-    // is REJECTED (the crawler skips the page) rather than falling through
-    // to the markdown parser and being stored as binary-soup "paragraphs".
-    await expect(parseResource(raw({ body: FAKE_PDF }))).rejects.toThrow(/PDF.*M3/)
+  it("sends a detected PDF to the PDF parser instead of garbling it as markdown", async () => {
+    // Since M7.6 detection is followed by a real parser (§3.10.7). What this
+    // still pins is the property that mattered when there was none: a PDF
+    // must never fall through to the markdown fallback and be stored as
+    // binary-soup "paragraphs". FAKE_PDF has the magic bytes and nothing
+    // else, so the PDF parser is reached and refuses it AS a PDF — the
+    // readable-PDF sentence, never markdown's silent success.
+    await expect(parseResource(raw({ body: FAKE_PDF }))).rejects.toThrow(/not a readable PDF/)
   })
 
   it("falls back to URL extension, then a content sniff, then markdown", () => {

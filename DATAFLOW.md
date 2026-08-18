@@ -299,8 +299,15 @@ crawl() yields a page                    realtime/src/ingest/crawler.ts
   ← parseResource                        realtime/src/ingest/parsers/index.ts
       detect: magic bytes → media type → extension → sniff → markdown
       decode: charset, BOM strip, CRLF→LF (BEFORE offsets exist)
-      → parseHtml | parseMarkdown   (PDFs: detected, rejected, page
-                                     skipped — no PDF parser until M3)
+      → parseHtml | parseMarkdown | parsePdf
+        a PDF skips decoding and takes the RAW bytes (§3.10.7):
+          copy into a standalone array (pdf.js transfers its input, and a
+            Node Buffer is a pooled view that cannot be transferred)
+          → one document proxy → title from Info + text per page
+          → pages joined by a blank line; each page's lines grouped into
+            one paragraph block (pdf.js emits no blank lines)
+          → refuses with a sentence: not readable / password-protected /
+            over 10 MB / no text layer (a scan — names OCR)
         contract: block.text === text.slice(charStart, charEnd)
       (html only) links harvested for the BFS frontier — same-origin,
       non-binary, deduped, FINAL-url checked

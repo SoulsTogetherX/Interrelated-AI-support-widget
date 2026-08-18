@@ -65,9 +65,15 @@ it on every fetch — a hand-written RFC 9309 parser, most-specific rule
 wins, Crawl-delay honored up to a cap, an unreachable file refusing the
 crawl as the RFC says, and every page it left out recorded with the reason
 so the dashboard can show *why* rather than a smaller count — an
-HTML/Markdown parser whose one contract is
+HTML/Markdown/**PDF** parser whose one contract is
 `block.text === source.slice(start, end)`, a heading-aware chunker, and the
-org's own embedding model. Storage is `halfvec(1024)` with one partial HNSW
+org's own embedding model. The PDF half is worth its own sentence, because
+it is the one dependency this project removed and then re-admitted: a
+21 MB library was cut at M1 for weight and for having no caller, and the
+format came back only when both objections could be answered — 2.1 MB with
+no dependencies, dynamically imported so a stack that never meets a PDF
+never pays for it, and refusing a scanned PDF with a sentence naming OCR
+rather than storing a source that answers nothing. Storage is `halfvec(1024)` with one partial HNSW
 index per model and `org_id` denormalized onto the vector table — because
 HNSW searches then filters, and a small tenant inside a large index would
 otherwise get fewer than *k* results. A regression test seeds 20 tenants and
@@ -202,8 +208,13 @@ every CI run.
   sentence. What the design guarantees is narrower and stated: no uncited
   text, no attacker-controlled citation, and the system prompt never in
   anything the visitor sees, all asserted from outside.
-- **Not built:** file uploads (and with them PDF parsing). Named where it
-  would land.
+- **Not built:** file uploads. PDFs are read (crawled ones, since M7.6a);
+  what is missing is the surface that lets a customer hand one over
+  directly, and it is named where it would land.
+- **A PDF's chunks carry no heading trail.** Headings in a PDF are a
+  font-size convention rather than a structure, so inferring them would be
+  a heuristic with silent failure modes; PDF chunks are found by their text.
+  A scanned PDF is refused outright, naming OCR — there is no OCR here.
 
 ---
 

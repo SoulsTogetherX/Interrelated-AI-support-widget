@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 
 import { crawl, CrawlError } from "@/ingest/crawler"
 import type { CrawlEvent, CrawlSource } from "@/ingest/crawler"
+import { buildPdf } from "@/ingest/__tests__/pdfFixtures"
 //#endregion
 
 //#region Fixture site
@@ -24,7 +25,14 @@ let robotsTxt: string | { status: number } | null = null
 
 const html = (body: string) => `<!doctype html><html><body>${body}</body></html>`
 
-const routes: Record<string, { type: string; body: string } | { redirect: string } | { status: number }> = {
+/** A real PDF at a real link, because since M7.6 the crawler FETCHES those
+ *  (§3.10.7) — the datasheet a docs site links is content, not an asset. */
+const PDF_MANUAL = buildPdf([{ lines: ["The manual says refunds take five days."] }], { info: { Title: "Manual" } })
+
+const routes: Record<
+  string,
+  { type: string; body: string } | { type: string; bytes: Buffer } | { redirect: string } | { status: number }
+> = {
   "/site/index.html": {
     type: "text/html",
     body: html(`
@@ -45,6 +53,7 @@ const routes: Record<string, { type: string; body: string } | { redirect: string
     body: html(`<h1>A</h1><a href="/site/d.html">d — only reachable from a</a>`),
   },
   "/site/b.md": { type: "text/plain", body: "# B\n\nMarkdown page." },
+  "/site/manual.pdf": { type: "application/pdf", bytes: PDF_MANUAL },
   "/site/deep/c.html": { type: "text/html", body: html("<h1>C</h1>") },
   "/site/d.html": { type: "text/html", body: html("<h1>D</h1>") },
   "/site/redirect": { redirect: "/site/a.html" },
@@ -111,6 +120,10 @@ beforeAll(async () => {
       res.writeHead(302, { location: route.redirect }).end()
     } else if ("status" in route) {
       res.writeHead(route.status).end("error page")
+    } else if ("bytes" in route) {
+      // Binary bodies go out as bytes: routing them through the string
+      // substitution below would re-encode latin1 as utf-8 and corrupt them.
+      res.writeHead(200, { "content-type": route.type }).end(route.bytes)
     } else {
       res.writeHead(200, { "content-type": route.type }).end(route.body.replaceAll("__BASE__", base))
     }
@@ -161,7 +174,8 @@ describe("crawl (url kind)", () => {
   it("follows same-origin links to the configured depth", async () => {
     const depth1 = await run({ location: `${base}/site/index.html`, crawlDepth: 1 })
     expect(depth1.pages.sort()).toEqual([
-      `${base}/site/a.html`, `${base}/site/b.md`, `${base}/site/deep/c.html`, `${base}/site/index.html`,
+      `${base}/site/a.html`, `${base}/site/b.md`, `${base}/site/deep/c.html`,
+      `${base}/site/index.html`, `${base}/site/manual.pdf`,
     ])
     // d.html is only linked FROM a.html — depth 2 territory.
     const depth2 = await run({ location: `${base}/site/index.html`, crawlDepth: 2 })
@@ -181,11 +195,22 @@ describe("crawl (url kind)", () => {
     expect(pages.filter((u) => u.endsWith("/a.html"))).toHaveLength(1)
   })
 
-  it("never fetches cross-origin links, binary assets, or PDFs", async () => {
+  it("never fetches cross-origin links or binary assets", async () => {
     await run({ location: `${base}/site/index.html` })
     expect(requested).not.toContain("/site/logo.png")
-    expect(requested).not.toContain("/site/manual.pdf") // unsupported until M3 uploads
     expect(requested.every((p) => !p.includes("elsewhere"))).toBe(true)
+  })
+
+  it("fetches and ingests a linked PDF (M7.6 — it used to refuse to spend the request)", async () => {
+    const { pages, events, errors } = await run({ location: `${base}/site/index.html` })
+    expect(requested).toContain("/site/manual.pdf")
+    expect(pages).toContain(`${base}/site/manual.pdf`)
+    // …and it is CONTENT, not an unparseable body: the only error in this
+    // crawl is the fixture's deliberately broken link.
+    expect(errors.some((e) => e.url.endsWith(".pdf"))).toBe(false)
+    const manual = events.find((e) => e.kind === "page" && e.url.endsWith("/manual.pdf"))
+    expect(manual?.kind === "page" && manual.doc.title).toBe("Manual")
+    expect(manual?.kind === "page" && manual.doc.text).toContain("refunds take five days")
   })
 
   it("reports broken links as error events and keeps crawling", async () => {

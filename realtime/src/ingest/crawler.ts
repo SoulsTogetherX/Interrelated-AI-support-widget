@@ -94,12 +94,14 @@ const DEFAULT_FETCH_DELAY_MS = 150
 const DEFAULT_MAX_CRAWL_DELAY_MS = 5_000
 const MAX_CHILD_SITEMAPS = 10
 
-/** Never-fetch extensions: assets and formats no parser handles — including
- *  .pdf until uploads land in M3 (see parsers/index.ts). A miss here is
- *  cheap (the fetch happens and the parser layer skips or degrades) — this
- *  filter exists to not SPEND fetches, not as a correctness gate. */
+/** Never-fetch extensions: assets and formats no parser handles. `.pdf` was
+ *  on this list until M7.6 and is deliberately OFF it now — the parser layer
+ *  reads PDFs (§3.10.7), and a datasheet or policy PDF linked from a docs
+ *  site is exactly the content a support answer needs. A miss here is cheap
+ *  (the fetch happens and the parser layer skips or degrades) — this filter
+ *  exists to not SPEND fetches, not as a correctness gate. */
 const SKIP_EXTENSIONS =
-  /\.(pdf|png|jpe?g|gif|svg|webp|avif|ico|css|js|mjs|map|json|ya?ml|xml|rss|atom|zip|tar|gz|tgz|mp[34]|webm|wav|woff2?|ttf|eot|otf|exe|dmg|wasm)$/i
+  /\.(png|jpe?g|gif|svg|webp|avif|ico|css|js|mjs|map|json|ya?ml|xml|rss|atom|zip|tar|gz|tgz|mp[34]|webm|wav|woff2?|ttf|eot|otf|exe|dmg|wasm)$/i
 //#endregion
 
 //#region Helpers

@@ -203,8 +203,54 @@ nothing — the M3.6a check must have set it), and its first boot tick was
 spent on a stale queued job a test suite had left in the dev database, so
 the crawl waited for a second boot — one job per tick, wake-driven, exactly
 as documented, and a reminder that suites which queue jobs must park or
-delete them. Remaining in M7: the README's last named gap — file uploads
-(with them, PDF parsing). M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+delete them.
+M7.6a is done — **PDFs are read** (§3.10.7, §3.10.3, §3.10.4, §3.8,
+DATAFLOW §3.3), the first half of the README's last named gap. The M1
+review that removed `pdf-parse` made two objections — 21 MB of image weight,
+and no caller — and both had to be answered before the format could come
+back. They are: the dependency is `unpdf` (2.1 MB, zero dependencies of its
+own, against pdf-parse's 21 MB and its two), loaded by DYNAMIC IMPORT so a
+stack that never meets a PDF never pays for it; and the caller is the
+crawler, which stopped refusing to spend a fetch on a `.pdf` link — the
+datasheet or policy PDF a docs site links is exactly the content a support
+answer needs. The parser earns its own section because two mechanical facts
+about pdf.js drive it, both learned from it failing: it TRANSFERS (detaches)
+the array it is handed, so the document is opened once into a proxy that
+both the title and the text are read from — a parser that passed its
+caller's buffer through would work on a crawl's first page and throw on its
+second, which a test now pins by parsing one buffer twice — and a Node
+Buffer is a pooled view that cannot be transferred at all, so the bytes are
+copied first. The offset contract holds by construction as it does for HTML
+(layout is not text, so the extraction IS the document), lines are grouped
+into paragraphs because the chunker blank-line-joins the blocks it packs and
+one-block-per-line would split every wrapped sentence, and what that means
+in practice was MEASURED rather than assumed: pdf.js emits no blank line
+however large the vertical gap, so a page is one block that the chunker
+splits at sentence bounds. Every refusal is a sentence a tenant can act on
+— not a readable PDF, password-protected, over 10 MB, and the one worth
+naming, a PDF with no text layer, which is a SCAN whose content is pixels
+and which is refused with a sentence naming OCR rather than stored as a
+source that answers nothing. Two limits are stated rather than smoothed
+over: a PDF gets no heading trail (headings there are a font-size
+convention, and inferring them would be a heuristic with silent failures),
+and the size cap bounds the INPUT rather than the WORK. The fixtures are a
+hand-written PDF writer with a real xref table, so the suite ships no opaque
+blobs. Verified live end to end against a REAL document rather than a
+fixture — which is the half the unit tests cannot reach, since hand-built
+PDFs have none of the compressed streams, embedded fonts and xref streams a
+document toolchain emits: `https://www.rfc-editor.org/rfc/rfc9309.pdf` (the
+PDF of the very RFC M7.5 implemented — 12 pages, 177 KB) connected from the
+dashboard as a depth-0 source, crawled, and stored as one document titled
+"RFC 9309: Robots Exclusion Protocol" from its Info dictionary, 5,529
+tokens, 12 chunks, 12 embeddings; the sources page reading "1 pages
+indexed"; and `npm run search` returning its chunks through both retrieval
+arms under the correct source URL, each marked "(no heading)" — the
+documented limitation, visible rather than asserted. The full ladder ran
+green against the rebuilt prod image: smoke, injection, security 54/54, and
+— the check the container exists to make, since a dynamically-imported
+dual-format dependency is exactly what an image can break — `unpdf`
+resolving and extracting text from a PDF built inside the shipped image.
+Remaining: M7.6b, the upload surface itself. M6.1 is done — the security probe (§6.3, §3.27, §4.4,
 DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
 across the trust model's layers — origin allowlist and CORS posture, key
 state (a revoked key byte-identical to an unknown one), token tamper and
@@ -231,10 +277,13 @@ REPORTED as the per-model number it is (0/8 under the mock, which measures
 the pipeline; a real provider measures the model). M6.4 closed the
 milestone with the documentation and a full verification ladder. Two things
 the plan's M6 list names are covered differently than a reader might
-expect, and are stated rather than fudged: "oversized uploads" — file uploads
-do not exist (deferred with PDF support, §3.10.3), so what the probe bounds is
+expect, and are stated rather than fudged: "oversized uploads" — at M6.4 file
+uploads did not exist (deferred with PDF support), so what the probe bounds is
 every payload the surface DOES accept, the 64 KB JSON body, the 2,000-char
-question, and the 4,000-char socket frame; and "rotated keys" — at M6.4
+question, and the 4,000-char socket frame. M7.6a has since built the PDF
+parser, which carries its own size cap tested at the parser (§3.10.7), and
+M7.6b's upload route is where the probe's own oversized case belongs; and
+"rotated keys" — at M6.4
 one-click rotation was a dashboard feature that had not been built, so the
 fixture performed a rotation by hand (a key created live, then revoked) and
 the probe asserted the property rotation depends on, that a rotated-out key
@@ -1033,14 +1082,22 @@ containers always use `database:5432` internally (§4.2).
 Express 5 + Kysely + pg, CommonJS, bundled to a single `dist/server.js` by
 esbuild. As of M1.4 it contains the full ingest pipeline (§3.10) and the
 retrieval layer (§3.12) alongside the boot spine; the SSE chat path (M2)
-and handoff WebSocket (M4) still hang off later milestones. Runtime dependencies grew by two, each earning
-its place: `undici` (the guarded HTTP agent — §3.10.2) and `htmlparser2`
-(HTML tokenization — §3.10.3). A third, `pdf-parse`, was built, tested, and
-then REMOVED on review: crawled docs sites are HTML/Markdown, and nothing
-can hand the product a PDF until file uploads exist (M3) — 21 MB of image
-weight and a large third-party parsing surface for a feature with no
-caller. It returns with uploads; §3.10.3 records how PDFs are skipped
-meanwhile.
+and handoff WebSocket (M4) still hang off later milestones. Runtime dependencies grew to three, each earning
+its place: `undici` (the guarded HTTP agent — §3.10.2), `htmlparser2`
+(HTML tokenization — §3.10.3), and since M7.6 `unpdf` (PDF text extraction
+— §3.10.7).
+
+That third one has a history worth keeping, because it is why the file it
+lives in looks the way it does. A `pdf-parse` implementation was built at
+M1, tested, and then REMOVED on review: 21 MB of image weight and a
+browser-sized parsing surface, for a feature with no caller — crawled docs
+sites are HTML/Markdown, and nothing could hand the product a PDF. Both
+halves of that objection had to be answered before the format came back,
+and both are. The caller exists (a docs site's linked datasheet, and in
+M7.6b an upload), and the dependency is a different one: `unpdf` is 2.1 MB
+with ZERO dependencies of its own, against pdf-parse's 21 MB and its two
+(`pdfjs-dist` plus a native canvas). It is also loaded by DYNAMIC IMPORT,
+so a stack that never meets a PDF never pays for it.
 
 ### §3.1 `src/db/schema.ts`
 Since M3.2 a thin re-export of `shared/db/schema.ts` (§2.4.6), which is
@@ -1538,13 +1595,38 @@ force-exits.
   chains parseMarkdown → chunkBlocks to prove the heading trail survives
   the whole path; another pins that two HTML formattings of the same
   content extract identical text (what makes content_hash meaningful); a
-  third pins that a detected PDF is REJECTED rather than garbled into
-  markdown paragraphs (PDF support is deferred to M3 — §3.10.3).
+  third pins that a detected PDF reaches the PDF parser rather than the
+  markdown fallback — the property that mattered when there was no parser
+  at all, and still does (§3.10.7).
+- `ingest/__tests__/pdf.test.ts` + `pdfFixtures.ts` — keyless (M7.6a). The
+  fixtures are a minimal PDF WRITER, ~40 lines with a real xref table, so
+  the suite ships no opaque blobs and a test can say "a two-page document
+  whose second page wraps a sentence" — deliberately valid rather than
+  broken-but-recoverable, or the tests would be measuring pdf.js's recovery
+  path. Pinned: the offset contract on every document the suite produces;
+  the Info title, and the first-line fallback when a PDF claims none; a
+  page's wrapped lines staying in ONE block (with the MEASURED fact that
+  pdf.js emits no blank lines, so a fixture's blank line is dropped
+  entirely); pages separated by a blank line with the second page's offsets
+  pointing PAST the separator; whitespace collapse making the text
+  deterministic for `content_hash`; and parsing the SAME buffer twice, which
+  is the regression test for pdf.js detaching its input. Refusals get their
+  own describe: the scan (no text layer) named with OCR, truncated and
+  non-PDF and empty bytes, and an oversized one refused before pdf.js sees
+  it (a valid PDF plus padding, so only the cap can be what rejects it).
+  Then through the DISPATCHER: a PDF mislabeled `text/plain` parsed anyway
+  (magic bytes decide), a declared charset never applied to it, and a
+  parse → chunk round trip like the worker's.
 - `ingest/__tests__/crawler.test.ts` — no DB. An in-test fixture site with
   every scope hazard: fragments, duplicate links, redirects, cross-origin
   links, binary assets, broken pages, markdown served as text/plain,
   sitemap + sitemapindex. Asserts what was and was NOT requested (the
-  server records paths), not just what was yielded. The M7.5 block gives the
+  server records paths), not just what was yielded. Since M7.6a the fixture
+  also serves a REAL PDF (built by pdfFixtures.ts, sent as bytes rather
+  than through the string substitution that would corrupt it) at a linked
+  `.pdf` URL, and the assertion that used to say it was never requested now
+  says the opposite: fetched, ingested, titled from its Info dictionary,
+  and not among the crawl's errors. The M7.5 block gives the
   fixture a mutable `/robots.txt` (404 by default — the existing tests'
   world, and the common case) and a root whose links cross into areas a file
   may close: robots.txt read once, FIRST, and a disallowed link reported once
@@ -1971,21 +2053,21 @@ functions of content (the HTML whitespace-collapse test pins this).
   href>` values ARE collected: nav menus are how docs sites interlink.
   `<pre>` preserves whitespace as a code block; prose whitespace collapses
   (HTML's own rendering rule, and what makes extraction deterministic).
-- PDF — deliberately ABSENT until M3. A `pdf-parse` implementation was
-  built and then removed on review: no caller can supply a PDF before file
-  uploads exist, and the dependency cost 21 MB of image plus a browser-
-  sized parsing surface. What remains is the honest edge handling: PDFs
-  are still DETECTED (magic bytes / media type) and rejected with a clear
-  error the crawler reports as a skipped page, and the crawler's
-  extension filter never spends a fetch on an obvious `.pdf` link —
-  detection without parsing is what keeps a crawled PDF from being
-  garbled into "paragraphs" of binary soup by the markdown fallback.
+- `pdf.ts` — real since M7.6; its own section, §3.10.7, because the
+  decisions in it are about a dependency and a binary format rather than
+  about markup. (Until then this bullet recorded a deliberate ABSENCE: a
+  `pdf-parse` implementation built at M1 and removed on review, because no
+  caller could supply a PDF and the dependency cost 21 MB. The detection
+  that remained — magic bytes, then media type — is unchanged and is now
+  what routes a PDF to a parser instead of to a refusal.)
 - `index.ts` — decode + dispatch. Detection in trust order: magic bytes
   (`%PDF-`, unfakeable) → declared media type → URL extension → sniff →
   markdown as fallback (it degrades to plain-text paragraphs; the HTML
   parser would strip nothing). Decoding
   strips the BOM and normalizes CRLF→LF BEFORE any parser runs, so server
-  line-ending churn can never change a content_hash.
+  line-ending churn can never change a content_hash — and a PDF skips
+  decoding entirely, taking the raw buffer, because it is bytes rather
+  than text and a charset applied to one would corrupt it.
 
 #### §3.10.4 `src/ingest/crawler.ts`
 Source → stream of parsed pages, as an async GENERATOR: a crawl is minutes
@@ -2152,6 +2234,82 @@ The verdict a refusal carries is a self-contained clause the crawler passes
 on verbatim and the dashboard shows: "disallowed by robots.txt (User-agent:
 *, Disallow: /private/)" names the rule that decided it; an unreachable
 file says so and why nothing may be fetched.
+
+#### §3.10.7 `src/ingest/parsers/pdf.ts`
+The format the pipeline refused until M7.6, and the one the M1 review was
+right to defer: a PDF parser is the largest third-party surface in the
+ingest path, and back then nothing could hand the product a PDF. Both facts
+changed, and the file records how.
+
+**The dependency.** `unpdf` — a serverless-shaped build of Mozilla's pdf.js,
+2.1 MB unpacked with no dependencies of its own — against `pdf-parse`'s
+21 MB and its `pdfjs-dist` + native-canvas pair. Loaded by DYNAMIC IMPORT
+(the providers/ rule, §2.4.5c), so a stack that never meets a PDF never
+pays for it and every module that imports the parser layer stays importable
+everywhere; the module promise is cached, so a hundred-PDF crawl loads it
+once, and a failed load resets it rather than poisoning the process.
+Hand-writing an extractor was never on the table, for htmlparser2's reason
+(§3.10.3): PDF is a thousand-page specification with compression,
+encryption, fourteen standard fonts and a dozen text-positioning operators
+— infrastructure, not this project's technical content.
+
+**Two mechanical facts about pdf.js**, both learned from it failing rather
+than from the documentation, and both load-bearing:
+1. It TRANSFERS (detaches) the array it is given — after the first call
+   `bytes.byteLength` is 0 and the next one throws `DataCloneError`. So the
+   document is opened ONCE into a proxy and the title and the text are both
+   read from that proxy. A parser that passed its caller's buffer straight
+   through would work on the first page of a crawl and fail on the second;
+   a test calls it twice on one buffer to keep that fixed.
+2. A Node Buffer is a view into a shared pool, which cannot be transferred
+   at all — so the bytes are copied into a standalone array first.
+
+**The offset contract holds by construction**, as it does for HTML: layout
+is not text, so there is no source to point into and the extraction IS the
+canonical document — the blocks are literally the slices this file
+assembled. Lines are GROUPED into paragraphs rather than emitted
+individually, because the chunker joins the blocks it packs with a blank
+line, and one block per line would blank-separate the halves of every
+wrapped sentence — in the embedded text and in the verbatim quote a
+citation has to contain. What that means in practice was MEASURED: pdf.js
+emits no blank line between rows however large the vertical gap, so a page
+normally becomes exactly one block, which the chunker then splits at
+sentence bounds. Whitespace is collapsed before the text is assembled, so
+kerning runs and table columns cannot change a `content_hash`.
+
+**What it refuses, and why each refusal is a sentence rather than a
+silence.** Not a readable PDF; password-protected (told apart by pdf.js's
+own exception name, because that one a tenant can actually fix); larger than
+10 MB; and — the case worth naming — a PDF with no text layer, which is a
+SCAN whose content is pixels. Returning an empty document there would store
+a source that answers nothing and says nothing about why, so the parser
+refuses with a sentence naming OCR, which the crawler records against the
+page (§3.10.5) and the dashboard shows (§9.9). This is exactly the clause
+parsers/types.ts reserves for "formats with real integrity checks".
+
+**Two honest limits, stated rather than pretended away.** A PDF gets no
+heading trail: headings in a PDF are a font-size convention rather than a
+structure, and inferring them would be a heuristic with silent failure
+modes, so its chunks carry `heading_path = null` and are found by their
+text. And the 10 MB cap bounds the INPUT, not the WORK — a small PDF
+crafted to be pathologically slow still occupies the single ingest worker
+while it parses, bounded only by the crawl's attempts cap. Bounding input
+is the cheap half of that problem and the half that can be tested; the
+other half is a second worker's job, and this codebase has one worker
+(§10.4's honest note about the socket applies here too).
+
+`SKIP_EXTENSIONS` in the crawler dropped `.pdf` in the same change: the
+filter exists to not SPEND fetches on formats no parser handles, and a
+datasheet or policy PDF linked from a docs site is now exactly the content
+a support answer needs.
+
+Proven against a real document, not only fixtures: RFC 9309's own PDF (12
+pages, 177 KB, from the RFC Editor's toolchain — compressed streams,
+embedded fonts, an xref stream) crawled from the dashboard into one
+document titled from its Info dictionary, 12 chunks, 12 embeddings, and
+retrievable through both arms. `unpdf` also loads and extracts inside the
+shipped prod image, which is the failure a dual ESM/CJS package behind a
+dynamic import would otherwise save for production.
 
 ### §3.11 `realtime/scripts/enqueueSource.ts`
 Dev-only CLI (`npm run enqueue -- <url> [--depth N] [--sitemap]`):

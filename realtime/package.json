@@ -1,7 +1,7 @@
 {
   "name": "interrelated-realtime",
   "private": true,
-  "description": "The data plane: widget chat (SSE), retrieval, ingest worker, and (from M4) the human-handoff WebSocket. CommonJS on purpose \u2014 the production artifact is a single esbuild bundle run by plain `node`, and CJS keeps that boring and debuggable.",
+  "description": "The data plane: widget chat (SSE), retrieval, ingest worker, and (from M4) the human-handoff WebSocket. CommonJS on purpose — the production artifact is a single esbuild bundle run by plain `node`, and CJS keeps that boring and debuggable.",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "enqueue": "tsx scripts/enqueueSource.ts",
@@ -22,6 +22,7 @@
     "kysely": "^0.28.7",
     "pg": "^8.16.3",
     "undici": "^8.10.0",
+    "unpdf": "^1.8.1",
     "ws": "^8.21.3"
   },
   "devDependencies": {
