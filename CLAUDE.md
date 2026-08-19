@@ -359,6 +359,36 @@ confirmed from outside what the static check asserts — one request at load
 What is NOT claimed: these are loopback numbers, so a CDN's TTFB and
 transfer are still to be added, and the page says so on its face.
 
+M7.10 is done — **schema violations counted** (§3.3.12, §3.15.3, §3.26,
+§9.13, §3.8). The plan's anti-tutorial rules say "schema violations are a
+counted metric, not a swallowed exception"; the pipeline has validated,
+retried once and given up loudly since M2.3, but nothing recorded WHETHER an
+answer needed that retry, so the rate was an exception being handled rather
+than a number anyone could read. Migration 010 adds the two columns that
+count it, and the split between them is the whole design.
+`messages.schema_violations` is per answer and therefore per MODEL, which is
+what makes it a comparison: four providers enforce a schema four different
+ways (§2.4.5n) and should not produce the same rate. It is NULLABLE on 003's
+argument — NULL means no model ran, where 0 would claim one ran and held the
+contract, padding the denominator with answers nobody generated — and a
+CHECK pairs it with `model` exactly. That constraint earned itself
+immediately by catching FOUR test fixtures building assistant rows the
+pipeline cannot produce, the same class of bug as M5.2's per-model refusal
+column that passed a test whose fixture did not match production.
+`usage_daily.schema_failures` is the case the message column CANNOT hold and
+the one that matters most: when the retry also fails there is NO assistant
+row, so counting only per answer would make a systematically failing
+provider read as perfect — its worst outcome recorded as no outcome. It is
+deliberately not part of `answers`, because charging a tenant's daily quota
+for a question the product failed to answer would let a misbehaving model
+burn a customer's plan. The dashboard shows both: a per-model violation
+count with its rate, and a "Contract failures" stat for the org. Verified
+with the full ladder against the rebuilt prod image with 010 applying at
+boot — smoke, injection 0/8, security 57/57 — plus 804 tests. What this does
+NOT do is make the plan's provider-comparison TABLE exist: that is an eval
+run across providers and it needs keys this repo does not carry. What it
+does is make that table's hardest column computable at all.
+
 M7.6b is done, and with it **the README's last named gap is closed** —
 **a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
 §3.22, §9.9, §6.1, §6.3, DATAFLOW §3.2, §7.9a). `sources.kind` has allowed
@@ -1746,6 +1776,53 @@ about something it no longer has. Keyed BY the source (nothing references an
 upload row individually) with ON DELETE CASCADE, and one file per source: a
 replacement is a new upload.
 
+### §3.3.12 `src/db/migrations/010_schema_violations.ts` — counting the contract's failures
+The plan's anti-tutorial rules name this one directly: structured output
+differs per provider, weaker paths need validate-and-one-retry, and **schema
+violations are a counted metric, not a swallowed exception**. The pipeline
+has done the first half since M2.3 — validate, retry exactly once, give up
+loudly — but nothing recorded WHETHER a given answer needed that retry, so
+the rate was an exception being handled rather than a number anyone could
+read. This migration is the counting half (M7.10), and it matters most as a
+COMPARISON: four providers now enforce a schema four different ways
+(§2.4.5n), and they should not produce the same violation rate. A number
+that could only ever be zero would be decoration.
+
+**`messages.schema_violations`** — how many times the model broke the
+contract producing THIS message: 0 when it held first try, 1 when the retry
+rescued it. An INT rather than a BOOLEAN because the cap is prompt.ts's
+product decision rather than a schema fact, and a count is what the metric
+sums. NULLABLE, and the null is load-bearing — 003's argument for the token
+columns applied to the same distinction: NULL means NO MODEL RAN (a gate
+refusal, a visitor's turn, an agent's reply), where 0 would claim a model ran
+and held the contract, padding the rate's denominator with answers nobody
+generated. A CHECK ties the pairing exactly in the 001 style — a row has a
+model if and only if it has a count — and that constraint immediately earned
+itself: it caught FOUR test fixtures building assistant rows the pipeline
+cannot produce, which is the same class of bug as M5.2's per-model refusal
+column that passed a test whose fixture did not match the pipeline.
+
+The one-time imprecision is stated in the migration rather than smoothed
+over: rows written BEFORE it are backfilled to 0, which claims those answers
+held the contract when the truth is that nobody recorded it. Acceptable here
+for the reason the schema was flattened at M3 — pre-launch, the only
+deployed rows a demo corpus a seed recreates in seconds — and written down
+so a future migration that needs the opposite trade (leave history NULL,
+drop the pairing CHECK) knows this one was made deliberately.
+
+**`usage_daily.schema_failures`** — the case the message column CANNOT hold,
+and the one that matters most. When the retry ALSO fails the pipeline throws
+and NO assistant row is written, so counting violations only on messages
+would make a provider that fails systematically look PERFECT: its worst
+outcome recorded as no outcome, which is exactly the swallowed exception the
+plan warns about. Per (org, day) rather than per model, because there is no
+message row to hang a model on — that is the whole problem; what it answers
+is "did we fail to answer anything today?", an alerting question, while the
+comparison lives on the messages column. Deliberately NOT folded into
+`answers`: that counter is the quota's denominator, and charging a tenant's
+daily allowance for a question the product failed to answer would let a
+misbehaving model burn a customer's plan.
+
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
 `MIGRATIONS` record, not discovered from disk. Kysely's stock
@@ -1843,7 +1920,10 @@ force-exits.
   another source unaffected. Both new cases delete their org in a `finally`
   because their surviving rows are QUEUED jobs, and a later suite's worker
   would otherwise claim and crawl them — which it did, once, on the way to
-  writing this).
+  writing this); and 010's — a message with a model and no violation count,
+  and a count with no model, each refused by the pairing CHECK from its own
+  side, while 0, 1 and NULL-with-no-model are all accepted, plus a negative
+  count and a negative `schema_failures` refused.
 - `db/__tests__/chat.test.ts` — the chat-schema integration suite, same
   gating. Role-consistency CHECKs probed from both sides (visitor with a
   model rejected, full assistant row accepted); the span/verdict equality
@@ -2044,6 +2124,10 @@ force-exits.
   for an org that does not exist — and the plan-catalog lockstep, which
   inserts an org at EVERY catalog id, so a tier added without a migration
   fails here instead of at a customer's upgrade.
+  The M7.10 block adds the contract-failure counter: two failures counted
+  without touching `answers` or `refusals` (a question the product failed to
+  answer must not spend the tenant's quota), and five CONCURRENT failures
+  adding as five, which is the upsert's reason for existing.
 - `usage/__tests__/origins.test.ts` — the per-origin counters (M7.2,
   §3.28). Keyless: the shape rule keeps origins and the literal `null`,
   and collapses paths, schemes, whitespace, markup, and over-long hosts
@@ -2885,7 +2969,12 @@ shapes are enumerated in DATAFLOW §5.2; the notable ones: gate refusal
 persists refused=true with model=NULL and zero citations, total
 verification failure persists refused=false with the fallback text and a
 100% strip rate on record, and a double schema failure throws
-AnswerSchemaError leaving no assistant row at all. Since M5.2 the stream
+AnswerSchemaError leaving no assistant row at all — which since M7.10 is
+counted on the ORG's day (`usage_daily.schema_failures`, §3.3.12) before it
+throws, wrapped so an instrumentation failure can never replace the error
+the caller needs, because the alternative is the one provider failure mode
+that would otherwise be invisible. An answer that DID land carries how many
+times the model broke the contract producing it, 0 or 1. Since M5.2 the stream
 collector also keeps the terminal event's token usage, and the retry ADDS
 to it rather than replacing it — TTFT keeps the first attempt's value
 because the visitor has been waiting since the original question, while
@@ -3048,6 +3137,17 @@ limit, and whether it is exceeded. A missing counter row is a quiet day —
 that fails safe: one mistyped environment variable must not be able to hand
 every tenant on every plan an unlimited allowance, and a test pins both
 directions.
+
+`recordSchemaFailure` (M7.10) is the third writer, and the odd one: its
+siblings are called inside the transaction that writes the row they count,
+because a counter that could disagree with its rows is not a counter. This
+one has no row to agree with — it counts a question that produced NO answer
+because the model broke the JSON contract twice — which is precisely why it
+exists, since `messages.schema_violations` cannot record an outcome that
+wrote no message. It is deliberately NOT added to `answers`: that counter is
+the quota's denominator, and charging a tenant's daily allowance for a
+question the product failed to answer would let a misbehaving model burn a
+customer's plan.
 
 `utcDay` owns the day boundary that the widget route's `utcDayStart` used
 to compute inline, so exactly one function decides what "today" means for
@@ -5288,6 +5388,17 @@ stripped alike, and `handoff_sessions` has carried requested_at since
   carry `model = NULL` and never reach a model group at all. The fixture
   now matches production and the column is gone; refusals are counted once,
   at org level, where they are real.
+
+  M7.10 added the column the plan's provider comparison is really about:
+  **schema violations per model**, summed from `messages.schema_violations`
+  (§3.3.12) over the same rows the rest of the breakdown uses, with
+  `answers` as the denominator — every row there ran a model, since the gate
+  refuses before choosing one. Its companion is an org-level **contract
+  failures** count read from `usage_daily`, the ONE number on the page that
+  does not come from `messages`, because what it counts is the absence of
+  one. That read rounds to whole UTC days where the rest of the window is an
+  instant, which the file states: a coarser boundary is the right trade for
+  a number read as "is this happening at all?" rather than as a rate.
 
 - **metrics/page.tsx** — Answering, Grounding, Latency, Handoff, Cost, and
   a by-model table that is the provider comparison made concrete: answers,

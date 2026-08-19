@@ -228,6 +228,65 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
       }
     })
 
+    it("pairs a message's schema-violation count with its model, exactly (010)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Violations Co" }).execute()
+      try {
+        const conversationId = newId("con")
+        await db.insertInto("conversations")
+          .values({ id: conversationId, org_id: orgId, visitor_id: "vis_probe" }).execute()
+        const message = (extra: Record<string, unknown>) => ({
+          id: newId("msg"), conversation_id: conversationId, org_id: orgId,
+          role: "assistant" as const, content: "x", ...extra,
+        })
+
+        // A model ran: 0 (held the contract) and 1 (needed the retry) are
+        // both legal, and so is any count above them — the cap is prompt.ts's
+        // decision, not the schema's.
+        await db.insertInto("messages").values(message({ model: "m", schema_violations: 0 })).execute()
+        await db.insertInto("messages").values(message({ model: "m", schema_violations: 1 })).execute()
+        // No model ran: NULL, which is what a gate refusal and a visitor turn
+        // both are.
+        await db.insertInto("messages").values(message({ model: null, schema_violations: null, refused: true })).execute()
+
+        // The two halves of the pairing, each refused from its own side. A
+        // model with no count would be an answer whose contract nobody
+        // measured; a count with no model would claim a model that never ran
+        // broke something.
+        await expect(
+          db.insertInto("messages").values(message({ model: "m", schema_violations: null })).execute(),
+        ).rejects.toThrow(/messages_schema_violations_pairs_with_model/)
+        await expect(
+          db.insertInto("messages").values(message({ model: null, schema_violations: 0 })).execute(),
+        ).rejects.toThrow(/messages_schema_violations_pairs_with_model/)
+        // And a negative count is a writer that has gone wrong.
+        await expect(
+          db.insertInto("messages").values(message({ model: "m", schema_violations: -1 })).execute(),
+        ).rejects.toThrow(/messages_schema_violations_nonneg/)
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
+    it("counts a day's schema failures, and refuses a negative one (010)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Failures Co" }).execute()
+      try {
+        // A row that predates the column reads as zero failures, which is the
+        // honest answer: none were recorded.
+        await db.insertInto("usage_daily").values({ org_id: orgId, day: "2026-08-19" }).execute()
+        const row = await db.selectFrom("usage_daily").select("schema_failures")
+          .where("org_id", "=", orgId).executeTakeFirstOrThrow()
+        expect(Number(row.schema_failures)).toBe(0)
+        await expect(
+          db.updateTable("usage_daily").set({ schema_failures: -1 })
+            .where("org_id", "=", orgId).execute(),
+        ).rejects.toThrow(/usage_daily_schema_failures_nonneg/)
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
     it("holds one upload's extraction per source, and refuses the empty ones (009)", async () => {
       const orgId = newId("org")
       await db.insertInto("organizations").values({ id: orgId, name: "Upload Co" }).execute()

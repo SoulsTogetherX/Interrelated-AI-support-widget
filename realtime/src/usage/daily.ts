@@ -117,6 +117,49 @@ async function recordEscalation(
     }))
     .execute()
 }
+
+/**
+ * A question that produced NO answer because the model broke the answer
+ * contract twice (migration 010). The one schema-violation case that cannot
+ * be a column on `messages`, because there IS no message row — which is
+ * exactly why it must be counted somewhere: a provider failing
+ * systematically would otherwise show up as perfect, its worst outcome
+ * recorded as no outcome.
+ *
+ * Deliberately NOT part of `answers`. That counter is the quota's
+ * denominator, and charging a tenant's daily allowance for a question the
+ * product failed to answer would let a misbehaving model burn a customer's
+ * plan. It costs us tokens, which the messages rows already record for the
+ * attempts that did produce answers; this row is the alerting number.
+ *
+ * Takes a plain Kysely rather than requiring a transaction, unlike its
+ * siblings: there is no row to stay consistent WITH — the pipeline throws
+ * immediately after — and the caller wraps it so an instrumentation failure
+ * can never replace the error the visitor's request actually produced.
+ */
+async function recordSchemaFailure(
+  db: DbOrTrx,
+  orgId: string,
+  now?: Date,
+): Promise<void> {
+  await db
+    .insertInto("usage_daily")
+    .values({
+      org_id: orgId,
+      day: utcDay(now),
+      answers: 0,
+      refusals: 0,
+      escalations: 0,
+      schema_failures: 1,
+      input_tokens: 0,
+      output_tokens: 0,
+    })
+    .onConflict((oc) => oc.columns(["org_id", "day"]).doUpdateSet({
+      schema_failures: sql`usage_daily.schema_failures + excluded.schema_failures`,
+      updated_at: sql`NOW()`,
+    }))
+    .execute()
+}
 //#endregion
 
 //#region Reads
@@ -165,6 +208,6 @@ async function getDailyQuota(
 //#endregion
 
 //#region Exports
-export { utcDay, recordAnswer, recordEscalation, getDailyQuota }
+export { utcDay, recordAnswer, recordEscalation, recordSchemaFailure, getDailyQuota }
 export type { DailyQuota }
 //#endregion

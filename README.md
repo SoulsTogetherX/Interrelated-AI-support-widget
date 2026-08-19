@@ -38,7 +38,7 @@ data, and most of them are CI gates.
 | What the widget costs a host page | **1 request, 6.52 KB gzipped, and nothing further until a visitor opens the bubble** — the bundle fetches no font, stylesheet, chunk or image, and the session mint is deferred to bubble-open | `scripts/widget-size.mjs` (static) + `widget/src/__tests__/cost.test.ts` (behavioral); both CI-enforced |
 | Snippet load → interactive bubble | **9.5 ms p50** warm (10 loads, 9 of them 7.3–16.3 ms), **168 ms** on a cold first load | `widget/fixtures/measure.html` — localhost, so add a CDN's TTFB and transfer |
 | Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
-| Tests | 799 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
+| Tests | 804 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 Two things the plan wanted measured that this README does **not** claim a
 number for, because they need a real provider key: time-to-first-token and
@@ -114,9 +114,13 @@ answers rather than one: Groq (and any OpenAI-compatible endpoint) has JSON
 schema server-side; Ollama constrains generation with its native `format`;
 and Anthropic has no response-format field at all, so its schema is carried
 as a forced **tool call** whose streamed arguments are the answer document.
-The pipeline validates regardless — trust is not transitive, and the
-schema-violation rate is exactly the metric that makes the difference
-visible instead of assumed. A deterministic mock keeps CI keyless, and
+The pipeline validates regardless — trust is not transitive — and records
+per answer whether the model had to be asked twice, so the schema-violation
+rate is a column in the dashboard's by-model table rather than an assumption.
+The case that would otherwise hide is counted too: when the one retry also
+fails there is no answer row to attribute, so that lands on the org's daily
+counters instead — a provider failing systematically must not read as a
+provider that never fails. A deterministic mock keeps CI keyless, and
 Anthropic is the one provider with no free tier, so nothing here selects it
 by default and no keyless stack can reach it.
 

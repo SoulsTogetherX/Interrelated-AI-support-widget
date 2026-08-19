@@ -151,7 +151,9 @@ async function seedMessage(
     org_id: orgId,
     role,
     content,
-    ...(role === "assistant" ? { model: "mock-llm" } : {}),
+    // A model and its contract-violation count are paired by CHECK since
+    // migration 010: a bot turn names both, a human turn neither.
+    ...(role === "assistant" ? { model: "mock-llm", schema_violations: 0 } : {}),
   }).execute()
   return id
 }

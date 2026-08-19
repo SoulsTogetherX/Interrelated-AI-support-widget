@@ -17,7 +17,7 @@ import { buildAnswerMessages, buildRetryMessages } from "@/answer/prompt"
 import { withRetry } from "@/answer/retry"
 import type { RetryHooks } from "@/answer/retry"
 import { getOpenHandoff } from "@/handoff/escalate"
-import { recordAnswer } from "@/usage/daily"
+import { recordAnswer, recordSchemaFailure } from "@/usage/daily"
 //#endregion
 
 //#region Type Defs
@@ -277,6 +277,9 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
       // the distinction is load-bearing for cost: refusals are excluded
       // from the per-answer average rather than dragging it toward free.
       retrievalScore: gate.signal, ttftMs: null, totalMs, usage: null,
+      // No model ran, so there is no contract to have broken — NULL, not 0,
+      // for the same reason usage is (migration 010).
+      schemaViolations: null,
       citations: [], retrieved,
     })
     emit({ type: "refusal", text: REFUSAL_TEXT })
@@ -365,6 +368,10 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   let ttftMs = first.ttftMs
   let usage = first.usage
   let parsed = parseAnswerText(first.text)
+  // How many times this answer's model broke the contract. 0 or 1 today,
+  // because the retry is capped at one — an INT rather than a flag because
+  // the cap is a product decision and the metric sums these (§3.3.12).
+  let schemaViolations = 0
   if (!parsed.ok) {
     // One retry with the full error list (see prompt.ts for why exactly
     // one). TTFT keeps the FIRST attempt's value: the visitor has been
@@ -374,6 +381,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     // The messages are built ONCE, outside the retry: a rate limit is not a
     // reason to re-derive the same prompt, and building it here also keeps
     // the narrowed `parsed.errors` where the compiler can still see it.
+    schemaViolations = 1
     const retryMessages = buildRetryMessages(messages, first.text, parsed.errors)
     const retry = await callModel(
       () => collectStream(llm, { ...baseRequest, messages: retryMessages }, startedAt),
@@ -382,7 +390,20 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     ttftMs = ttftMs ?? retry.ttftMs
     usage = addUsage(usage, retry.usage)
     parsed = parseAnswerText(retry.text)
-    if (!parsed.ok) throw new AnswerSchemaError(parsed.errors)
+    if (!parsed.ok) {
+      // Both attempts broke the contract, so there will be NO assistant row
+      // to carry a violation count — which is why the org's daily counter
+      // exists (migration 010): the worst case must not be recorded as no
+      // case. Wrapped so that an instrumentation failure can never replace
+      // the error the caller actually needs, the stance §3.28 takes for the
+      // origin counters.
+      try {
+        await recordSchemaFailure(db, orgId)
+      } catch (counterErr) {
+        console.warn("[answer] could not record schema failure:", counterErr)
+      }
+      throw new AnswerSchemaError(parsed.errors)
+    }
   }
 
   // ── Verify, strip, persist ───────────────────────────────────────────────
@@ -399,7 +420,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   await persistAssistantMessage(db, {
     messageId, conversationId, orgId,
     content, model: answeredBy.model, refused: false,
-    retrievalScore: gate.signal, ttftMs, totalMs, usage,
+    retrievalScore: gate.signal, ttftMs, totalMs, usage, schemaViolations,
     citations: verified, retrieved,
   })
 
@@ -441,6 +462,7 @@ async function persistAssistantMessage(db: Kysely<Database>, row: {
   ttftMs: number | null
   totalMs: number
   usage: LLMUsage | null
+  schemaViolations: number | null
   citations: readonly VerifiedClaim[]
   retrieved: readonly RetrievedChunk[]
 }): Promise<void> {
@@ -459,6 +481,7 @@ async function persistAssistantMessage(db: Kysely<Database>, row: {
       total_ms: row.totalMs,
       input_tokens: row.usage?.inputTokens ?? null,
       output_tokens: row.usage?.outputTokens ?? null,
+      schema_violations: row.schemaViolations,
     }).execute()
 
     if (row.citations.length > 0) {

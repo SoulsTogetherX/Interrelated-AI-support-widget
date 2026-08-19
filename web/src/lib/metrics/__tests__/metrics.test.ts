@@ -43,6 +43,7 @@ async function answer(
     content?: string
     inputTokens?: number
     outputTokens?: number
+    schemaViolations?: number
   },
 ): Promise<string> {
   const id = newId("msg")
@@ -64,6 +65,11 @@ async function answer(
     total_ms: fields.total ?? null,
     input_tokens: refused ? null : fields.inputTokens ?? null,
     output_tokens: refused ? null : fields.outputTokens ?? null,
+    // Paired with `model` by CHECK (migration 010) for the same reason the
+    // model itself is nulled above: a refusal ran no model, so it has no
+    // contract to have broken. The constraint caught this fixture building
+    // a row the pipeline cannot produce, which is what it is for.
+    schema_violations: refused ? null : fields.schemaViolations ?? 0,
     created_at: fields.at,
   }).execute()
   return id
@@ -100,6 +106,21 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
       .values({ org_id: orgId, user_id: agentId, role: "agent" })
       .execute()
 
+    // Two questions the model could not answer within the contract even
+    // after its retry. They produce NO message row by design, so the org's
+    // daily counter is the only place they exist (migration 010).
+    await db.insertInto("usage_daily").values({
+      org_id: orgId,
+      day: new Date().toISOString().slice(0, 10),
+      schema_failures: 2,
+    }).execute()
+    // Another tenant's failures must stay invisible, like everything else.
+    await db.insertInto("usage_daily").values({
+      org_id: otherOrgId,
+      day: new Date().toISOString().slice(0, 10),
+      schema_failures: 99,
+    }).execute()
+
     // ── Conversation A: answered three times, never escalated → a
     // deflection. Its answers cover the three cost cases: a priced model
     // with usage, a priced model whose provider reported none, and a
@@ -116,7 +137,11 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
     })
     // A priced model that reported no usage — metered separately from the
     // ones that did, so the cost figure can say what it left out.
-    await answer(orgId, a, { at: minutesAgo(57), model: "gemini-2.5-flash", ttft: 200, total: 800 })
+    await answer(orgId, a, {
+      at: minutesAgo(57), model: "gemini-2.5-flash", ttft: 200, total: 800,
+      // This one broke the contract once and the retry rescued it (M7.10).
+      schemaViolations: 1,
+    })
 
     // ── Conversation B: one refusal, then escalated and answered by a
     // person 5 minutes later.
@@ -224,6 +249,24 @@ describe.skipIf(!DB_CONFIGURED)("org metrics", () => {
     // unanswered handoff must not count as a fast one.
     expect(deflection.handoffsAnswered).toBe(1)
     expect(deflection.firstHumanResponseP50Ms).toBeCloseTo(5 * 60 * 1000, -3)
+  })
+
+  it("counts schema violations per model, and the failures that produced no answer", async () => {
+    // The plan's provider-comparison metric (M7.10). One of gemini's two
+    // answers needed the retry; mock-llm's held the contract; and two
+    // questions produced no answer at all, which no message row can record.
+    const { byModel, answers } = await getOrgMetrics(orgId)
+    const gemini = byModel.find((row) => row.model === "gemini-2.5-flash")
+    const mock = byModel.find((row) => row.model === "mock-llm")
+    expect(gemini?.schemaViolations).toBe(1)
+    expect(mock?.schemaViolations).toBe(0)
+    // Counted for the org, not against any model — there is no row to hang
+    // one on, which is exactly why a per-answer column alone would let a
+    // systematically failing provider read as perfect.
+    expect(answers.schemaFailures).toBe(2)
+    // And they are NOT answers: a question the product failed to answer must
+    // not spend the tenant's quota or pad an answer count.
+    expect(answers.answers).toBe(5)
   })
 
   it("breaks answers down by model — a comparison is a query, not a migration", async () => {

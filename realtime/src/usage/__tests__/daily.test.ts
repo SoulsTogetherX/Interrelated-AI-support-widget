@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import pool, { db } from "@/db/pool"
 import { migrateToLatest } from "@/db/migrate"
-import { getDailyQuota, recordAnswer, recordEscalation, utcDay } from "@/usage/daily"
+import { getDailyQuota, recordAnswer, recordEscalation, recordSchemaFailure, utcDay } from "@/usage/daily"
 import { PLANS, PLAN_ORDER } from "@shared/billing/plans"
 import { newId } from "@shared/utils/ids"
 //#endregion
@@ -123,6 +123,33 @@ describe.skipIf(!DB_CONFIGURED)("usage", () => {
     const row = await usageRow(orgId)
     expect(row?.escalations).toBe(2)
     expect(row?.answers).toBe(0)
+  })
+
+  it("counts a contract failure without spending the tenant's quota", async () => {
+    // M7.10. The question produced NO answer — the model broke the JSON
+    // contract twice — so there is no message row to count it on, and it
+    // must not be charged as an answer either: a misbehaving model would
+    // otherwise burn a customer's daily allowance producing nothing.
+    await recordSchemaFailure(db, orgId)
+    await recordSchemaFailure(db, orgId)
+    const row = await usageRow(orgId)
+    expect(row?.schema_failures).toBe(2)
+    expect(row?.answers).toBe(0)
+    expect(row?.refusals).toBe(0)
+  })
+
+  it("adds concurrent contract failures as concurrent, not as one", async () => {
+    // The upsert's reason for existing, same as recordAnswer's: five
+    // requests failing the contract at once must read as five.
+    const org = newId("org")
+    await db.insertInto("organizations").values({ id: org, name: "Concurrent Fail Co" }).execute()
+    try {
+      await Promise.all(Array.from({ length: 5 }, () => recordSchemaFailure(db, org)))
+      const row = await usageRow(org)
+      expect(row?.schema_failures).toBe(5)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
   })
 
   it("refuses a counter state that would mean two writers disagreed", async () => {

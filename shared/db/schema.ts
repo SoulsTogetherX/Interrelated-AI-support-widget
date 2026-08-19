@@ -362,6 +362,16 @@ interface MessagesTable {
    *  record is a parsing bug, not a partial measurement. */
   input_tokens: number | null
   output_tokens: number | null
+  /** How many times the model broke the answer contract while producing
+   *  this message (migration 010): 0 when it held on the first attempt, 1
+   *  when the one retry rescued it. NULL means NO MODEL RAN — a gate
+   *  refusal, a visitor's turn, an agent's reply — which is the token
+   *  columns' distinction applied here: 0 would claim a model ran and held
+   *  the contract, padding the violation rate's denominator with answers
+   *  nobody generated. Paired with `model` by CHECK. The case this column
+   *  cannot hold is the double failure, which writes no row at all; that
+   *  one is counted on usage_daily.schema_failures. */
+  schema_violations: number | null
   created_at: ColumnType<Date, string | Date | undefined, never>
 }
 
@@ -433,6 +443,12 @@ interface UsageDailyTable {
   /** Genuinely-created handoffs only; an idempotent re-request adds
    *  nothing (§3.23). */
   escalations: Generated<number>
+  /** Questions that produced NO answer because the model broke the answer
+   *  contract twice (migration 010). It lives here rather than on messages
+   *  because there is no message row in that case — which is exactly why
+   *  counting violations only per answer would make a systematically
+   *  failing provider look perfect. */
+  schema_failures: Generated<number>
   /** BIGINT in the database: pg returns it as a string, because a bigint
    *  does not always fit a JS number. Callers coerce at the edge. */
   input_tokens: ColumnType<string, string | number | undefined, string | number>

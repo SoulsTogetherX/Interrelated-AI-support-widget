@@ -41,6 +41,14 @@ export interface AnswerMetrics {
   ttftP95Ms: number | null
   totalP50Ms: number | null
   totalP95Ms: number | null
+  /** Questions that produced NO answer because the model broke the JSON
+   *  contract twice (M7.10). Counted from the org's daily counters rather
+   *  than from messages, because in that case there IS no message — which
+   *  is precisely why it has to be counted somewhere: a provider failing
+   *  systematically would otherwise be invisible here, its worst outcome
+   *  recorded as no outcome. Not part of `answers`, so it never dilutes a
+   *  rate whose denominator is answers that exist. */
+  schemaFailures: number
 }
 
 export interface GroundingMetrics {
@@ -94,6 +102,13 @@ export interface ModelMetrics {
   costUsd: number | null
   ttftP50Ms: number | null
   totalP50Ms: number | null
+  /** Answers this model had to be asked TWICE for, because its first reply
+   *  broke the JSON answer contract (M7.10). The plan's provider-comparison
+   *  metric: four providers enforce a schema four different ways, and this
+   *  is the column where that difference shows up as a number instead of an
+   *  assumption. `answers` is the denominator — every row here ran a model,
+   *  since the gate refuses before choosing one. */
+  schemaViolations: number
 }
 
 /**
@@ -206,10 +221,25 @@ async function answerMetrics(orgId: string, since: Date): Promise<AnswerMetrics>
     .where("created_at", ">=", since)
     .executeTakeFirst()
 
+  // The one number on this page that does NOT come from messages, because
+  // the thing it counts is the absence of one: a question the model failed
+  // to answer within the contract, twice. usage_daily is where the pipeline
+  // records it (migration 010). Days are UTC and `since` is an instant, so
+  // this rounds to whole days — coarser than the rest of the window by up to
+  // one day, which is the right trade for a number read as "is this
+  // happening at all?" rather than as a rate.
+  const failures = await db
+    .selectFrom("usage_daily")
+    .select(sql<string>`coalesce(sum(schema_failures), 0)`.as("schema_failures"))
+    .where("org_id", "=", orgId)
+    .where("day", ">=", since.toISOString().slice(0, 10))
+    .executeTakeFirst()
+
   const total = num(row?.answers)
   const refusals = num(row?.refusals)
   return {
     answers: total,
+    schemaFailures: num(failures?.schema_failures),
     refusals,
     refusalRate: rate(refusals, total),
     ttftP50Ms: maybeNum(row?.ttft_p50),
@@ -336,6 +366,10 @@ async function modelMetrics(orgId: string, since: Date): Promise<ModelMetrics[]>
       sql<string>`coalesce(sum(output_tokens), 0)`.as("output_tokens"),
       sql<number | null>`percentile_cont(0.5) within group (order by ttft_ms)`.as("ttft_p50"),
       sql<number | null>`percentile_cont(0.5) within group (order by total_ms)`.as("total_p50"),
+      // SUM, not count-where-positive: the cap is one retry today, so the
+      // two agree, but summing is what stays correct if it ever is not.
+      // coalesce for rows written before migration 010, whose count is NULL.
+      sql<string>`coalesce(sum(schema_violations), 0)`.as("schema_violations"),
     ])
     .where("org_id", "=", orgId)
     .where("role", "=", "assistant")
@@ -358,6 +392,7 @@ async function modelMetrics(orgId: string, since: Date): Promise<ModelMetrics[]>
       costUsd: costUsd(model, inputTokens, outputTokens),
       ttftP50Ms: maybeNum(row.ttft_p50),
       totalP50Ms: maybeNum(row.total_p50),
+      schemaViolations: num(row.schema_violations),
     }
   })
 }

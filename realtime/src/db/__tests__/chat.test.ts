@@ -41,6 +41,9 @@ describe.skipIf(!DB_CONFIGURED)("chat persistence (conversations, messages, cita
       role: "assistant",
       content: "Fastify supports HTTP/2.",
       model: "mock-llm",
+      // Paired with `model` by CHECK since migration 010: a row that names
+      // a model must say how many times that model broke the contract.
+      schema_violations: 0,
       retrieval_score: 0.032,
       ttft_ms: 180,
       total_ms: 900,
@@ -219,7 +222,7 @@ describe.skipIf(!DB_CONFIGURED)("chat persistence (conversations, messages, cita
       const msgId = newId("msg")
       await db.insertInto("messages").values({
         id: msgId, conversation_id: convId, org_id: orgId,
-        role: "assistant", content: "Doomed.", model: "mock-llm",
+        role: "assistant", content: "Doomed.", model: "mock-llm", schema_violations: 0,
       }).execute()
       await db.insertInto("message_citations").values({
         message_id: msgId, ord: 0, chunk_id: newId("chk"),

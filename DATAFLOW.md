@@ -548,7 +548,9 @@ caller (askDev CLI | tests | M2.5 SSE route later)
              message stays, NO assistant row — a transient model failure
              is not conversation history). TTFT keeps the FIRST attempt's
              value (the visitor waited from the original question);
-             tokens SUM across both, because both were billed
+             tokens SUM across both, because both were billed; and the
+             answer carries schema_violations = 1, so the retry is a
+             COUNTED metric rather than a handled exception (M7.10)
      10. verifyClaims                    shared/grounding/verify.ts
            each claim's quote must occur (whitespace-normalized, case-
            sensitive) in the chunk it NAMES, among the chunks the model
@@ -571,7 +573,11 @@ gate refuses            assistant row: refused=true,  model=NULL,  0 citations
 nothing verifies        assistant row: refused=false, model set,   citations all
                         stripped (strip rate 100%) — content is the fallback
 schema failure ×2       NO assistant row; AnswerSchemaError to the caller;
-                        visitor message + conversation remain
+                        visitor message + conversation remain. usage_daily
+                        .schema_failures += 1 FIRST (wrapped, so it can
+                        never replace the error): with no row to count on,
+                        this is the only place the worst provider failure
+                        is visible at all
 abort (visitor gone)    provider throws mid-stream; nothing persisted past
                         the visitor message
 ```

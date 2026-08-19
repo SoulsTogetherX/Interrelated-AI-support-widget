@@ -78,6 +78,8 @@ describe.skipIf(!hasDb)("conversation queries (integration)", () => {
         role: "assistant",
         content: "Refunds are processed within five business days.",
         model: "test-model",
+        // Paired with `model` by CHECK since migration 010.
+        schema_violations: 0,
         retrieval_score: 0.21,
         ttft_ms: 120,
         total_ms: 900,

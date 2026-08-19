@@ -262,6 +262,9 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
       .selectAll().where("id", "=", answered.messageId).executeTakeFirstOrThrow()
     expect(unmetered.input_tokens).toBeNull()
     expect(unmetered.output_tokens).toBeNull()
+    // A model DID run here and held the contract, so violations is 0 —
+    // the distinction the column exists for (M7.10).
+    expect(unmetered.schema_violations).toBe(0)
 
     const refused = await answerQuestion({
       db, embedder, llm: new MockLLMProvider([]), orgId,
@@ -271,6 +274,11 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
     const refusalRow = await db.selectFrom("messages")
       .selectAll().where("id", "=", refused.messageId).executeTakeFirstOrThrow()
     expect(refusalRow.input_tokens).toBeNull()
+    // Same argument, same answer: no model ran, so "how many times did it
+    // break the contract" has no value — NULL, never 0, which would pad the
+    // violation rate's denominator with answers nobody generated.
+    expect(refusalRow.schema_violations).toBeNull()
+    expect(refusalRow.model).toBeNull()
   })
 
   it("stays out of a handed-off conversation but keeps the question", async () => {
@@ -332,6 +340,13 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
       role: "assistant", content: "Sure! Here's my answer as prose, not JSON.",
     })
     expect(retryMessages.at(-1)!.content).toContain("rejected by the JSON validator")
+
+    // M7.10: the violation is COUNTED, not just handled. Without this the
+    // rate the provider-comparison table reports could only ever be zero.
+    const row = await db.selectFrom("messages").select(["schema_violations", "model"])
+      .where("id", "=", result.messageId).executeTakeFirstOrThrow()
+    expect(row.schema_violations).toBe(1)
+    expect(row.model).not.toBeNull()
   })
 
   it("throws AnswerSchemaError after the second failure and persists NO assistant row", async () => {
@@ -341,6 +356,9 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
     ])
     const events: AnswerEvent[] = []
     let conversationId: string | undefined
+    const before = await db.selectFrom("usage_daily").select("answers")
+      .where("org_id", "=", orgId).executeTakeFirst()
+    const answersBefore = Number(before?.answers ?? 0)
     await expect(
       answerQuestion({
         db, embedder, llm, orgId, visitorId: "vis-fail", question: REFUND_TEXT,
@@ -355,6 +373,18 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
     const messages = await db.selectFrom("messages")
       .select("role").where("conversation_id", "=", conversationId!).execute()
     expect(messages.map((m) => m.role)).toEqual(["visitor"])
+
+    // M7.10: with no assistant row there is nothing to hang a violation on,
+    // which is exactly why the org's day counts it. A provider failing
+    // systematically must not read as a provider that never fails.
+    const usage = await db.selectFrom("usage_daily")
+      .select(["schema_failures", "answers"]).where("org_id", "=", orgId)
+      .executeTakeFirstOrThrow()
+    expect(Number(usage.schema_failures)).toBe(1)
+    // And it does NOT spend the tenant's quota: charging a customer's plan
+    // for a question the product failed to answer would let a misbehaving
+    // model burn their allowance.
+    expect(Number(usage.answers)).toBe(answersBefore)
   })
 
   it("continues an existing conversation and rejects a foreign org's", async () => {

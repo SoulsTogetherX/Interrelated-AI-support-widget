@@ -80,6 +80,11 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
             value={String(answers.answers)}
             hint="assistant messages in the window"
           />
+          <Stat
+            label="Contract failures"
+            value={String(answers.schemaFailures)}
+            hint="questions answered by nobody — the model broke the JSON contract twice, so there is no answer row to count"
+          />
         </div>
         <p className="metrics-note">
           Deflection is counted per conversation, not per message: a long thread that ends in an
@@ -197,6 +202,7 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
                 <th>Cost</th>
                 <th>TTFT p50</th>
                 <th>Total p50</th>
+                <th>Schema violations</th>
               </tr>
             </thead>
             <tbody>
@@ -209,6 +215,10 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
                   <td>{usd(row.costUsd)}</td>
                   <td>{ms(row.ttftP50Ms)}</td>
                   <td>{ms(row.totalP50Ms)}</td>
+                  <td>
+                    {row.schemaViolations}
+                    {row.answers > 0 ? ` (${percent(row.schemaViolations / row.answers)})` : ""}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -219,6 +229,16 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
           so a comparison is a query rather than a migration. There is no refusal column here on
           purpose — the groundedness gate refuses before a model is chosen, so those answers have
           no model to attribute, and the refusal rate above is where they are counted.
+        </p>
+        <p className="metrics-note">
+          <strong>Schema violations</strong> counts answers this model had to be asked twice for,
+          because its first reply broke the JSON answer contract. It is the column worth comparing
+          providers on: Gemini enforces the schema server-side, Ollama constrains generation with
+          its own format field, Anthropic forces a tool call whose arguments are the document, and
+          JSON mode on an OpenAI-compatible endpoint is a polite request — so these should not be
+          the same number. A retried answer is billed twice, and the token columns already include
+          both attempts. Questions where the retry ALSO failed are not here, because no answer was
+          written to attribute: those are counted per day for the whole org, and shown below.
         </p>
       </section>
     </div>
