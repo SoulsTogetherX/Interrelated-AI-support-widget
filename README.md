@@ -35,8 +35,8 @@ data, and most of them are CI gates.
 | Refusal threshold | **0.34** cosine distance for bge-small — 0% false refusals on the golden set, 100% correct refusals on off-topic questions, derived from an 80 + 40 question sweep, not picked by feel | [eval/RESULTS.md §threshold](eval/RESULTS.md) |
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
 | Widget bundle | **6.52 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
-| Security gate | **54 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
-| Tests | 683 across the repo, the integration suites against a real pgvector Postgres (19 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
+| Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
+| Tests | 782 across the repo, the integration suites against a real pgvector Postgres (9 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 Two things the plan wanted measured that this README does **not** claim a
 number for, because they need a real provider key: time-to-first-token and
@@ -101,6 +101,22 @@ stripped → one transaction persisting the answer, **every** verdict, and the
 day's usage counter → claim-granular events over SSE. Providers: Groq,
 Gemini (native JSON-schema enforcement), Ollama, any OpenAI-compatible
 endpoint, and a deterministic mock that keeps CI keyless.
+
+Two *different* retries live in that path and they answer different failures.
+A provider that **refused** the call — a 429 from a 30 rpm free tier, a 5xx,
+a dead socket — is retried with jittered backoff honoring `Retry-After`,
+bounded by attempts *and* by a wall-clock budget, so a `Retry-After: 60` is
+declined outright rather than parking a visitor on a spinner for a minute to
+maybe fail anyway. A wrong key (401) is never retried: it will be just as
+wrong in two seconds. This is safe only because nothing generated reaches the
+visitor until it has been verified, so a half-streamed call has shown nobody
+anything. A provider that **answered and broke the JSON contract** gets the
+one schema retry instead, capped at one because it costs a full generation.
+An optional second *platform* provider covers the first once its attempts are
+spent — and never covers a **tenant's** provider, which is the point: an org
+that saved a credential chose a vendor and a data processor, and a transient
+429 does not justify sending their customers' questions somewhere else on our
+key.
 
 **Handoff** (§3.23–§3.25) — escalation is idempotent by a partial unique
 index, not by application deduplication. The socket authenticates *at

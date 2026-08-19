@@ -250,6 +250,46 @@ green against the rebuilt prod image: smoke, injection, security 54/54, and
 — the check the container exists to make, since a dynamically-imported
 dual-format dependency is exactly what an image can break — `unpdf`
 resolving and extracting text from a PDF built inside the shipped image.
+M7.7 is done — **surviving a provider's rate limit** (§3.15.5, §3.18, §3.7,
+§2.4.5e, §2.6, §3.8). The free tiers this product is designed around are 30
+requests/minute (Groq) and 10–15 (Gemini), one question costs one model call,
+and until now a 429 threw straight out of the pipeline and reached the
+visitor as the same opaque error a real outage gives — the plan names that
+twice, as "handle 429s with jittered retry before failing" and as the demo
+dying mid-recruiter-visit. `answer/retry.ts` is the caller's half of a
+division of labor providers/llm/types.ts declared at M2 ("retry/backoff
+belongs to the caller"): jittered exponential backoff honoring `Retry-After`,
+retrying only what a wait can fix (429, 408, 5xx, transport) and never a
+configuration fact (401, 400, 404) or an abort, bounded by attempts AND by a
+WALL-CLOCK budget — a `Retry-After: 60` is refused rather than honored,
+because failing now beats failing in a minute with the same error. It is safe
+to retry at all only because nothing generated reaches the visitor until it
+is verified (§2.4.4c), so a half-streamed call has shown nobody anything.
+`LLM_FALLBACK_PROVIDER` adds a second platform provider, tried once after the
+first is spent — and the rule that makes it safe is enforced at the route and
+tested there: **it is a fallback for the PLATFORM's provider, never for a
+tenant's.** An org that saved a credential chose a vendor and a data
+processor, and a transient 429 does not justify sending their customers'
+questions elsewhere on our key. One thing was deliberately NOT changed and is
+recorded rather than quietly skipped: a failure the policy cannot clear still
+reaches the visitor as §3.18's single opaque error event, because the
+"one moment" state the plan asks for already exists for OUR limits (§8.1) and
+making the PROVIDER's state visible would trade a deliberate trust-model
+property for something the visitor can act on no differently.
+
+M7.7 was verified live against the real SSE route rather than only in tests,
+with a loopback stand-in provider that rate-limits on demand: with it
+refusing the first two calls, the visitor's stream was `meta → claim → done`
+— an ordinary answer 2.4 s later instead of 0.4 s, with no error event and
+nothing the UI had to say — and the provider's log showed 429, 429, 200. With
+it refusing EVERY call, the platform fallback answered instead and the
+service logged "fake-retry-model failed after retries; trying mock-llm". That
+second run is what caught the `answeredBy` bug above: the transcript named
+the primary for an answer the standby wrote. No browser check was run, and
+deliberately: M7.7 changed nothing a visitor sees — the retry being invisible
+IS the feature — so the surface worth checking is the SSE stream, which is
+what the driver above reads.
+
 M7.6b is done, and with it **the README's last named gap is closed** —
 **a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
 §3.22, §9.9, §6.1, §6.3, DATAFLOW §3.2, §7.9a). `sources.kind` has allowed
@@ -955,6 +995,15 @@ deltaSize is 7, deliberately odd so word/JSON-token boundaries almost
 never align with delta boundaries and a consumer that parses per-delta
 instead of per-buffer breaks loudly. The abort signal is checked before
 EVERY yield, or cancellation tests would pass vacuously after delta one.
+The constructor takes a `model`
+override since M7.7, because two mocks in one test are otherwise
+indistinguishable and an assertion that cannot tell them apart passes without
+proving anything — which is exactly how the fallback's "the transcript names
+the model that answered" test stayed green over a real bug (§3.15.5).
+Since M7.7 a scripted response may also carry an `error` to THROW instead of
+streaming — how a test says "the provider refused this call" (a 429 from a
+free tier, a 503 mid-outage), thrown before any delta because that is where a
+rejected request really fails: a non-2xx response never becomes a stream.
 Besides the scripted list there is a RESPONDER mode (a pure
 request→response function) for callers that cannot know retrieval results
 before the call — the askDev CLI (§3.16) uses it to derive grounded
@@ -1602,6 +1651,11 @@ what render.yaml now ships — on Neon a few-second poll would hold
 compute awake around the clock against the ~100 CU-hour monthly budget,
 the same budget the DB-free health route protects, so production has NO
 timer and the dashboard's enqueue is the scheduler.
+`LLM_FALLBACK_PROVIDER` (M7.7) optionally names a SECOND provider, built the
+same way and by the same table, so a bad name fails at BOOT like every other
+provider selection rather than on the one request that needed it; unset in
+every keyless stack, since a fallback that silently equalled the primary
+would report as configured while buying nothing.
 `EMBEDDING_PROVIDER` picks mock (default) or local — mock is an
 honest placeholder until per-org BYO providers (M3): its vectors carry no
 semantics, which costs nothing while no retrieval exists, and it is what
@@ -1962,7 +2016,12 @@ force-exits.
   contract from all three sides — a changed model queues one job per
   source, a rotated key for the SAME model queues nothing, and removal
   queues a re-index exactly when a row was actually deleted.
-- `routes/__tests__/widgetByo.test.ts` — DB-gated. Per-org BYO generation
+- `routes/__tests__/widgetByo.test.ts` — DB-gated. Since M7.7 it also pins the
+  rule the platform fallback lives under, which is the one worth a test of its
+  own: with a fallback CONFIGURED and the BYO tenant's own provider answering
+  503 through every retry, the visitor gets the route's opaque error, that
+  tenant's provider is shown to have really been retried, ours is never
+  called, and no assistant row is written. Per-org BYO generation
   in the LIVE chat path: a loopback OpenAI-compatible upstream wrapping
   the context-quoting responder, reached through the REAL adapter with
   the DECRYPTED tenant key (the Authorization header is asserted);
@@ -2008,6 +2067,18 @@ force-exits.
   setup instructions; a hostile publishable key renders escaped; the
   bundle serves with a JS content type and short cache; a missing bundle
   404s with the build hint.
+- `answer/__tests__/retry.test.ts` — keyless and instant (M7.7): the sleep and
+  the random are injected, so the arithmetic is pinned rather than sampled and
+  the file runs in milliseconds instead of tens of seconds. Pinned: what is
+  retryable (429/408/5xx/transport) versus what a retry cannot fix
+  (401/400/404) versus an abort, which is never retried because stopping is
+  the point; `Retry-After` honored verbatim while full jitter spreads two
+  clients limited by the same burst; the exponential's cap; a 429 cleared on
+  the second attempt; the provider's ORIGINAL error rethrown after the last
+  one, so status and retryAfterMs survive for the log; the BUDGET rule, where
+  a 60-second `Retry-After` produces an immediate failure and exactly one
+  attempt; an abort landing mid-backoff stopping the retry that would have
+  succeeded; and the onRetry seam, so a wait is never silent.
 - `answer/__tests__/gate.test.ts` + `prompt.test.ts` — keyless. The gate
   at its boundaries (exactly-at-threshold answers, just-past refuses; min
   over mixed dense/lexical hits; lexical-only fails closed) and the prompt
@@ -2023,7 +2094,19 @@ force-exits.
   script proves zero calls); the one-retry path (errors fed back verbatim,
   second response accepted); double failure (AnswerSchemaError, visitor
   message survives, NO assistant row); conversation continuation and the
-  cross-tenant append rejection; blank-question rejection. The M5.2 block
+  cross-tenant append rejection; blank-question rejection. The M7.7 block
+  covers surviving a provider: a 429 absorbed and answered on the retry, with
+  the visitor's stream showing meta → claim → done exactly as on a first-try
+  answer (nothing was shown, so nothing was lost); the policy giving up after
+  its attempts and letting the provider's OWN error through, no assistant row
+  written; a 401 attempted ONCE, where a second call would have thrown the
+  mock's script-exhausted error; the platform fallback answering after the
+  primary spent all three attempts, with the transcript naming the model that
+  ACTUALLY answered (crediting the configured provider for a standby's answer
+  would make the by-model metrics quietly wrong); the FIRST provider's error
+  rethrown when the fallback fails too; the fallback never reached when the
+  primary simply answered; and an abort landing mid-backoff stopping the
+  retry that would have succeeded. The M5.2 block
   covers what an answer cost: the provider's reported usage landing on the
   row verbatim, the RETRY summing both attempts (recording only the
   successful one would make schema violations look free, which is exactly
@@ -2660,6 +2743,102 @@ answer (credentials/resolve.ts), and env selection remains what keeps
 every keyless stack — dev compose, prod compose, CI, the demo org —
 serving grounded mock answers.
 
+#### §3.15.5 `src/answer/retry.ts` — surviving a provider's rate limit (M7.7)
+The caller's half of a division of labor providers/llm/types.ts stated from
+the start: implementations throw on transport failure, and "retry/backoff
+belongs to the caller" (§2.4.5d). This is that caller, and it exists because
+of arithmetic rather than taste — the free tiers this product is designed
+around are 30 requests/minute (Groq) and 10–15 (Gemini), one visitor question
+costs one model call (two when the schema retry fires), and until M7.7 a 429
+threw straight out of the pipeline and reached the visitor as the same opaque
+error a real outage gives. The plan names that twice: "handle 429s with
+jittered retry before failing", and the demo dying mid-recruiter-visit.
+
+**Why a retry is safe here**, which is not true of every streaming pipeline:
+nothing generated reaches the visitor until it has been parsed, verified and
+stripped (§2.4.4c — the protocol is claim-granular precisely because a claim
+is the smallest unit that may be shown). A call that dies half-streamed has
+shown nobody anything, so discarding its partial text costs only tokens. A
+pipeline that forwarded raw deltas could not retry without double-rendering.
+
+**What is not retried**, and why each is a configuration fact rather than
+weather: a 401 is a wrong key, a 400 a malformed request, a 404 a model that
+does not exist — each will be just as true in two seconds, so retrying only
+spends the visitor's patience to reach the same failure. Retried: 429, 408,
+5xx, and non-abort transport errors (a dropped socket, a DNS blip), which is
+the class retries were invented for. An abort is never retried at all — the
+visitor closed the tab, and stopping the spend is the whole point.
+
+**The budget is WALL-CLOCK, not just attempts**, and that is the rule that
+matters most. A provider may answer `Retry-After: 60`, and honoring it
+literally would hold someone on a spinner for a minute to then maybe fail
+anyway; so a wait that does not fit the remaining budget is not taken and the
+call fails NOW with the provider's own error — strictly better information,
+strictly sooner. Three attempts and 8 seconds of total waiting are product
+judgments about how long a person watches a chat bubble, which is why they
+are named constants rather than numbers inside the loop. Backoff is 250 ms
+base with FULL jitter (`random() × exponential`, not `exponential ± a bit`)
+capped at 4 s: full jitter is what actually spreads a herd, since the tighter
+variants leave every client waiting roughly the same time and re-colliding.
+The sleep and the random are injectable, so the arithmetic is pinned by tests
+that run in milliseconds — §3.17.2's stance that rate math verified with real
+sleeps is rate math unverified.
+
+The pipeline wraps THREE calls in it: the query embedding (a rate-limited
+third party too, and the cheapest failure in the pipeline to absorb) and both
+generation attempts. Two different retries therefore stack, and they answer
+different failures — `withRetry` absorbs a provider that REFUSED the call, so
+nothing was generated and nothing is thrown away, while the schema retry
+(§3.15.2) absorbs a provider that ANSWERED and broke the contract, costs a
+full generation, and is capped at exactly one for that reason. Confusing them
+would either burn a tenant's quota re-asking a model that is failing
+systematically, or lose a question to a rate limit a 250 ms wait would have
+cleared.
+
+**The platform fallback, and the line it must not cross.** `LLM_FALLBACK_
+PROVIDER` names a SECOND provider, tried once after the first has spent every
+attempt — no retries of its own, because by then the visitor has already
+waited out a whole budget and spending another on a vendor that may be
+equally unwell turns a slow answer into an abandoned tab. If it also fails,
+the FIRST provider's error is what rethrows: the primary is the configured
+path, so "Groq said 429" is the finding and the standby's failure is a
+footnote that gets logged. And the rule that makes the feature safe is
+enforced at the ROUTE (§3.18), not here: **it is a fallback for the
+PLATFORM's provider only, never for a tenant's.** An org that saved a
+credential chose a vendor, a model, and a data processor; answering their
+visitor from our key on a different service would send their customers'
+questions somewhere they never agreed to, bill us for it, charge it against
+the wrong quota, and change the answer's quality profile silently. A
+transient 429 does not justify any of that — an honest failure does less
+harm. What the fallback exists for is the demo: one always-on service on free
+tiers, where a daily cap on our own key is exactly the plan's "the demo dies
+mid-recruiter-visit" risk.
+
+**A bug the live run caught and the suite did not**, recorded in the
+tradition of loadtest/RESULTS.md and §6.3. The pipeline persisted
+`llm.model` — the CONFIGURED provider — regardless of which one actually
+produced the text, so an answer the fallback generated was filed under the
+primary's name, which would have made the by-model metrics (§9.13) attribute
+latency, tokens and cost to a model that never ran. The pipeline test for
+exactly this assertion was GREEN, because both providers in it were
+`MockLLMProvider` and both therefore reported `mock-llm`: the assertion could
+not distinguish pass from fail. It surfaced the first time a real run put two
+DIFFERENT providers behind it (a loopback Ollama that only ever answers 429,
+with the mock as the standby), where the transcript said `fake-retry-model`
+for an answer the mock wrote. The fix is one variable — `answeredBy`, moved
+only by the fallback path — and `MockLLMProvider` now takes a `model`
+override so two mocks in one test can be told apart, which is what makes the
+assertion able to fail.
+
+**One thing deliberately NOT changed**, and it is worth stating because the
+plan's sentence mentions it: a provider failure the policy cannot clear still
+reaches the visitor as §3.18's single opaque `{type:"error"}` event, not as a
+distinguishable "we are rate limited" state. The user-visible "one moment"
+state the plan asks for already exists for OUR limits (the widget maps a
+bucket 429 to it, §8.1); making the PROVIDER's state visible would weaken a
+deliberate trust-model property — failure detail on a public stream is
+reconnaissance — to say something the visitor can act on no differently.
+
 ### §3.16 `realtime/scripts/askDev.ts`
 Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
 con_…] [--llm mock|groq|gemini|ollama] [--tamper]`): the full M2 loop
@@ -2839,7 +3018,16 @@ the `usage_daily` counter (§3.26), one primary-key-shaped read instead of
 a scan over the day's messages, so the most frequent query on this path
 stops getting slower as the customer succeeds; refusals count, because
 they still spend a retrieval, and the WIDGET_DAILY_ANSWER_CAP env can
-only TIGHTEN a plan, never widen it — then SSE. Since M3.5 the answer's LLM is resolved per request
+only TIGHTEN a plan, never widen it — then SSE. Since M7.7 the route also decides whether a
+platform FALLBACK provider may be used for this answer, and the rule is the
+whole of the feature's safety: only when the org has NO credential of its
+own. A tenant who configured a provider chose a vendor, a model, and a data
+processor — answering their visitor from our key elsewhere would send their
+customers' questions somewhere they never agreed to, bill us, charge the
+wrong quota, and change the answer's quality silently; a transient 429 does
+not justify that, and `widgetByo.test.ts` pins it (their provider 503s
+through every retry, ours is never called, no assistant row is written).
+Since M3.5 the answer's LLM is resolved per request
 from the org's BYO credential (credentials/resolve.ts) with the
 app-level provider as fallback, and since M3.6b the query EMBEDDER is
 resolved the same way — not as a preference but as a requirement, since

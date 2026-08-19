@@ -69,6 +69,24 @@ interface WidgetRouteOptions {
    *  stack). Since M3.5 an org's saved BYO credential outranks it at answer
    *  time — credentials/resolve.ts. */
   llm: LLMProvider
+  /**
+   * A SECOND platform provider, tried when the first one is still failing
+   * after its retries (M7.7, LLM_FALLBACK_PROVIDER). Optional, and unset in
+   * every keyless stack.
+   *
+   * The rule that makes this safe is enforced at the call site below and is
+   * worth stating here too: it is a fallback for the PLATFORM's provider
+   * only, never for a tenant's. An org that configured their own key chose a
+   * vendor, a model, and a data processor; answering their visitor from our
+   * key on a different vendor would send their customers' questions
+   * somewhere they never agreed to, bill us for it, charge it against the
+   * wrong quota, and change the answer's quality profile without saying so.
+   * A transient 429 does not justify any of that — an honest failure does
+   * less harm. What this exists for is the demo: one always-on service on
+   * free tiers, where a daily cap on our own key is exactly the "the demo
+   * dies mid-visit" risk the plan names.
+   */
+  llmFallback?: LLMProvider
   /** HMAC secret for session tokens (resolveTokenSecret() at boot). */
   tokenSecret: string
   /** Groundedness threshold override (ANSWER_MAX_DISTANCE env at boot). */
@@ -508,6 +526,11 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
           db: options.db,
           embedder: orgEmbedder ?? options.embedder,
           llm: orgLLM ?? options.llm,
+          // Only when the org has NO credential of its own — see the option's
+          // comment. A tenant's provider failing is the tenant's to see.
+          ...(orgLLM === null && options.llmFallback !== undefined
+            ? { llmFallback: options.llmFallback }
+            : {}),
           orgId: session.org,
           visitorId: session.visitor,
           question,

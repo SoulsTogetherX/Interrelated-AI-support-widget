@@ -94,6 +94,15 @@ async function start(): Promise<void> {
   // with per-org encrypted credentials.
   const embedder = await buildEmbedder()
   const llm = buildLLMProvider(process.env.LLM_PROVIDER ?? "mock")
+  // A SECOND platform provider (M7.7), tried only after the first has spent
+  // its retries, and only for orgs with no credential of their own — the
+  // rule and its reasons live on the route option. Unset in every keyless
+  // stack, which is why it is optional rather than defaulted: a fallback
+  // that silently equalled the primary would report as configured while
+  // buying nothing. A bad name fails at BOOT, like every other provider
+  // selection, rather than on the one request that needed it.
+  const fallbackName = process.env.LLM_FALLBACK_PROVIDER
+  const llmFallback = fallbackName ? buildLLMProvider(fallbackName) : undefined
   const maxDistance = Number(process.env.ANSWER_MAX_DISTANCE)
   const dailyCap = Number(process.env.WIDGET_DAILY_ANSWER_CAP)
   // One secret, resolved once: the widget's session tokens are signed with
@@ -101,7 +110,10 @@ async function start(): Promise<void> {
   // (handoff/ticket.ts). Both halves must agree, so neither reads env
   // separately.
   const tokenSecret = resolveTokenSecret()
-  console.log(`[boot] widget: llm=${llm.model} embeddings=${embedder.model}`)
+  console.log(
+    `[boot] widget: llm=${llm.model}${llmFallback ? ` fallback=${llmFallback.model}` : ""}`
+    + ` embeddings=${embedder.model}`,
+  )
 
   // The worker is CONSTRUCTED before the app so the internal API's enqueue
   // route can wake it (started further down, after listen, as before).
@@ -147,6 +159,7 @@ async function start(): Promise<void> {
   const app = createApp({
     widget: {
       db, embedder, llm,
+      ...(llmFallback ? { llmFallback } : {}),
       tokenSecret,
       ...(Number.isFinite(maxDistance) ? { maxDistance } : {}),
       ...(Number.isFinite(dailyCap) ? { dailyAnswerCap: dailyCap } : {}),

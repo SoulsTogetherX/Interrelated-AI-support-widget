@@ -7,6 +7,7 @@ import { answerQuestion, AnswerSchemaError, REFUSAL_TEXT, NOTHING_VERIFIED_TEXT 
 import { requestHandoff } from "@/handoff/escalate"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import { MockLLMProvider } from "@providers/llm/mock"
+import { LLMHttpError } from "@providers/llm/http"
 import type { AnswerEvent } from "@shared/grounding/events"
 import { newId } from "@shared/utils/ids"
 import { padVector, toPgvector } from "@shared/utils/vectors"
@@ -391,6 +392,147 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
       answerQuestion({ db, embedder, llm, orgId, visitorId: "v", question: "   " }),
     ).rejects.toThrow(/blank/)
   })
+
+  //#region Surviving a provider's rate limit (M7.7)
+  // The failure a free tier produces routinely — 30 RPM at Groq, 10–15 at
+  // Gemini — and until now it reached the visitor as the same opaque error a
+  // real outage gives. `retry: { sleep }` swallows the backoff so these run
+  // instantly; the policy's own arithmetic is pinned in retry.test.ts.
+  const instant = { sleep: async () => {}, random: () => 0.5 }
+
+  it("absorbs a 429 and answers on the retry — nothing was shown, so nothing is lost", async () => {
+    // The property that makes retrying safe here at all: no generated text
+    // reaches the visitor until it is verified, so a call that died has
+    // shown nobody anything.
+    const llm = new MockLLMProvider([
+      { text: "", error: new LLMHttpError({ provider: "groq", status: 429, detail: "rate limit", retryAfterMs: 50 }) },
+      { text: scriptedAnswer([{ text: "Refunds take five business days.", chunkId: refundChunkId, quote: "within five business days" }]) },
+    ])
+    const events: AnswerEvent[] = []
+    const result = await answerQuestion({
+      db, embedder, llm, orgId, visitorId: "vis-429",
+      question: REFUND_TEXT, retry: instant, onEvent: (e) => events.push(e),
+    })
+
+    expect(result.refused).toBe(false)
+    expect(result.content).toBe("Refunds take five business days.")
+    // The visitor's stream never mentions it: meta → claim → done, exactly
+    // as on a first-try answer.
+    expect(events.map((e) => e.type)).toEqual(["meta", "claim", "done"])
+    // TTFT comes from the attempt that actually produced tokens — the
+    // refused call never streamed one, so it contributes nothing to measure.
+    expect(result.ttftMs).not.toBeNull()
+    const row = await db.selectFrom("messages").selectAll()
+      .where("id", "=", result.messageId).executeTakeFirstOrThrow()
+    expect(row.refused).toBe(false)
+  })
+
+  it("gives up after the policy's attempts and lets the provider's error through", async () => {
+    const rateLimited = new LLMHttpError({ provider: "groq", status: 429, detail: "rate limit", retryAfterMs: 50 })
+    const llm = new MockLLMProvider([
+      { text: "", error: rateLimited },
+      { text: "", error: rateLimited },
+      { text: "", error: rateLimited },
+    ])
+    // The route turns this into its one opaque error event; what matters
+    // here is that the ORIGINAL error survives for the log, and that no
+    // assistant row was written for an answer that never happened.
+    await expect(
+      answerQuestion({ db, embedder, llm, orgId, visitorId: "vis-429-hard", question: REFUND_TEXT, retry: instant }),
+    ).rejects.toMatchObject({ name: "LLMHttpError", status: 429 })
+  })
+
+  it("does NOT retry a wrong key — one attempt, then the truth", async () => {
+    // A 401 is a configuration fact. Retrying it spends the visitor's
+    // patience to reach the identical failure, and the mock proves the
+    // count: a second call would throw "script exhausted" instead.
+    const llm = new MockLLMProvider([
+      { text: "", error: new LLMHttpError({ provider: "groq", status: 401, detail: "invalid api key" }) },
+    ])
+    await expect(
+      answerQuestion({ db, embedder, llm, orgId, visitorId: "vis-401", question: REFUND_TEXT, retry: instant }),
+    ).rejects.toMatchObject({ status: 401 })
+    expect(llm.calls).toHaveLength(1)
+  })
+
+  it("falls back to a SECOND provider once the first is spent, and says whose answer it is", async () => {
+    const down = new LLMHttpError({ provider: "groq", status: 503, detail: "service unavailable" })
+    const primary = new MockLLMProvider([{ text: "", error: down }, { text: "", error: down }, { text: "", error: down }])
+    // A DISTINGUISHABLE name: with both mocks called "mock-llm" this
+    // assertion passed while the pipeline was still recording the primary's
+    // name — a vacuous green the live run caught and this fixes.
+    const fallback = new MockLLMProvider([{
+      text: scriptedAnswer([{ text: "Refunds take five business days.", chunkId: refundChunkId, quote: "within five business days" }]),
+    }], { model: "standby-model" })
+
+    const result = await answerQuestion({
+      db, embedder, llm: primary, llmFallback: fallback, orgId,
+      visitorId: "vis-fallback", question: REFUND_TEXT, retry: instant,
+    })
+
+    expect(result.content).toBe("Refunds take five business days.")
+    // The primary spent every attempt it was allowed; the fallback got ONE,
+    // because by now the visitor has already waited out a whole budget.
+    expect(primary.calls).toHaveLength(3)
+    expect(fallback.calls).toHaveLength(1)
+    // The row names the model that actually answered — a transcript that
+    // credited the configured provider for a standby's answer would make
+    // the by-model metrics quietly wrong.
+    const row = await db.selectFrom("messages").select("model")
+      .where("id", "=", result.messageId).executeTakeFirstOrThrow()
+    expect(row.model).toBe("standby-model")
+    expect(row.model).not.toBe(primary.model)
+  })
+
+  it("rethrows the FIRST provider's error when the fallback fails too", async () => {
+    const primaryErr = new LLMHttpError({ provider: "groq", status: 429, detail: "rate limit" })
+    const primary = new MockLLMProvider([
+      { text: "", error: primaryErr }, { text: "", error: primaryErr }, { text: "", error: primaryErr },
+    ])
+    const fallback = new MockLLMProvider([
+      { text: "", error: new LLMHttpError({ provider: "gemini", status: 503, detail: "unavailable" }) },
+    ])
+    // The primary is the configured path, so its failure is the finding;
+    // the standby's is a footnote (it gets logged, not thrown).
+    await expect(
+      answerQuestion({
+        db, embedder, llm: primary, llmFallback: fallback, orgId,
+        visitorId: "vis-both-down", question: REFUND_TEXT, retry: instant,
+      }),
+    ).rejects.toMatchObject({ status: 429 })
+  })
+
+  it("never reaches for the fallback when the primary simply answered", async () => {
+    const primary = new MockLLMProvider([{
+      text: scriptedAnswer([{ text: "Refunds take five business days.", chunkId: refundChunkId, quote: "within five business days" }]),
+    }])
+    const fallback = new MockLLMProvider([]) // any call would throw "exhausted"
+    const result = await answerQuestion({
+      db, embedder, llm: primary, llmFallback: fallback, orgId,
+      visitorId: "vis-no-fallback", question: REFUND_TEXT, retry: instant,
+    })
+    expect(result.refused).toBe(false)
+    expect(fallback.calls).toHaveLength(0)
+  })
+
+  it("stops retrying when the visitor closes the tab", async () => {
+    const controller = new AbortController()
+    const llm = new MockLLMProvider([
+      { text: "", error: new LLMHttpError({ provider: "groq", status: 429, detail: "rate limit", retryAfterMs: 10 }) },
+      { text: scriptedAnswer([{ text: "unreachable", chunkId: refundChunkId, quote: "within five business days" }]) },
+    ])
+    await expect(
+      answerQuestion({
+        db, embedder, llm, orgId, visitorId: "vis-gone", question: REFUND_TEXT,
+        signal: controller.signal,
+        // Aborted DURING the backoff: the retry that would have succeeded
+        // must not happen, because the abort exists to stop the spending.
+        retry: { sleep: async () => { controller.abort() }, random: () => 0.5 },
+      }),
+    ).rejects.toMatchObject({ status: 429 })
+    expect(llm.calls).toHaveLength(1)
+  })
+  //#endregion
 })
 
 describe.skipIf(DB_CONFIGURED)("answer pipeline (no database)", () => {

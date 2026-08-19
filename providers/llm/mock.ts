@@ -14,6 +14,14 @@ interface MockLLMResponse {
   deltaSize?: number
   finishReason?: "stop" | "length" | "other"
   usage?: LLMUsage
+  /** Throw this instead of streaming — how a test scripts a provider that
+   *  REFUSED the call (M7.7): a 429 from a free tier, a 503 mid-outage, a
+   *  socket that died. The pipeline's retry policy is a behavior of the
+   *  caller (providers throw; retry belongs to whoever called — types.ts),
+   *  so the mock has to be able to produce the throw that policy exists to
+   *  absorb. Thrown BEFORE any delta, which is where a rejected request
+   *  really fails: a non-2xx response never becomes a stream. */
+  error?: Error
 }
 //#endregion
 
@@ -41,13 +49,20 @@ type MockLLMScript = readonly MockLLMResponse[] | ((request: LLMRequest) => Mock
  * schema attached?) is behavior worth pinning, not an implementation detail.
  */
 class MockLLMProvider implements LLMProvider {
-  readonly model = "mock-llm"
+  readonly model: string
   readonly calls: LLMRequest[] = []
   #script: MockLLMScript
   #next = 0
 
-  constructor(script: MockLLMScript) {
+  /** `model` overrides the default name. It exists because two mocks in one
+   *  test are otherwise INDISTINGUISHABLE, and an assertion that cannot tell
+   *  them apart passes without proving anything — which is exactly how the
+   *  M7.7 fallback's "the transcript names the model that actually answered"
+   *  test went green while the pipeline was still recording the primary's
+   *  name. Found by a live run, not by the suite. */
+  constructor(script: MockLLMScript, options: { model?: string } = {}) {
     this.#script = script
+    this.model = options.model ?? "mock-llm"
   }
 
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
@@ -62,6 +77,7 @@ class MockLLMProvider implements LLMProvider {
       }
     }
     this.#next += 1
+    if (response.error) throw response.error
 
     const deltaSize = response.deltaSize ?? 7
     for (let i = 0; i < response.text.length; i += deltaSize) {

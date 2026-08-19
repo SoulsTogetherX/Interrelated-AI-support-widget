@@ -40,6 +40,9 @@ let server: Server
 let baseUrl: string
 let fake: Server
 let fakeHits: Array<{ auth: string | undefined }>
+/** Flips the tenant provider to a failing status for the M7.7 case. */
+let tenantProviderStatus = 200
+let platformFallback: MockLLMProvider
 let byoOrgId: string
 let plainOrgId: string
 
@@ -112,6 +115,13 @@ describe.skipIf(!DB_CONFIGURED)("widget chat with per-org BYO generation", () =>
       let raw = ""
       req.on("data", (c: Buffer) => (raw += c.toString()))
       req.on("end", () => {
+        // The tenant's provider having a bad day (M7.7) — flipped by the
+        // last case, which is about what must NOT happen next.
+        if (tenantProviderStatus !== 200) {
+          res.writeHead(tenantProviderStatus, { "content-type": "application/json" })
+          res.end(JSON.stringify({ error: "service unavailable" }))
+          return
+        }
         const body = JSON.parse(raw) as { messages: ChatMessage[] }
         const answer = respond({ messages: body.messages })
         res.writeHead(200, { "content-type": "text/event-stream" })
@@ -140,10 +150,15 @@ describe.skipIf(!DB_CONFIGURED)("widget chat with per-org BYO generation", () =>
       last_validation: "byo-test-model, 1ms",
     }).execute()
 
+    // A configured PLATFORM fallback (M7.7). Its whole job in this suite is
+    // to stay untouched: it must never answer for an org that brought its
+    // own provider, however badly that provider is behaving.
+    platformFallback = new MockLLMProvider(groundedMockResponder())
     const app = createApp({
       widget: {
         db, embedder,
         llm: new MockLLMProvider(groundedMockResponder()),
+        llmFallback: platformFallback,
         tokenSecret: SECRET,
         mintLimiter: new RateLimiter({ capacity: 10_000, refillPerSecond: 1000 }),
         chatIpLimiter: new RateLimiter({ capacity: 10_000, refillPerSecond: 1000 }),
@@ -202,6 +217,36 @@ describe.skipIf(!DB_CONFIGURED)("widget chat with per-org BYO generation", () =>
       .where("role", "=", "assistant")
       .executeTakeFirstOrThrow()
     expect(message.model).toBe("mock-llm")
+  })
+
+  it("does NOT answer a BYO tenant from the platform's fallback when THEIR provider fails (M7.7)", async () => {
+    // The rule the platform fallback exists under, and the one worth a test
+    // of its own: an org that saved a credential chose a vendor, a model,
+    // and a data processor. Answering their visitor from our key on someone
+    // else's service would send their customers' questions somewhere they
+    // never agreed to — a transient 503 does not justify that, and an honest
+    // failure does less harm.
+    tenantProviderStatus = 503
+    const fallbackCallsBefore = platformFallback.calls.length
+    const upstreamBefore = fakeHits.length
+    try {
+      const events = await mintAndChat(PK_BYO, CHUNK_TEXT)
+      // The visitor gets the route's one opaque error — no claim, no answer.
+      expect(events.some((e) => e.type === "error")).toBe(true)
+      expect(events.some((e) => e.type === "claim")).toBe(false)
+      // Their provider really was retried (the policy did its work) …
+      expect(fakeHits.length).toBeGreaterThan(upstreamBefore + 1)
+      // … and ours was never asked to cover for it.
+      expect(platformFallback.calls.length).toBe(fallbackCallsBefore)
+      // Nothing was persisted as an answer that never happened.
+      const assistant = await db
+        .selectFrom("messages").select("id")
+        .where("org_id", "=", byoOrgId).where("role", "=", "assistant")
+        .where("model", "=", "mock-llm").executeTakeFirst()
+      expect(assistant).toBeUndefined()
+    } finally {
+      tenantProviderStatus = 200
+    }
   })
 
   it("returns to the fallback the moment the credential is removed", async () => {

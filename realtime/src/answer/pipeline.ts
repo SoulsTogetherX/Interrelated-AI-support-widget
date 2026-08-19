@@ -14,6 +14,8 @@ import { hybridSearch } from "@/retrieval/search"
 import type { RetrievedChunk } from "@/retrieval/search"
 import { evaluateGroundedness, DEFAULT_MAX_DISTANCE } from "@/answer/gate"
 import { buildAnswerMessages, buildRetryMessages } from "@/answer/prompt"
+import { withRetry } from "@/answer/retry"
+import type { RetryHooks } from "@/answer/retry"
 import { getOpenHandoff } from "@/handoff/escalate"
 import { recordAnswer } from "@/usage/daily"
 //#endregion
@@ -38,6 +40,12 @@ interface AnswerPipelineOptions {
   db: Kysely<Database>
   embedder: EmbeddingProvider
   llm: LLMProvider
+  /** A second provider to try when `llm` is still failing after its retries
+   *  (M7.7). The caller decides whether one is appropriate — the widget
+   *  route passes it ONLY for orgs with no credential of their own, and
+   *  routes/widget.ts holds the argument for why. Absent means "there is no
+   *  second provider", which is the honest state for a BYO tenant. */
+  llmFallback?: LLMProvider
   orgId: string
   /** Widget-generated anonymous visitor id — becomes conversations.visitor_id. */
   visitorId: string
@@ -51,6 +59,11 @@ interface AnswerPipelineOptions {
   k?: number
   signal?: AbortSignal
   onEvent?: (event: AnswerEvent) => void
+  /** Retry-policy seams (M7.7) — tests inject a sleep and a random so the
+   *  backoff is deterministic and instant; production passes nothing and
+   *  gets the real ones. The visitor's signal is threaded in below rather
+   *  than named here, since it is already an option. */
+  retry?: Omit<RetryHooks, "signal">
 }
 
 interface AnswerResult {
@@ -153,6 +166,13 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   const { db, embedder, llm, orgId, question } = options
   const emit = options.onEvent ?? (() => {})
   const startedAt = Date.now()
+  // One hooks object for every provider call in this pipeline, so the
+  // visitor's abort reaches the backoff as well as the request: a closed tab
+  // must stop a WAIT just as surely as it stops a generation.
+  const retryHooks: RetryHooks = {
+    ...(options.retry ?? {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+  }
 
   if (question.trim().length === 0) throw new Error("question must not be blank")
 
@@ -226,7 +246,16 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   // same space from a different side than a passage, and asking it to treat
   // the question as a document is free recall thrown away. The symmetric
   // models (mock, local) ignore the hint entirely.
-  const [queryVector] = await embedder.embed([question], { task: "query" })
+  //
+  // Wrapped in the retry policy (M7.7) like the model call below: an
+  // embedding provider is a rate-limited third party too, and a 429 here
+  // loses the visitor's question just as completely — before any of the
+  // expensive work, which makes it the cheapest failure in the pipeline to
+  // absorb.
+  const [queryVector] = await withRetry(
+    () => embedder.embed([question], { task: "query" }),
+    retryHooks,
+  )
   const retrieved = await hybridSearch(db, {
     orgId,
     queryText: question,
@@ -271,7 +300,68 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   }
 
-  const first = await collectStream(llm, { ...baseRequest, messages }, startedAt)
+  // Which provider's text this answer is actually made of. Starts as the
+  // configured one and moves only if the fallback below produced the answer.
+  let answeredBy: LLMProvider = llm
+
+  /**
+   * The primary provider under its retry policy, and — only if a second one
+   * was supplied — that second provider, once, after the first has spent
+   * every attempt it is allowed.
+   *
+   * The fallback gets no retries of its own on purpose. By the time it runs,
+   * the visitor has already waited out the primary's whole budget; spending
+   * another one on a vendor that may be equally unwell turns a slow answer
+   * into an abandoned tab. One clean try, then the truth.
+   *
+   * A fallback that ALSO fails rethrows the FIRST provider's error, because
+   * that is the one an operator needs: the primary is the configured path,
+   * and "Groq said 429" is the finding, while "and the standby also said
+   * 429" is a footnote it gets logged as.
+   */
+  const callModel = async (
+    primary: () => Promise<Awaited<ReturnType<typeof collectStream>>>,
+    withFallback: (fallback: LLMProvider) => Promise<Awaited<ReturnType<typeof collectStream>>>,
+  ): Promise<Awaited<ReturnType<typeof collectStream>>> => {
+    try {
+      return await withRetry(primary, retryHooks)
+    } catch (err) {
+      const fallback = options.llmFallback
+      if (fallback === undefined || options.signal?.aborted) throw err
+      console.warn(
+        `[answer] ${llm.model} failed after retries; trying ${fallback.model}:`,
+        err instanceof Error ? err.message : err,
+      )
+      try {
+        const result = await withFallback(fallback)
+        // The transcript must name the model that ACTUALLY answered.
+        // Crediting the configured provider for a standby's answer would
+        // make the by-model metrics (§9.13) quietly wrong — the rows would
+        // attribute latency, tokens and cost to a model that never ran.
+        answeredBy = fallback
+        return result
+      } catch (fallbackErr) {
+        console.warn(
+          `[answer] fallback ${fallback.model} also failed:`,
+          fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+        )
+        throw err
+      }
+    }
+  }
+
+  // Two DIFFERENT retries stack here, and they answer different failures.
+  // withRetry absorbs a provider that REFUSED the call (429, 5xx, a dead
+  // socket) — nothing was generated, so nothing is thrown away. The schema
+  // retry below absorbs a provider that ANSWERED and broke the contract,
+  // which costs a full generation and is capped at exactly one for that
+  // reason (prompt.ts). Confusing them would either burn a tenant's quota
+  // re-asking a model that is failing systematically, or lose a question to
+  // a rate limit that a 250 ms wait would have cleared.
+  const first = await callModel(
+    () => collectStream(llm, { ...baseRequest, messages }, startedAt),
+    (fallback) => collectStream(fallback, { ...baseRequest, messages }, startedAt),
+  )
   let ttftMs = first.ttftMs
   let usage = first.usage
   let parsed = parseAnswerText(first.text)
@@ -280,10 +370,14 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     // one). TTFT keeps the FIRST attempt's value: the visitor has been
     // waiting since the original question, and that is the honest number.
     // Tokens, unlike TTFT, ACCUMULATE — the tenant paid for both calls.
-    const retry = await collectStream(
-      llm,
-      { ...baseRequest, messages: buildRetryMessages(messages, first.text, parsed.errors) },
-      startedAt,
+    //
+    // The messages are built ONCE, outside the retry: a rate limit is not a
+    // reason to re-derive the same prompt, and building it here also keeps
+    // the narrowed `parsed.errors` where the compiler can still see it.
+    const retryMessages = buildRetryMessages(messages, first.text, parsed.errors)
+    const retry = await callModel(
+      () => collectStream(llm, { ...baseRequest, messages: retryMessages }, startedAt),
+      (fallback) => collectStream(fallback, { ...baseRequest, messages: retryMessages }, startedAt),
     )
     ttftMs = ttftMs ?? retry.ttftMs
     usage = addUsage(usage, retry.usage)
@@ -304,7 +398,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   const totalMs = Date.now() - startedAt
   await persistAssistantMessage(db, {
     messageId, conversationId, orgId,
-    content, model: llm.model, refused: false,
+    content, model: answeredBy.model, refused: false,
     retrievalScore: gate.signal, ttftMs, totalMs, usage,
     citations: verified, retrieved,
   })

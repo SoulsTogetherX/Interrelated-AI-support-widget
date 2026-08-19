@@ -518,6 +518,23 @@ caller (askDev CLI | tests | M2.5 SSE route later)
            boundary: crawled pages are untrusted input)
       8. llm.stream({messages, temperature: 0, maxTokens, responseSchema,
                      signal})            providers/llm/*
+           UNDER THE RETRY POLICY (M7.7)  realtime/src/answer/retry.ts
+             a provider that REFUSED the call — 429 (the free tiers are
+             30 rpm at Groq, 10–15 at Gemini), 408, 5xx, a dead socket —
+             is retried with jittered backoff honoring Retry-After;
+             401/400/404 are not (a wrong key will still be wrong in two
+             seconds) and an abort never is. Bounded by attempts AND by a
+             wall-clock budget: a Retry-After that does not fit is refused
+             outright, because failing NOW beats failing in a minute with
+             the same error. Safe only because nothing generated reaches
+             the visitor until step 11 — a half-streamed call showed
+             nobody anything. The query embedding (step 4) is wrapped the
+             same way.
+             · still failing, and a PLATFORM fallback is configured, and
+               this org has NO credential of its own → try it ONCE
+               (never for a BYO tenant: they chose a vendor and a data
+                processor, and a 429 does not justify overriding that)
+               · that fails too → rethrow the FIRST provider's error
            mock (tests/CI) | groq/openai-compatible (json_object mode) |
            gemini (schema enforced server-side) | ollama (native format)
            deltas collected; TTFT measured at first delta, in the
