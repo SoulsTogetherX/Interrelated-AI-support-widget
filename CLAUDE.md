@@ -15,10 +15,14 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M7 — the trust model's remaining layers — underway.
-Every milestone the plan SCHEDULED (M0–M6) is complete; M7 is the plan's
-own trust-model section (layers 4–6, which no milestone ever named) taken
-in order of size.** M7.1 is done — **one-click key rotation, layer 5**
+**Current milestone: M7 — what the plan states but never scheduled —
+underway. Every milestone the plan SCHEDULED (M0–M6) is complete.** M7
+began as the plan's own trust-model section (layers 4–6, which no milestone
+ever named), taken in order of size, and finished that at M7.3; since then
+it has worked through the rest of what the plan's prose commits to and its
+milestone list never carried — the README's named gaps (M7.4–M7.6), the
+risk table's "handle 429s with jittered retry" (M7.7), and the provider
+table's fifth row (M7.8). **M7.1 is done — one-click key rotation, layer 5**
 (§9.17, §3.18, §3.27, DATAFLOW §7.12): the schema had revoked-by-timestamp
 and uniqueness-among-live-keys since 001 precisely for this, and what was
 missing was the click. Rotation issues a new key and schedules the old one's
@@ -289,6 +293,45 @@ the primary for an answer the standby wrote. No browser check was run, and
 deliberately: M7.7 changed nothing a visitor sees — the retry being invisible
 IS the feature — so the surface worth checking is the SSE stream, which is
 what the driver above reads.
+
+M7.8 is done — **the Anthropic provider, and with it the plan's provider
+table is COMPLETE** (§2.4.5n, §3.21, §3.15.4, §2.4.8, §9.8, §3.8, §2.6).
+Four of the plan's five providers shipped at M2.4; the fifth was schema
+without code — migration 001's CHECK allowed `anthropic`, shared/db typed
+it, and `resolve.ts` threw "no adapter yet", which meant a provider the
+SCHEMA accepts could be stored and then break every answer for that tenant
+at question time. It is now an adapter like its siblings, and the reason it
+is NATIVE rather than a preset of the compat adapter is the whole content:
+**its structured-output mechanism is not the OpenAI one.** There is no
+`response_format` on the Messages API — what there is is forced TOOL USE, a
+tool whose `input_schema` is our claims schema verbatim and a `tool_choice`
+that leaves the model no other way to answer, with the arguments arriving as
+`input_json_delta` fragments whose concatenation IS the JSON the parser
+already expects. So the pipeline needs no special case, and the table now
+reads four providers, four mechanisms (JSON mode, native JSON schema,
+Ollama's `format`, forced tool use) — which is what makes the
+schema-violation metric a comparison rather than a constant. Three things
+this provider has that none of the others do, each pinned by a test: a 200
+that can turn into a failure mid-stream (`event: error`), which
+`postStream` never sees, so Anthropic's error vocabulary is mapped onto HTTP
+status and §3.15.5's retry policy can still tell 529-overloaded from
+401-wrong-key; a `stop_reason` of `tool_use` that is a NORMAL stop rather
+than an anomaly; and a REQUIRED `max_tokens`. Prose emitted beside the tool
+call is dropped rather than concatenated, or the parser would be handed
+"Let me check the docs…{"claims"" and the model blamed for it. The plan's
+`$0` constraint holds by nobody selecting it: never a default, no key in
+CI, unreachable from every keyless stack — its cost lives in a dated price
+row (aliases float to newer snapshots, and §2.4.8 matches EXACTLY, so an
+alias is unpriced rather than priced as its predecessor) and behind a
+dashboard label that says "(paid)" where a tenant reads it before clicking
+Test. Verified with the full ladder against the rebuilt prod image — smoke,
+injection 0/8, security 57/57 — plus 795 tests across the repo, 9 of them
+the adapter's own protocol cases against a loopback server writing
+Anthropic's real two-line SSE framing. NOT verified: a live call, which
+needs a paid key this repo deliberately does not carry; the key-gated suite
+(§3.8) covers it the moment `ANTHROPIC_API_KEY` is in `.env`, with no code
+change and no test-only variable — the same standing arrangement Groq and
+Gemini have, and the same honest gap the embedding path had at M3.6b.
 
 M7.6b is done, and with it **the README's last named gap is closed** —
 **a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
@@ -896,6 +939,15 @@ and be believed, because it looks like a real number. The unit-testable
 half is exactly those refusals; whether Groq really charges $0.59/MTok is
 checked by reading their pricing page on the date in the file.
 
+M7.8 added Anthropic's rows (§2.4.5n), and they are where the exactness
+rule earns the most: Anthropic's model ALIASES float to newer snapshots
+with different prices, so the table keys on dated ids and an alias resolves
+to null — unpriced, which is honest — rather than to whatever its
+predecessor cost. It is also the only provider here without a free tier, so
+it is the one where "cost per 1k answers" is a bill a tenant is really
+paying rather than the what-would-this-cost-at-scale figure it is
+everywhere else.
+
 #### §2.4.6 `shared/db/schema.ts`
 The hand-written Kysely types for every table — MOVED here from
 realtime/src/db/ in M3.2, when the dashboard started querying the same
@@ -1130,6 +1182,75 @@ kills an ingest run. No apiKey (Ollama is unauthenticated). The base URL
 is tenant-supplied and therefore an SSRF vector; it is vetted at the
 realtime boundary before the adapter is ever constructed — the seam
 §2.4.5i promised, now with a second caller.
+
+#### §2.4.5n `llm/anthropic.ts`
+The last row of the plan's provider table (M7.8), and the only one it marks
+"paid; supported, never required". Native rather than a preset of the compat
+adapter (§2.4.5g), for Gemini's reason: **its structured-output mechanism is
+not the OpenAI one**, and translating it away would delete the interesting
+part. Anthropic does ship an OpenAI-compatible endpoint and using it was the
+cheap move; it is rejected deliberately, because that endpoint is a
+documented migration shim whose JSON mode is "please emit JSON" — it would
+file this provider in the WEAKEST structured-output tier when natively it
+belongs in the strongest.
+
+**The mechanism is the file's one novel idea.** There is no `response_format`
+on the Messages API. What there is instead is TOOL USE: declare one tool
+whose `input_schema` is `ANSWER_JSON_SCHEMA` verbatim, then force it with
+`tool_choice: {type: "tool", name}`. The model cannot answer any other way,
+Anthropic constrains a tool's arguments to that tool's schema server-side,
+and the "arguments" ARE the answer document. Streamed, they arrive as
+`input_json_delta` fragments — whose concatenation is exactly what
+§2.4.5d's contract already calls a delta stream, so the pipeline needs no
+special case, `parseAnswerText` sees the same text every other provider
+produces, and TTFT still measures the first real content. Four providers,
+four mechanisms (JSON mode, native JSON schema, Ollama's `format`, forced
+tool use) is the honest shape of structured output across the ecosystem, and
+is what makes the schema-violation metric a comparison rather than a
+constant.
+
+Five smaller decisions, each a place a plausible implementation would be
+wrong:
+
+- **Prose beside the tool call is DROPPED, not concatenated.** A model may
+  emit a text block before calling the tool ("Let me check the docs…"), and
+  forwarding it would hand the parser `Let me check…{"claims"` — output that
+  looks valid enough to be misdiagnosed as the model breaking the contract.
+  Under a schema, only `partial_json` is answer text; a test pins it.
+- **`stop_reason: "tool_use"` is a NORMAL stop.** With the tool forced it is
+  how every well-formed answer ends, so mapping it to "other" (the obvious
+  reading of "not end_turn") would make the finish-reason metric say the
+  model never once stopped cleanly.
+- **A mid-stream `error` event throws with the status its type MEANS.** This
+  provider has a failure mode the others do not: a 200 that turns into a
+  failure, which `postStream`'s non-2xx path never sees. `ERROR_TYPE_STATUS`
+  maps Anthropic's error vocabulary onto HTTP status, so §3.15.5's retry
+  policy can still tell "overloaded, wait 250 ms" (529) from "your key is
+  wrong, stop" (401) — without it, every mid-stream failure would be
+  classified identically and half of them retried pointlessly.
+- **Usage arrives in two halves**: input tokens at `message_start`, output
+  tokens restated cumulatively on `message_delta`. Taking either alone would
+  report null for a call that really did report its usage, and the cost
+  metric (§2.4.8) treats null as unknown.
+- **`max_tokens` is REQUIRED** by the Messages API — the one provider here
+  where omitting it is a 400 rather than "use your default" — so the adapter
+  carries one, matching the pipeline's cap so behavior does not change with
+  who is calling.
+
+Auth is `x-api-key` plus the mandatory `anthropic-version` header (which is
+what stops a future API default from silently reshaping the stream), the
+system turn is a top-level `system` field as in Gemini while the turn roles
+are already ours, and the default model is dated (`claude-haiku-4-5-…`)
+rather than an alias, because aliases float to newer snapshots with
+different prices and §2.4.8 matches EXACTLY. `sseData`'s deliberate
+blindness to `event:` lines costs nothing here even though Anthropic sends
+them, because each payload restates its own `type` — the tests write the
+real two-line framing to prove it.
+
+The plan's `$0` constraint holds by **nobody selecting it**: it is never a
+default, CI sets no key, and no keyless stack reaches the file. What it buys
+is a tenant who already pays Anthropic, and the fifth row of a table this
+project can now fill in.
 
 ### §2.5 `render.yaml`
 The Render deployment as code (a "Blueprint"): one free-tier Docker web
@@ -1970,6 +2091,21 @@ force-exits.
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
   the opposite choice and someone will one day "align" them).
+- `credentials/__tests__/resolve.test.ts` — DB-gated (M7.8), the vault's
+  READ side, which had no suite of its own until this increment made a
+  claim about it worth pinning: a row naming ANY of the schema's five
+  providers resolves to a working adapter. An anthropic GENERATION row
+  resolves (it THREW before — a provider the schema accepts could be stored
+  and then break every answer for that tenant at question time) under the
+  model the row named rather than the adapter's default, since that value
+  is what lands in `messages.model` and therefore in the price lookup; a
+  row with no model falls back to the default; an org with no credential is
+  null on both roles, the normal fallback state; and an anthropic EMBEDDING
+  row — unrepresentable through the route, so its presence means the row
+  was written around us — throws by name rather than embedding a corpus
+  with a provider that has no embeddings endpoint. No network: resolution
+  ENDS at a constructed provider, and the call is the gated live suite's
+  job.
 - `credentials/__tests__/liveProviders.test.ts` — **key-gated**, the
   fastembed pattern (§2.4.5c) applied to providers: each provider's cases
   run only when ITS key is in the environment (`GROQ_API_KEY`,
@@ -1998,9 +2134,13 @@ force-exits.
   storing nothing while the round-trip really hit the upstream;
   encrypted-at-rest proof (ciphertext decrypts only under the row id);
   replace-destroys-the-old-ciphertext; the READ-BACK DENIAL (no key
-  substring, no ciphertext in the status response); Groq refused for the
-  embedding role with zero upstream calls; shape violations rejected with
-  zero upstream calls; a failing upstream storing nothing and never
+  substring, no ciphertext in the status response); Groq AND Anthropic
+  refused for the embedding role BY NAME with zero upstream calls (M7.8 —
+  a tenant reads which provider they picked, not a generic refusal);
+  shape violations rejected with zero upstream calls — including the two
+  M7.8 added, a keyless Anthropic save and an Anthropic save carrying a
+  base URL, the second being the rule that matters whenever a HOSTED
+  provider is added; a failing upstream storing nothing and never
   echoing the key; the PRODUCTION url vet rejecting loopback (the SSRF
   default, asserted by NOT injecting the test seam); and the unconfigured
   app 404ing the whole surface. The M4.6 block adds closing a handoff:
@@ -2841,7 +2981,7 @@ reconnaissance — to say something the visitor can act on no differently.
 
 ### §3.16 `realtime/scripts/askDev.ts`
 Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
-con_…] [--llm mock|groq|gemini|ollama] [--tamper]`): the full M2 loop
+con_…] [--llm mock|groq|gemini|ollama|anthropic] [--tamper]`): the full M2 loop
 drivable by hand. Same glue-only rule as the sibling CLIs. The default
 LLM is the mock in responder mode (§2.4.5e): it parses the [chunk …]
 blocks out of the prompt it actually receives and quotes the top chunks
@@ -2849,9 +2989,11 @@ verbatim — grounded by construction, so verification passes and
 persistence/citations/events are all observable keylessly. `--tamper`
 corrupts one quote so the strip path is observable too: the tampered
 claim is stored quote_not_found and never displayed. `--llm` swaps in a
-real provider (§2.4.5f–i), configured by the GROQ_/GEMINI_/OLLAMA_ vars
-in .env.example — the first place real model output meets the verifier,
-ahead of the M2.5 route; a missing key is a one-line usage error and a
+real provider (§2.4.5f–i, and §2.4.5n since M7.8), configured by the
+GROQ_/GEMINI_/OLLAMA_/ANTHROPIC_ vars in .env.example — the first place
+real model output meets the verifier, ahead of the M2.5 route; `anthropic`
+is the one choice that spends money on every run, having no free tier, and
+the file says so where the flag is documented. A missing key is a
 provider 429 prints as a human sentence with the retry delay. Since M5.2
 it prints the answer's token counts and their list-price cost too — the
 cost metric drivable by hand — and distinguishes "not reported by this
@@ -3154,9 +3296,16 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   model actually return, and does that dimension FIT. Over PADDED_DIM it
   is refused with a sentence naming both numbers and the fix — silently
   truncating an embedding that was not Matryoshka-trained would destroy
-  exactly the geometry that made it worth storing. Groq + embedding is
-  refused by name (it has no such endpoint at all — a gap worth stating
-  rather than turning into a confusing 404). `effectiveEmbeddingModel`
+  exactly the geometry that made it worth storing. Groq + embedding and,
+  since M7.8, Anthropic + embedding are refused BY NAME (neither has such
+  an endpoint at all — the plan's provider table has a dash in that column
+  for both — and a gap is worth stating rather than turning into a
+  confusing 404). Adding a HOSTED provider also has one rule worth its own
+  test, which M7.8's shape cases now carry: its endpoint must land in the
+  FIXED set rather than the base-URL set, since a hosted provider that
+  accepted a tenant-typed base URL would be a request-forgery lever wearing
+  a vendor's name (§3.3.3's argument, one level up).
+  `effectiveEmbeddingModel`
   computes the model id a stored row resolves to WITHOUT decrypting its
   key, which is what lets §3.22 compare "what the corpus was embedded
   with" against "what it will be embedded with next".
@@ -3167,9 +3316,16 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   sub-microsecond AES-GCM decrypt). Absence is normal (demo org, fresh
   org → caller falls back to the app-level provider); decrypt failure
   throws LOUDLY rather than degrading to the mock, which would look like
-  the product working while serving nonsense. An 'anthropic' row (schema
-  forward-provision, unreachable through validate.ts) also throws by
-  name. `resolveEmbeddingProvider` is the twin, and it buys the property
+  the product working while serving nonsense. Until M7.8 an 'anthropic'
+  row threw by name here — schema forward provision the adapters had not
+  caught up with; §2.4.5n closed that, so **the schema's provider union and
+  the adapters that exist are now the SAME five** and the
+  unimplemented-provider branch is gone. What replaced it is narrower and
+  true by construction: the only pairing the builders cannot serve is an
+  anthropic EMBEDDING row, which checkCredentialInput refuses by name and
+  buildEmbeddingProvider throws by name if one ever appears anyway (a
+  DB-gated test seeds exactly that row to prove the loud stop).
+  `resolveEmbeddingProvider` is the twin, and it buys the property
   nothing else in the system enforces: the ingest worker and the query
   path call the same function on the same row, so a tenant's chunks and
   their visitors' questions land in the SAME vector space by
@@ -3497,6 +3653,24 @@ dev mounts src — and it builds as one cached layer set over the deps stage
 the prod build shares. `profiles: [probe]` keeps `up` from starting it: it
 is a command, not a service, and `run --rm seed` targets it explicitly.
 `.probe/` is gitignored — per-run droppings, like eval/results/.
+
+**The three commands §1.2's ladder means**, in order, since "run the probes"
+is ambiguous about arguments and every probe takes the base URL as a
+POSITIONAL argument before its flags (passing only `--fixture` makes the
+first one concatenate the path onto the route and fail with an unparseable
+URL):
+
+```
+docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml run --rm --build seed
+node scripts/injection-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
+node scripts/security-probe.mjs  http://localhost:3000 --fixture .probe/security-fixture.json
+```
+
+`smoke-test.mjs` runs before them and needs no fixture. Security is LAST
+because its final section drains the token buckets on purpose, and section
+H needs `INTERNAL_API_SECRET` exported in the probe's own environment (a
+throwaway pair, as ci.yml generates — the same pair the stack booted with,
+or the internal routes do not mount and the section skips).
 
 ---
 
@@ -4141,6 +4315,7 @@ the probe going to the bot under the stored id and the confirmation still
 landing on the ONE socket; and a handoff after the last one ended replacing
 the status line rather than stacking a second.
 
+
 ### §8.4 `fixtures/` + `scripts/serve.mjs`
 The three host pages the plan requires, each testing a distinct failure
 mode: Tailwind (preflight reset), Bootstrap (high-specificity components
@@ -4492,10 +4667,14 @@ never assigned, logged, or stored anywhere else.
   page — pasted over TLS, tested live, encrypted, suffix-only forever —
   and shows the current credential from queries.ts with an owner-only
   remove. Since M3.6b the form is per-ROLE (one component, two provider
-  matrices: no Groq under embedding, and different model defaults for
-  the same vendor) and the embedding card is real — current model,
-  measured dimension, and the sentence a tenant needs BEFORE pressing
-  save: changing this re-indexes your sources.
+  matrices: no Groq and, since M7.8, no Anthropic under embedding, and
+  different model defaults for the same vendor) and the embedding card is
+  real — current model, measured dimension, and the sentence a tenant needs
+  BEFORE pressing save: changing this re-indexes your sources. M7.8's row
+  is labelled **"Anthropic Claude (paid)"** and sits last among the hosted
+  providers on purpose: it is the only one with no free tier, so it is the
+  only one where clicking Test spends money, and the label is where a
+  tenant learns that rather than on a bill.
 
 Verified live at M3.4 (realtime dev + web dev, both secrets set): a
 private base URL rejected through the whole chain with "must resolve to

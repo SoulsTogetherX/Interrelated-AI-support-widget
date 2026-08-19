@@ -8,6 +8,7 @@ import { OpenAICompatibleProvider } from "../openaiCompatible"
 import { GroqProvider } from "../groq"
 import { GeminiProvider } from "../gemini"
 import { OllamaProvider } from "../ollama"
+import { AnthropicProvider } from "../anthropic"
 import type { LLMRequest, LLMStreamEvent } from "../types"
 //#endregion
 
@@ -293,5 +294,210 @@ describe("OllamaProvider", () => {
     // yield an empty stream (the pipeline tells the visitor, not waits).
     const provider = new OllamaProvider({ model: "m", baseUrl: "http://127.0.0.1:1" })
     await expect(collect(provider.stream(request))).rejects.toThrow()
+  })
+})
+
+describe("AnthropicProvider", () => {
+  // Anthropic's streams carry BOTH an `event:` line and a `data:` line, and
+  // the payload restates the event name in its own `type`. Every fixture
+  // here writes the real two-line framing, which is what proves sseData's
+  // deliberate blindness to `event:` costs this provider nothing.
+  function events(res: ServerResponse, payloads: readonly Record<string, unknown>[]): void {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    for (const payload of payloads) {
+      res.write(`event: ${String(payload["type"])}\ndata: ${JSON.stringify(payload)}\n\n`)
+    }
+    res.end()
+  }
+
+  const start = {
+    type: "message_start",
+    message: { usage: { input_tokens: 120, output_tokens: 1 } },
+  }
+  const toolStart = { type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "emit_answer" } }
+  const json = (partial_json: string) => ({
+    type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json },
+  })
+  const blockStop = { type: "content_block_stop", index: 0 }
+  const messageDelta = (stopReason: string) => ({
+    type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 34 },
+  })
+  const messageStop = { type: "message_stop" }
+
+  it("streams the forced tool's arguments as the answer text, and speaks Anthropic's dialect", async () => {
+    const { baseUrl, captured } = await boot((_, res) =>
+      events(res, [
+        start,
+        { type: "ping" },
+        toolStart,
+        json('{"claims":'),
+        json('[{"text":"a"}]}'),
+        blockStop,
+        messageDelta("tool_use"),
+        messageStop,
+      ]),
+    )
+    const provider = new AnthropicProvider({ apiKey: "sk-ant-test", baseUrl })
+    const { text, done } = await collect(provider.stream(request))
+
+    // The concatenated input_json_delta fragments ARE the response text —
+    // the whole reason forced tool use fits the LLMProvider contract with
+    // no special case downstream.
+    expect(text).toBe('{"claims":[{"text":"a"}]}')
+    // stop_reason "tool_use" is a NORMAL completion under a forced tool.
+    // Input tokens come from message_start, output from message_delta;
+    // neither event carries both.
+    expect(done).toEqual({ type: "done", finishReason: "stop", usage: { inputTokens: 120, outputTokens: 34 } })
+
+    const sent = captured()
+    expect(sent.url).toBe("/v1/messages")
+    expect(sent.headers["x-api-key"]).toBe("sk-ant-test")
+    expect(sent.headers["anthropic-version"]).toBe("2023-06-01")
+    expect(sent.headers.authorization).toBeUndefined()
+    const body = sent.body as Record<string, unknown>
+    expect(body["model"]).toBe("claude-haiku-4-5-20251001")
+    expect(body["stream"]).toBe(true)
+    expect(body["temperature"]).toBe(0)
+    expect(body["max_tokens"]).toBe(256)
+    // System text is a top-level field, and the turn roles are already ours
+    // (unlike Gemini, "assistant" stays "assistant").
+    expect(body["system"]).toBe("answer as JSON")
+    expect(body["messages"]).toEqual([{ role: "user", content: "question" }])
+    // The schema goes up VERBATIM as the tool's input_schema, and the tool
+    // is FORCED — the model cannot answer any other way.
+    expect(body["tools"]).toEqual([
+      {
+        name: "emit_answer",
+        description: "Return the answer as structured claims. This is the only way to reply.",
+        input_schema: request.responseSchema,
+      },
+    ])
+    expect(body["tool_choice"]).toEqual({ type: "tool", name: "emit_answer" })
+  })
+
+  it("keeps assistant turns and sends max_tokens even when the caller omits one", async () => {
+    // max_tokens is REQUIRED by the Messages API — the one provider here
+    // where omitting it is a 400 rather than "use your default".
+    const { baseUrl, captured } = await boot((_, res) => events(res, [start, messageDelta("end_turn"), messageStop]))
+    const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
+    await collect(provider.stream({
+      messages: [
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "a1" },
+        { role: "user", content: "q2" },
+      ],
+    }))
+    const body = captured().body as Record<string, unknown>
+    expect(body["max_tokens"]).toBe(1024)
+    expect(body["messages"]).toEqual([
+      { role: "user", content: "q1" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "q2" },
+    ])
+    // No schema asked for, so no tool is declared and nothing is forced.
+    expect(body["tools"]).toBeUndefined()
+    expect(body["tool_choice"]).toBeUndefined()
+    expect(body["system"]).toBeUndefined()
+  })
+
+  it("streams ordinary text deltas when no schema is requested", async () => {
+    const text = (t: string) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } })
+    const { baseUrl } = await boot((_, res) =>
+      events(res, [
+        start,
+        { type: "content_block_start", index: 0, content_block: { type: "text" } },
+        text("Hel"), text("lo"),
+        blockStop, messageDelta("end_turn"), messageStop,
+      ]),
+    )
+    const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
+    const { text: answer, done } = await collect(provider.stream({ messages: [{ role: "user", content: "hi" }] }))
+    expect(answer).toBe("Hello")
+    expect(done!.finishReason).toBe("stop")
+  })
+
+  it("drops prose emitted beside the tool call instead of splicing it into the JSON", async () => {
+    // A model may think out loud in a text block before calling the tool.
+    // Concatenating that would hand parseAnswerText "Let me check…{claims"
+    // — valid-looking output that fails the contract for a reason nobody
+    // could diagnose from the error.
+    const text = (t: string) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } })
+    const { baseUrl } = await boot((_, res) =>
+      events(res, [
+        start,
+        { type: "content_block_start", index: 0, content_block: { type: "text" } },
+        text("Let me check the docs. "),
+        { type: "content_block_stop", index: 0 },
+        { type: "content_block_start", index: 1, content_block: { type: "tool_use", name: "emit_answer" } },
+        json('{"claims":[]}'),
+        { type: "content_block_stop", index: 1 },
+        messageDelta("tool_use"), messageStop,
+      ]),
+    )
+    const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
+    const { text: answer } = await collect(provider.stream(request))
+    expect(answer).toBe('{"claims":[]}')
+  })
+
+  it("maps a max_tokens cutoff to length", async () => {
+    const { baseUrl } = await boot((_, res) =>
+      events(res, [start, toolStart, json('{"claims":'), messageDelta("max_tokens"), messageStop]),
+    )
+    const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
+    const { done } = await collect(provider.stream(request))
+    expect(done!.finishReason).toBe("length")
+  })
+
+  it("throws a mid-stream error with the status its type means, so the retry policy can act", async () => {
+    // The case this provider has and the others do not: a 200 that turns
+    // into a failure. postStream never sees it, so the classification has
+    // to happen here — 529 overloaded is worth retrying, 401 never is.
+    const { baseUrl } = await boot((_, res) =>
+      events(res, [
+        start, toolStart, json('{"cla'),
+        { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+      ]),
+    )
+    const provider = new AnthropicProvider({ apiKey: "sk-ant-SECRET", baseUrl })
+    const failure = await collect(provider.stream(request)).then(() => null, (e: unknown) => e)
+    expect(failure).toBeInstanceOf(LLMHttpError)
+    const error = failure as LLMHttpError
+    expect(error.status).toBe(529)
+    expect(error.message).toContain("overloaded_error")
+    expect(error.message).toContain("mid-stream")
+    expect(error.message).not.toContain("sk-ant-SECRET")
+  })
+
+  it("classifies a mid-stream auth failure as 401 — a wait cannot fix a wrong key", async () => {
+    const { baseUrl } = await boot((_, res) =>
+      events(res, [start, { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }]),
+    )
+    const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
+    const failure = await collect(provider.stream(request)).then(() => null, (e: unknown) => e)
+    expect((failure as LLMHttpError).status).toBe(401)
+  })
+
+  it("reports usage as null when the stream never states it", async () => {
+    // Null means "not reported" and 0 would mean "a model ran and consumed
+    // nothing" — the distinction the cost metric is built on (§2.4.8).
+    const { baseUrl } = await boot((_, res) =>
+      events(res, [{ type: "message_start", message: {} }, toolStart, json("{}"), blockStop, messageStop]),
+    )
+    const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
+    const { done } = await collect(provider.stream(request))
+    expect(done!.usage).toBeNull()
+  })
+
+  it("throws LLMHttpError with the retry delay and no credentials on 429", async () => {
+    const { baseUrl } = await boot((_, res) => {
+      res.writeHead(429, { "retry-after": "12" })
+      res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }))
+    })
+    const provider = new AnthropicProvider({ apiKey: "sk-ant-SECRET", baseUrl })
+    const failure = await collect(provider.stream(request)).then(() => null, (e: unknown) => e)
+    const error = failure as LLMHttpError
+    expect(error.status).toBe(429)
+    expect(error.retryAfterMs).toBe(12_000)
+    expect(error.message).not.toContain("sk-ant-SECRET")
   })
 })

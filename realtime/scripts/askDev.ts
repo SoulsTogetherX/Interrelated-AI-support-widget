@@ -5,7 +5,7 @@
 // widget exist.
 //
 //   npm run ask -- "how do refunds work" [--org "Name"] [--conversation con_…]
-//                  [--llm mock|groq|gemini|ollama] [--tamper]
+//                  [--llm mock|groq|gemini|ollama|anthropic] [--tamper]
 //
 // Glue over answerQuestion(), same rule as the sibling CLIs: no logic of its
 // own to drift. The default LLM is the deterministic mock in RESPONDER
@@ -13,9 +13,10 @@
 // answers by quoting the opening of each of the top chunks — grounded by
 // construction, so verification PASSES and the whole loop (including
 // citations and persistence) is observable with zero API keys. --llm picks
-// a real provider instead, configured by the GROQ_/GEMINI_/OLLAMA_ vars
-// documented in .env.example — the first place real model output meets the
-// verifier, ahead of the M2.5 route.
+// a real provider instead, configured by the GROQ_/GEMINI_/OLLAMA_/
+// ANTHROPIC_ vars documented in .env.example — the first place real model
+// output meets the verifier, ahead of the M2.5 route. (`--llm anthropic`
+// is the one that costs money on every run; it has no free tier.)
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 //#endregion

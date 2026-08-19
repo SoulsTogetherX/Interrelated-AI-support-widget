@@ -74,6 +74,23 @@ const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   "gemini-2.5-flash": { inputPerMTok: 0.30, outputPerMTok: 2.50 },
   "gemini-2.5-flash-lite": { inputPerMTok: 0.10, outputPerMTok: 0.40 },
 
+  // Anthropic (providers/llm/anthropic.ts). The only provider in the table
+  // with no free tier, which is why its prices being dated matters most
+  // here: a tenant on Anthropic is billed for every answer from their
+  // first one, so "cost per 1k answers" is a real bill rather than the
+  // what-would-this-cost-at-scale figure it is everywhere else.
+  //
+  // Keyed on SNAPSHOT ids — the dated form Anthropic publishes alongside
+  // shorter aliases. An alias can point at a newer snapshot than the one
+  // whose price was checked, and pricing it as its predecessor is exactly
+  // the wrong-but-believable number this file's exact matching exists to
+  // prevent, so an alias resolves to null and is reported as unpriced.
+  // Same for any model newer than PRICES_AS_OF, including the Claude 5
+  // family: unpriced until someone reads the page and dates the table
+  // again. That is the intended failure mode, not a gap.
+  "claude-haiku-4-5-20251001": { inputPerMTok: 1.00, outputPerMTok: 5.00 },
+  "claude-sonnet-4-5-20250929": { inputPerMTok: 3.00, outputPerMTok: 15.00 },
+
   // The mock (providers/llm/mock.ts) — the one row that is legitimately
   // zero, since it never leaves the process. Without it every keyless
   // stack (dev compose, CI, the demo org) would report its cost as

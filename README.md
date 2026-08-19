@@ -36,13 +36,18 @@ data, and most of them are CI gates.
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
 | Widget bundle | **6.52 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
 | Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
-| Tests | 782 across the repo, the integration suites against a real pgvector Postgres (9 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
+| Tests | 795 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 Two things the plan wanted measured that this README does **not** claim a
 number for, because they need a real provider key: time-to-first-token and
 cost per 1,000 answers. The pipeline records both per answer (TTFT at the
 first delta, tokens from the provider's own count) and the dashboard's
-metrics page reports them, per model; the demo stack runs keyless.
+metrics page reports them, per model; the demo stack runs keyless. For the
+same reason, each provider adapter is proven against a loopback server
+speaking its real wire protocol, and against the provider itself only when
+that provider's key is in the environment — a key-gated suite that skips
+loudly rather than passing quietly. Anthropic's has never run here: it is
+the one provider with no free tier, and this repo carries no paid key.
 
 ---
 
@@ -98,9 +103,20 @@ the user turn inside `<context>` delimiters declared as data → the model,
 streamed → structured claims parsed and validated with one retry → each
 claim's quote located verbatim in the chunk it names → unverified claims
 stripped → one transaction persisting the answer, **every** verdict, and the
-day's usage counter → claim-granular events over SSE. Providers: Groq,
-Gemini (native JSON-schema enforcement), Ollama, any OpenAI-compatible
-endpoint, and a deterministic mock that keeps CI keyless.
+day's usage counter → claim-granular events over SSE.
+
+**Five providers, four mechanisms.** Structured output is where model APIs
+disagree most, and the interface normalizes four genuinely different
+answers rather than one: Groq (and any OpenAI-compatible endpoint) has JSON
+*mode*, which is a request rather than a guarantee; Gemini enforces a JSON
+schema server-side; Ollama constrains generation with its native `format`;
+and Anthropic has no response-format field at all, so its schema is carried
+as a forced **tool call** whose streamed arguments are the answer document.
+The pipeline validates regardless — trust is not transitive, and the
+schema-violation rate is exactly the metric that makes the difference
+visible instead of assumed. A deterministic mock keeps CI keyless, and
+Anthropic is the one provider with no free tier, so nothing here selects it
+by default and no keyless stack can reach it.
 
 Two *different* retries live in that path and they answer different failures.
 A provider that **refused** the call — a 429 from a 30 rpm free tier, a 5xx,

@@ -637,7 +637,14 @@ widget (M2.6) or curl-with-headers
                                        a preference but a REQUIREMENT: the
                                        question has to be embedded by the
                                        model that embedded the chunks, and
-                                       the ingest worker reads this same row
+                                       the ingest worker reads this same row.
+                                       Since M7.8 the row may name any of
+                                       the schema's FIVE providers — the
+                                       "anthropic has no adapter yet" throw
+                                       that used to live on this hop is gone
+                                       (§2.4.5n), so the union the CHECK
+                                       allows and the union that resolves
+                                       are finally the same one
       → answerQuestion(§5.1)           visitorId = token.visitor — the
                                        binding that stops one visitor
                                        continuing another's thread

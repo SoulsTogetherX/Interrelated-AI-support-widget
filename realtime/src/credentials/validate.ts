@@ -23,6 +23,7 @@ import { GroqProvider } from "@providers/llm/groq"
 import { GeminiProvider } from "@providers/llm/gemini"
 import { OllamaProvider } from "@providers/llm/ollama"
 import { OpenAICompatibleProvider } from "@providers/llm/openaiCompatible"
+import { AnthropicProvider } from "@providers/llm/anthropic"
 import { LLMHttpError } from "@providers/llm/http"
 import { GeminiEmbeddingProvider, GEMINI_EMBED_MODEL } from "@providers/embedding/gemini"
 import { OllamaEmbeddingProvider } from "@providers/embedding/ollama"
@@ -36,7 +37,11 @@ import type { EmbeddingProvider } from "@providers/embedding/types"
 //#region Types
 export interface CredentialInput {
   role: "generation" | "embedding"
-  provider: "groq" | "gemini" | "ollama" | "openai_compatible"
+  /** The same five values the schema's CHECK allows (§3.3.3). Since M7.8
+   *  this union is EQUAL to the stored one rather than narrower than it —
+   *  anthropic was forward provision for two milestones, and every
+   *  "unreachable provider" workaround it forced could go with it. */
+  provider: "groq" | "gemini" | "ollama" | "openai_compatible" | "anthropic"
   apiKey?: string
   baseUrl?: string
   model?: string
@@ -57,7 +62,7 @@ export type UrlVet = (url: URL) => Promise<void>
 //#endregion
 
 //#region Shape validation
-const PROVIDERS = new Set(["groq", "gemini", "ollama", "openai_compatible"])
+const PROVIDERS = new Set(["groq", "gemini", "ollama", "openai_compatible", "anthropic"])
 
 // Sanity bounds only — real proof is the round-trip. The cap matters: a
 // megabyte "key" would be embedded in every provider request header.
@@ -78,19 +83,20 @@ export async function checkCredentialInput(
   if (typeof b.provider !== "string" || !PROVIDERS.has(b.provider)) {
     return {
       ok: false,
-      error: "provider must be one of groq, gemini, ollama, openai_compatible.",
+      error: "provider must be one of groq, gemini, ollama, openai_compatible, anthropic.",
     }
   }
   const provider = b.provider as CredentialInput["provider"]
 
-  // Groq serves generation only — it has no embeddings endpoint at all
-  // (the plan's provider table says so, and its free tier is the reason it
-  // is the generation default). Naming the gap beats a confusing 404 from
-  // an endpoint that was never there.
-  if (role === "embedding" && provider === "groq") {
+  // Groq and Anthropic serve generation only — neither has an embeddings
+  // endpoint at all (the plan's provider table has a dash in that column
+  // for both). Naming the gap beats a confusing 404 from an endpoint that
+  // was never there.
+  if (role === "embedding" && (provider === "groq" || provider === "anthropic")) {
+    const name = provider === "groq" ? "Groq" : "Anthropic"
     return {
       ok: false,
-      error: "Groq does not serve embeddings — use Gemini, Ollama, or an OpenAI-compatible endpoint.",
+      error: `${name} does not serve embeddings — use Gemini, Ollama, or an OpenAI-compatible endpoint.`,
     }
   }
 
@@ -101,7 +107,7 @@ export async function checkCredentialInput(
   if (provider === "ollama" && apiKey !== undefined) {
     return { ok: false, error: "Ollama is unauthenticated — remove the API key." }
   }
-  if ((provider === "groq" || provider === "gemini") && apiKey === undefined) {
+  if ((provider === "groq" || provider === "gemini" || provider === "anthropic") && apiKey === undefined) {
     return { ok: false, error: "An API key is required for this provider." }
   }
   if (apiKey !== undefined && (apiKey.length < KEY_MIN || apiKey.length > KEY_MAX)) {
@@ -155,6 +161,8 @@ export function buildGenerationProvider(input: CredentialInput): LLMProvider {
       return new GroqProvider({ apiKey: input.apiKey!, model: input.model })
     case "gemini":
       return new GeminiProvider({ apiKey: input.apiKey!, model: input.model })
+    case "anthropic":
+      return new AnthropicProvider({ apiKey: input.apiKey!, model: input.model })
     case "ollama":
       return new OllamaProvider({ model: input.model!, baseUrl: input.baseUrl })
     case "openai_compatible":
@@ -213,9 +221,11 @@ export function buildEmbeddingProvider(
         ...(dim !== undefined ? { dim } : {}),
       })
     case "groq":
-      // Unreachable through checkCredentialInput, which refuses the pairing
-      // by name; a row here would mean the schema was written around us.
-      throw new Error("groq has no embedding endpoint")
+    case "anthropic":
+      // Unreachable through checkCredentialInput, which refuses both
+      // pairings by name; a row here would mean the schema was written
+      // around us.
+      throw new Error(`${input.provider} has no embedding endpoint`)
   }
 }
 

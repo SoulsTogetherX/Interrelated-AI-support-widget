@@ -246,15 +246,24 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     expect("key_ciphertext" in body.credentials[0]).toBe(false)
   })
 
-  it("refuses Groq for the embedding role by name — it has no such endpoint", async () => {
+  it("refuses Groq and Anthropic for the embedding role by name — neither has such an endpoint", async () => {
     const before = requestsSeen.length
-    const res = await post(
-      `/internal/orgs/${orgId}/credentials`,
-      { role: "embedding", provider: "groq", apiKey: "gsk-embedding-key" },
-      SECRET,
-    )
-    expect(res.status).toBe(422)
-    expect(((await res.json()) as ApiBody).error).toContain("does not serve embeddings")
+    for (const [provider, key, name] of [
+      ["groq", "gsk-embedding-key", "Groq"],
+      ["anthropic", "sk-ant-embedding-key", "Anthropic"],
+    ] as const) {
+      const res = await post(
+        `/internal/orgs/${orgId}/credentials`,
+        { role: "embedding", provider, apiKey: key },
+        SECRET,
+      )
+      expect(res.status).toBe(422)
+      const error = ((await res.json()) as ApiBody).error
+      expect(error).toContain("does not serve embeddings")
+      // Named, so a tenant reads which provider they picked rather than a
+      // generic refusal about "this provider".
+      expect(error).toContain(name)
+    }
     expect(requestsSeen.length).toBe(before)
   })
 
@@ -265,6 +274,12 @@ describe.skipIf(!hasDb)("internal credential API", () => {
       { role: "generation", provider: "ollama", baseUrl: fakeBase, model: "m", apiKey: "k".repeat(10) }, // ollama+key
       { role: "generation", provider: "openai_compatible", model: "m" }, // base required
       { role: "generation", provider: "groq", apiKey: "k".repeat(10), baseUrl: fakeBase }, // fixed endpoint
+      { role: "generation", provider: "anthropic" }, // key required
+      // The case that matters most when a HOSTED provider is added: its
+      // endpoint must be in the fixed set, not the base-URL set. A hosted
+      // provider that accepted a tenant-typed base URL would be a
+      // request-forgery lever wearing a vendor's name (§3.3.3).
+      { role: "generation", provider: "anthropic", apiKey: "k".repeat(10), baseUrl: fakeBase },
       { role: "generation", provider: "openai_compatible", baseUrl: fakeBase, apiKey: "k".repeat(10) }, // model required
       { role: "generation", provider: "openai_compatible", baseUrl: "ftp://x/", model: "m" },
       { role: "generation", provider: "openai_compatible", baseUrl: "http://user:pw@host/v1", model: "m" },

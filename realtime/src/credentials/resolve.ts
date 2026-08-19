@@ -49,13 +49,12 @@ async function loadCredential(
   if (!row) {
     return null
   }
-  // The schema's provider union is wider than the adapters that exist
-  // (anthropic is forward provision — §3.3.3); a row naming an
-  // unimplemented provider is unreachable through validate.ts, so hitting
-  // one here is corruption worth a loud stop.
-  if (row.provider === "anthropic") {
-    throw new Error("anthropic credentials have no adapter yet")
-  }
+  // Since M7.8 the schema's provider union and the adapters that exist are
+  // the SAME five, so there is no unimplemented-provider branch here any
+  // more — the row is handed to the builder whatever it names, and a
+  // pairing the builders cannot serve (an anthropic EMBEDDING row) is
+  // already unrepresentable: checkCredentialInput refuses it by name and
+  // buildEmbeddingProvider throws by name if a row ever appears anyway.
   return {
     input: {
       role,

@@ -3,6 +3,7 @@ import { MockLLMProvider } from "@providers/llm/mock"
 import { GroqProvider } from "@providers/llm/groq"
 import { GeminiProvider } from "@providers/llm/gemini"
 import { OllamaProvider } from "@providers/llm/ollama"
+import { AnthropicProvider } from "@providers/llm/anthropic"
 import type { LLMProvider } from "@providers/llm/types"
 
 import { groundedMockResponder } from "@/answer/mockResponder"
@@ -42,8 +43,18 @@ function buildLLMProvider(name: string): LLMProvider {
       if (!model) throw new Error("LLM provider ollama needs OLLAMA_MODEL (see .env.example)")
       return new OllamaProvider({ model, ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}) })
     }
+    case "anthropic": {
+      // The one provider here with no free tier, so it is never a default
+      // and never reached by CI, the demo, or any keyless stack — the
+      // plan's "$0" constraint holds by nobody selecting it. It is
+      // selectable for the same reason it is a credential option: a tenant
+      // (or a developer comparing providers) may already pay for it.
+      const apiKey = process.env.ANTHROPIC_API_KEY
+      if (!apiKey) throw new Error("LLM provider anthropic needs ANTHROPIC_API_KEY (see .env.example)")
+      return new AnthropicProvider({ apiKey, ...(process.env.ANTHROPIC_MODEL ? { model: process.env.ANTHROPIC_MODEL } : {}) })
+    }
     default:
-      throw new Error(`unknown LLM provider "${name}" (mock | groq | gemini | ollama)`)
+      throw new Error(`unknown LLM provider "${name}" (mock | groq | gemini | ollama | anthropic)`)
   }
 }
 //#endregion

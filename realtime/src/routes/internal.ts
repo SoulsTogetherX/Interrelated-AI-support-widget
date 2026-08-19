@@ -279,7 +279,7 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         // same model) costs nothing.
         if (input.role === "embedding") {
           const previousModel =
-            previous !== undefined && previous.provider !== "anthropic"
+            previous !== undefined
               ? effectiveEmbeddingModel(previous.provider, previous.model)
               : null
           if (previousModel !== trip.model) {

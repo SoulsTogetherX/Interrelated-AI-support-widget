@@ -16,8 +16,9 @@
 // So this suite runs the real thing, per provider, ONLY when that
 // provider's key is present in the environment:
 //
-//   GROQ_API_KEY=...   npm test      (free tier, no card: console.groq.com)
-//   GEMINI_API_KEY=... npm test      (free tier, no card: aistudio.google.com)
+//   GROQ_API_KEY=...      npm test   (free tier, no card: console.groq.com)
+//   GEMINI_API_KEY=...    npm test   (free tier, no card: aistudio.google.com)
+//   ANTHROPIC_API_KEY=... npm test   (PAID — the one that costs, see below)
 //
 // Both are the SAME variables .env.example already documents for
 // `npm run ask --llm groq|gemini` and for server-level LLM_PROVIDER — one
@@ -52,9 +53,10 @@ import { newId } from "@shared/utils/ids"
 //#region Gating
 const GROQ_KEY = process.env.GROQ_API_KEY
 const GEMINI_KEY = process.env.GEMINI_API_KEY
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY
 
 interface LiveProvider {
-  name: "groq" | "gemini"
+  name: "groq" | "gemini" | "anthropic"
   key: string | undefined
   /** Model override, if the repo's default should be overridden per run —
    *  free-tier model availability moves (the plan says so explicitly), so
@@ -65,6 +67,15 @@ interface LiveProvider {
 const PROVIDERS: LiveProvider[] = [
   { name: "groq", key: GROQ_KEY, model: process.env.GROQ_MODEL },
   { name: "gemini", key: GEMINI_KEY, model: process.env.GEMINI_MODEL },
+  // Anthropic (M7.8) needs no special case here, which is the point: the
+  // adapter satisfies the same LLMProvider contract, so the same three
+  // cases exercise it. The one thing that IS different is money — it has
+  // no free tier, so setting ANTHROPIC_API_KEY makes `npm test` cost a
+  // fraction of a cent per run, and CI never sets it. The structured-output
+  // case is the interesting one for this provider: it is the only forced
+  // TOOL CALL in the table, and whether that really constrains the claims
+  // contract is a measurement, not an assumption (§2.4.5n).
+  { name: "anthropic", key: ANTHROPIC_KEY, model: process.env.ANTHROPIC_MODEL },
 ]
 
 const ANY_KEY = PROVIDERS.some((p) => Boolean(p.key))

@@ -22,15 +22,20 @@ import type { ProviderFormState } from "@/lib/providers/actions"
 //#endregion
 
 //#region Provider field matrix
-// Per ROLE, because the two are genuinely different sets: Groq has no
-// embeddings endpoint at all, and the model defaults differ even where the
-// provider is the same (gemini-2.5-flash generates, gemini-embedding-001
-// embeds). Both facts are enforced server-side in checkCredentialInput —
-// listed here so the form does not offer a combination that cannot work.
+// Per ROLE, because the two are genuinely different sets: neither Groq nor
+// Anthropic has an embeddings endpoint at all, and the model defaults
+// differ even where the provider is the same (gemini-2.5-flash generates,
+// gemini-embedding-001 embeds). Both facts are enforced server-side in
+// checkCredentialInput — listed here so the form does not offer a
+// combination that cannot work.
 const PROVIDERS = {
   generation: [
     { value: "groq", label: "Groq", needsKey: true, needsBase: false, modelHint: "llama-3.3-70b-versatile (default)" },
     { value: "gemini", label: "Google Gemini", needsKey: true, needsBase: false, modelHint: "gemini-2.5-flash (default)" },
+    // Listed last of the hosted providers on purpose: it is the only one
+    // with no free tier, so it is the only one where clicking Test spends
+    // money. The label says so rather than leaving a tenant to find out.
+    { value: "anthropic", label: "Anthropic Claude (paid)", needsKey: true, needsBase: false, modelHint: "claude-haiku-4-5-20251001 (default)" },
     { value: "ollama", label: "Ollama (self-hosted)", needsKey: false, needsBase: true, modelHint: "required — a model you have pulled" },
     { value: "openai_compatible", label: "OpenAI-compatible", needsKey: true, needsBase: true, modelHint: "required" },
   ],
