@@ -96,7 +96,7 @@ createServer(async (req, res) => {
     res.writeHead(404, { "content-type": "text/plain" }).end(`not found: ${path}`)
   }
 }).listen(port, () => {
-  console.log(`fixtures at http://localhost:${port}/fixtures/{tailwind,bootstrap,hostile,strong}.html`)
+  console.log(`fixtures at http://localhost:${port}/fixtures/{tailwind,bootstrap,hostile,strong,measure}.html`)
   console.log(`(build first: npm run build; seed the API: npm run seed-demo in realtime/)`)
   console.log(secretKey
     ? `strong mode: /api/support-session mints via ${apiBase}/v1/sessions for ${signedInUser} on ${pageOrigin}`

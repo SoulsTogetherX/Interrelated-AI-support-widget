@@ -1,0 +1,171 @@
+<!doctype html>
+<!-- Fixture host #5: the MEASUREMENT page (M7.9). The other four fixtures
+     test that the widget SURVIVES a host (Tailwind's reset, Bootstrap's
+     specificity, a hostile `all: unset` + strict CSP, and strong mode).
+     This one tests nothing — it measures, and it is the committed script
+     behind the plan's third widget metric: "time from snippet load to
+     interactive bubble".
+
+     Why a page of its own rather than an instrument inside the widget:
+     a `performance.mark()` in the bundle would ship measurement code to
+     every customer's site forever to answer a question asked once, and the
+     plan's own size budget is the reason not to. The measurement belongs
+     to the harness, not to the artifact.
+
+     Why the number is honest:
+
+       - t0 is taken IMMEDIATELY BEFORE the <script> element is appended,
+         which is literally "snippet load" — the moment a customer's page
+         hands the browser our tag. Everything after it is ours: DNS (none
+         here, same origin), fetch, parse, evaluate, mount.
+       - t1 is taken by a MutationObserver the instant the bubble BUTTON
+         exists inside the shadow root — not when the host <div> appears
+         and not when the script finishes evaluating. "Interactive" means
+         a visitor could click it, so the button is the event.
+       - The observer is installed BEFORE the script is appended, which is
+         the whole reason this page exists: a measurement bolted on after
+         load can only ever read resource timing and guess at the mount.
+       - It reports the resource timing for the bundle alongside, so the
+         split between "network" and "our code" is visible rather than
+         asserted. On localhost the network half is near zero, and the page
+         SAYS so — a number measured over loopback is not a number measured
+         over a CDN, and reporting it as though it were would be the kind
+         of flattering measurement this project's README refuses.
+       - The snippet is appended from an inline script at the end of
+         <body>, so the widget's own "wait for DOMContentLoaded if the
+         parser is still running" branch is included in the number, exactly
+         as it would be for a customer who pastes the tag in <head>. That
+         is the branch a real page usually takes, so including it is the
+         faithful choice rather than the flattering one.
+
+     Usage:  npm run build && npm run fixtures  (widget/), then open
+             http://localhost:4400/fixtures/measure.html
+     Reload to re-measure; the page keeps the last runs of this session in
+     sessionStorage and reports their median, because one sample of a
+     first-paint-adjacent number is noise. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fixture: widget cost measurement</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 2rem; color: #0f172a; background: #f8fafc }
+    main { max-width: 46rem; margin: 0 auto }
+    h1 { font-size: 1.4rem; margin: 0 0 .25rem }
+    p.sub { margin: 0 0 1.5rem; color: #475569 }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0 }
+    th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #e2e8f0 }
+    th { font-weight: 600; color: #475569; font-size: .85rem }
+    td.n { font-variant-numeric: tabular-nums; text-align: right }
+    .big { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums }
+    .note { color: #64748b; font-size: .85rem }
+    button { font: inherit; padding: .4rem .8rem; border: 1px solid #cbd5e1; border-radius: .375rem; background: #fff; cursor: pointer }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Widget cost — snippet load to interactive bubble</h1>
+    <p class="sub">Measured on this page load. Reload to add a sample.</p>
+    <p><span class="big" id="ttib">measuring…</span> <span class="note">ms — this load</span></p>
+    <table>
+      <thead><tr><th>What</th><th>Value</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="note" id="samples"></p>
+    <p><button id="reset">Clear samples</button></p>
+    <p class="note">
+      Served over loopback, so the network share of this number is
+      effectively zero. Over a real CDN, add that CDN's time-to-first-byte
+      plus transfer for the gzipped bundle.
+    </p>
+  </main>
+
+  <script>
+    // Everything below runs BEFORE the widget's <script> is appended. That
+    // ordering is the measurement.
+    (function () {
+      const rows = document.getElementById("rows")
+      const add = (what, value) => {
+        const tr = document.createElement("tr")
+        const th = document.createElement("td"); th.textContent = what
+        const td = document.createElement("td"); td.className = "n"; td.textContent = value
+        tr.append(th, td); rows.append(tr)
+      }
+
+      const SRC = "/dist/widget.js"
+      let t0 = 0
+
+      // Resolves the instant a clickable bubble exists in the widget's
+      // shadow root. Observing the light DOM is enough: the host <div> is
+      // appended first and the shadow tree is populated synchronously
+      // inside the same mount, so the first light-DOM mutation that brings
+      // in #interrelated-widget is followed by a shadow root we can read.
+      const whenInteractive = new Promise((resolve) => {
+        const seen = () => {
+          const hostEl = document.getElementById("interrelated-widget")
+          const bubble = hostEl && hostEl.shadowRoot && hostEl.shadowRoot.querySelector(".bubble")
+          if (bubble) { resolve(performance.now()); return true }
+          return false
+        }
+        const observer = new MutationObserver(() => { if (seen()) observer.disconnect() })
+        observer.observe(document.documentElement, { childList: true, subtree: true })
+        // A late start would miss a synchronous mount; check once now too.
+        if (seen()) observer.disconnect()
+      })
+
+      whenInteractive.then((t1) => {
+        const total = t1 - t0
+        document.getElementById("ttib").textContent = total.toFixed(1)
+
+        // The network/our-code split, from the browser's own timing.
+        const entry = performance.getEntriesByType("resource").find((e) => e.name.endsWith(SRC))
+        if (entry) {
+          add("bundle request start → response end (network)", (entry.responseEnd - entry.startTime).toFixed(1) + " ms")
+          add("response end → interactive bubble (parse, evaluate, mount)", (t1 - entry.responseEnd).toFixed(1) + " ms")
+          add("bundle transfer size (what the wire carried)", entry.transferSize + " bytes")
+          add("bundle decoded size", entry.decodedBodySize + " bytes")
+        }
+        add("snippet appended → interactive bubble", total.toFixed(1) + " ms")
+
+        // Requests this page made in total, so "one request" is observed
+        // rather than asserted: the bundle, and nothing else, until the
+        // bubble is clicked.
+        const widgetRequests = performance
+          .getEntriesByType("resource")
+          .filter((e) => e.name.includes("widget") || e.name.includes("localhost:3000"))
+        add("requests attributable to the widget at load", String(widgetRequests.length))
+
+        // Median across this session's reloads — one sample of a
+        // first-paint-adjacent number is noise.
+        let samples = []
+        try { samples = JSON.parse(sessionStorage.getItem("ttib") || "[]") } catch { samples = [] }
+        samples.push(Number(total.toFixed(1)))
+        try { sessionStorage.setItem("ttib", JSON.stringify(samples)) } catch { /* private mode */ }
+        const sorted = samples.slice().sort((a, b) => a - b)
+        const median = sorted.length % 2
+          ? sorted[(sorted.length - 1) / 2]
+          : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+        document.getElementById("samples").textContent =
+          `${samples.length} sample${samples.length === 1 ? "" : "s"} this session — median ${median.toFixed(1)} ms, ` +
+          `min ${sorted[0].toFixed(1)}, max ${sorted[sorted.length - 1].toFixed(1)}  [${samples.join(", ")}]`
+      })
+
+      document.getElementById("reset").addEventListener("click", () => {
+        sessionStorage.removeItem("ttib")
+        location.reload()
+      })
+
+      // The snippet, appended exactly as a customer would paste it — and
+      // t0 is the last thing before it.
+      const script = document.createElement("script")
+      script.src = SRC
+      script.async = true
+      script.dataset.key = "pk_local_demo_widget_fixture_key0"
+      script.dataset.api = "http://localhost:3000"
+      script.dataset.title = "Acme Support"
+      t0 = performance.now()
+      document.body.append(script)
+    })()
+  </script>
+</body>
+</html>

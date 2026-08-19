@@ -333,6 +333,32 @@ needs a paid key this repo deliberately does not carry; the key-gated suite
 change and no test-only variable — the same standing arrangement Groq and
 Gemini have, and the same honest gap the embedding path had at M3.6b.
 
+M7.9 is done — **what the widget costs a host page** (§6.2, §8.3, §8.4).
+The plan names three widget metrics as CI-enforced; only the first, the
+gzipped size budget, had been enforced since M2.6. The other two are now
+produced by committed scripts. "Added requests and bytes on the host page"
+splits by how its halves FAIL: statically, the built bundle must contain no
+dynamic `import()`, no `@import` or `url()`, no injected `<link>` or
+`new Image`, and no absolute URL literal — six patterns, each one request a
+customer never agreed to pay for, each proven to bite by appending a
+violation to a copy of the bundle; behaviorally, a new jsdom suite drives
+the REAL ApiClient and the real mountWidget against a counting fetch,
+because the fake client every other UI test injects is exactly what would
+hide a request. What it pins is the product promise: **a page nobody chats
+on pays for one request and nothing else** — zero fetches and zero sockets
+at mount, one at bubble-open, one more per question, and the deliberate
+exception named rather than hidden (a page loaded mid-handoff spends a mint
+and a ticket at once, because a person is waiting). "Time from snippet load
+to interactive bubble" cannot be measured by a .mjs probe at all, so it got
+a fifth fixture page whose job is measurement rather than survival, and a
+real number: **p50 9.5 ms** over ten reloads, nine of them 7.3–16.3 ms,
+against **168 ms cold**, with the one 522.8 ms sample recorded rather than
+dropped because it landed in a burst of racing reloads. The browser
+confirmed from outside what the static check asserts — one request at load
+— and that the thing measured was a real 56×56 button in a shadow root.
+What is NOT claimed: these are loopback numbers, so a CDN's TTFB and
+transfer are still to be added, and the page says so on its face.
+
 M7.6b is done, and with it **the README's last named gap is closed** —
 **a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
 §3.22, §9.9, §6.1, §6.3, DATAFLOW §3.2, §7.9a). `sources.kind` has allowed
@@ -3907,13 +3933,36 @@ the root runner owns its tests, `typecheck:eval` its types, and the runner
 alias. Committed artifacts only — `eval/results/` (per-run droppings) is
 gitignored; what IS committed is what someone chose to publish.
 
-### §6.2 `scripts/widget-size.mjs`
-The 15 KB gzipped budget as a merge blocker. Gzip, not raw — gzip is what
+### §6.2 `scripts/widget-size.mjs` — what the widget costs a host page
+The 15 KB gzipped budget as a merge blocker, and since M7.9 the place the
+plan's two STATIC widget metrics are produced. Gzip, not raw — gzip is what
 crosses the wire from any CDN and what a customer's performance audit
 sees. The budget is deliberately far above the actual size (~3.8 KB at
-M2.6): it exists to flag a dependency creeping in or a framework-shaped
-rewrite, not normal growth, and the number printed on every CI run is
-what keeps the README's size claim honest.
+M2.6, 6.52 KB since M7.4): it exists to flag a dependency creeping in or a
+framework-shaped rewrite, not normal growth, and the number printed on
+every CI run is what keeps the README's size claim honest.
+
+M7.9 added the REQUEST half of the plan's "added requests and bytes on the
+host page", and it splits in two because the two halves fail differently.
+**Statically**, here: the built bundle must contain no dynamic `import()`,
+no `@import` or `url()` in its styles, no injected `<link>` or `new Image`,
+and no absolute http(s) URL LITERAL — the bare strings `http://` and
+`https://` are legal, since the widget builds its socket URL by swapping
+the scheme of the configured api base, but a host after one would mean a
+second origin is being dialed. Each pattern is one request a customer never
+agreed to pay for, and a second-party font or CDN reference in a script
+running on someone else's site is also a privacy leak; the checks are run
+against the BUILT artifact rather than the source, because a source-level
+check can be defeated by a build step. **Behaviorally**, in
+`widget/src/__tests__/cost.test.ts` (§8.3), because "issues no request until
+the visitor opens it" is about what the code does at runtime. Together they
+state the installable cost in the terms a customer asks it: one request, N
+bytes, nothing further until someone chats. Each of the six static patterns
+was proven to bite by appending a violation to a copy of the bundle.
+
+The THIRD widget metric — time from snippet load to interactive bubble —
+is a browser measurement and lives in `widget/fixtures/measure.html`
+(§8.4), not here: no .mjs probe can time a mount.
 
 ### §7.1 `eval/corpus/`
 The frozen documentation snapshot: 31 Fastify v5.11.3 pages, MIT-licensed,
@@ -4315,6 +4364,18 @@ the probe going to the bot under the stored id and the confirmation still
 landing on the ONE socket; and a handoff after the last one ended replacing
 the status line rather than stacking a second.
 
+cost (M7.9) is the one suite here that uses the REAL ApiClient and the real
+mountWidget against a counting fetch, rather than the fake client every
+other UI case injects — because a fake client is precisely the thing that
+would hide a request. It pins the product promise that a page nobody chats
+on pays for one request and nothing else: ZERO fetches and zero sockets at
+mount (the microtask queue flushed first, so a request fired without being
+awaited still fails the test), exactly ONE at bubble-open (the session
+mint, which is also the Neon-warming handshake — and opening the panel
+again re-mints nothing), exactly one MORE per question, and the deliberate
+exception stated rather than hidden: a page loaded with a live handoff
+bookmark spends a mint AND a ticket at once, because a person is waiting
+and the rejoin IS the probe (§8.1c).
 
 ### §8.4 `fixtures/` + `scripts/serve.mjs`
 The three host pages the plan requires, each testing a distinct failure
@@ -4352,6 +4413,38 @@ worth noticing is what the handler never does: send the secret to the
 browser, or touch realtime's answer beyond passing it on. It is what the
 M7.3 live check ran the strong-mode loop against, rotation and revocation
 included (the summary at the top).
+
+M7.9 added a fifth, `measure.html`, and it is the odd one out: the other
+four test that the widget SURVIVES a host, and this one tests nothing — it
+MEASURES, and it is the committed script behind the plan's third widget
+metric, "time from snippet load to interactive bubble". Four decisions make
+its number honest. `t0` is taken immediately before the `<script>` is
+appended, which is literally what "snippet load" means — everything after
+it (fetch, parse, evaluate, mount) is ours. `t1` is taken by a
+MutationObserver the instant the bubble BUTTON exists inside the shadow
+root, not when the host `<div>` appears and not when the script finishes
+evaluating, because "interactive" means a visitor could click it. The
+observer is installed BEFORE the script is appended, which is the whole
+reason the page exists — a measurement bolted on after load can only read
+resource timing and guess at the mount. And the snippet is appended from an
+inline script at the end of `<body>`, so the widget's own
+wait-for-DOMContentLoaded branch is INCLUDED, as it would be for a customer
+who pastes the tag in `<head>`: the faithful choice rather than the
+flattering one. It reports the network/our-code split from the browser's own
+resource timing, keeps this session's samples in sessionStorage (one sample
+of a first-paint-adjacent number is noise), and says on its face that a
+number measured over loopback is not a number measured over a CDN.
+
+**Measured at M7.9**, ten reloads in a real browser: **p50 9.5 ms** from
+snippet append to a clickable bubble, nine of ten between 7.3 and 16.3 ms,
+against **168 ms on the cold first load** — the JIT-and-cold-cache case a
+visitor pays once. One sample read 522.8 ms and is recorded rather than
+dropped: it landed during a burst of back-to-back reloads fired faster than
+the pages could settle, and every carefully spaced reload after it came back
+in the 7–17 ms band. The browser also confirmed from the outside what §6.2
+asserts statically — exactly ONE request attributable to the widget at load
+— and that what was measured is a real widget: a 56×56 `BUTTON` in a shadow
+root with one adopted stylesheet and nothing in the light DOM.
 
 ---
 

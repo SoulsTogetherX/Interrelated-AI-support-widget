@@ -35,8 +35,10 @@ data, and most of them are CI gates.
 | Refusal threshold | **0.34** cosine distance for bge-small — 0% false refusals on the golden set, 100% correct refusals on off-topic questions, derived from an 80 + 40 question sweep, not picked by feel | [eval/RESULTS.md §threshold](eval/RESULTS.md) |
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
 | Widget bundle | **6.52 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
+| What the widget costs a host page | **1 request, 6.52 KB gzipped, and nothing further until a visitor opens the bubble** — the bundle fetches no font, stylesheet, chunk or image, and the session mint is deferred to bubble-open | `scripts/widget-size.mjs` (static) + `widget/src/__tests__/cost.test.ts` (behavioral); both CI-enforced |
+| Snippet load → interactive bubble | **9.5 ms p50** warm (10 loads, 9 of them 7.3–16.3 ms), **168 ms** on a cold first load | `widget/fixtures/measure.html` — localhost, so add a CDN's TTFB and transfer |
 | Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
-| Tests | 795 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
+| Tests | 799 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 Two things the plan wanted measured that this README does **not** claim a
 number for, because they need a real provider key: time-to-first-token and
