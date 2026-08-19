@@ -6,13 +6,19 @@
 import { createServer } from "node:http"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { createSource, recrawlSource, removeCredential, submitCredential } from "../index"
+import { createSource, recrawlSource, removeCredential, submitCredential, uploadSource } from "../index"
 
 import type { Server } from "node:http"
 import type { IncomingMessage } from "node:http"
 
 let server: Server | null = null
-let seen: Array<{ method: string; url: string; secret: string | undefined; body: string }>
+let seen: Array<{
+  method: string
+  url: string
+  secret: string | undefined
+  headers: Record<string, string | undefined>
+  body: string
+}>
 
 function listen(status: number, responseBody: unknown): Promise<void> {
   seen = []
@@ -25,6 +31,7 @@ function listen(status: number, responseBody: unknown): Promise<void> {
           method: req.method ?? "",
           url: req.url ?? "",
           secret: req.headers["x-internal-secret"] as string | undefined,
+          headers: req.headers as Record<string, string | undefined>,
           body,
         })
         res.writeHead(status, { "content-type": "application/json" })
@@ -148,5 +155,55 @@ describe("realtime internal client", () => {
       "/internal/orgs/org_00000000000000000000000000000000/sources/src_00000000000000000000000000000000/recrawl",
     )
     expect(seen[0].secret).toBe("web-client-test-secret-0123456789ab")
+  })
+
+  it("POSTs an upload as raw bytes, with the name and type in headers (M7.6b)", async () => {
+    await listen(200, { ok: true, sourceId: "src_u", filename: "handbook.pdf", format: "pdf", charCount: 4210 })
+    const bytes = new TextEncoder().encode("%PDF-1.7 pretend").buffer
+    const result = await uploadSource("org_00000000000000000000000000000000", {
+      name: "handbook.pdf",
+      type: "application/pdf",
+      bytes,
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: { sourceId: "src_u", filename: "handbook.pdf", format: "pdf", charCount: 4210 },
+    })
+    expect(seen[0].method).toBe("POST")
+    expect(seen[0].url).toBe("/internal/orgs/org_00000000000000000000000000000000/sources/upload")
+    expect(seen[0].secret).toBe("web-client-test-secret-0123456789ab")
+    // The body is the file itself, and its declared type is octet-stream —
+    // realtime mounts a 64 KB JSON parser across every route, so a .json
+    // upload announced as application/json would be claimed by that parser
+    // before the upload route ran.
+    expect(seen[0].body).toBe("%PDF-1.7 pretend")
+    expect(seen[0].headers["content-type"]).toBe("application/octet-stream")
+    expect(seen[0].headers["x-upload-content-type"]).toBe("application/pdf")
+    expect(seen[0].headers["x-upload-filename"]).toBe("handbook.pdf")
+  })
+
+  it("percent-encodes a filename a header could not otherwise carry", async () => {
+    await listen(200, { ok: true, sourceId: "src_u", filename: "café menu.pdf", format: "pdf", charCount: 12 })
+    await uploadSource("org_00000000000000000000000000000000", {
+      name: "café menu.pdf",
+      type: "",
+      bytes: new TextEncoder().encode("x").buffer,
+    })
+    // HTTP header values are latin-1; an unencoded é would be mangled or
+    // rejected outright by the runtime before it ever reached realtime.
+    expect(seen[0].headers["x-upload-filename"]).toBe("caf%C3%A9%20menu.pdf")
+    // An empty File.type (the browser recognized nothing) still sends a
+    // valid type, because detection reads the bytes anyway.
+    expect(seen[0].headers["x-upload-content-type"]).toBe("application/octet-stream")
+  })
+
+  it("relays an oversized-file refusal as the sentence realtime wrote", async () => {
+    await listen(413, { ok: false, error: "The file is larger than 10 MB." })
+    const result = await uploadSource("org_00000000000000000000000000000000", {
+      name: "huge.pdf",
+      type: "application/pdf",
+      bytes: new TextEncoder().encode("x").buffer,
+    })
+    expect(result).toEqual({ ok: false, error: "The file is larger than 10 MB." })
   })
 })

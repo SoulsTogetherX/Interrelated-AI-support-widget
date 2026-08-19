@@ -175,3 +175,20 @@
 .sources-state-none {
   color: var(--ink-muted);
 }
+
+/* The upload card's heading and its lead note (M7.6b). The note carries the
+   one thing about this surface a tenant should know before using it — the
+   file is not stored — so it is body text rather than fine print. */
+.sources-subtitle {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.sources-note {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}

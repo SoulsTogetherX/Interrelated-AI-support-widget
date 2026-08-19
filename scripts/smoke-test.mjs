@@ -163,6 +163,26 @@ await check("internal credential API is closed to outsiders", async () => {
   }
 })
 
+// The upload route (M7.6b) is on that same surface and gets its own line,
+// because it is the one internal route that accepts megabytes: a
+// misconfiguration that left it open would let a stranger spend the
+// service's memory and its PDF parser, not merely read a status.
+await check("internal upload route is closed to outsiders", async () => {
+  const res = await fetch(`${base}/internal/orgs/org_probe/sources/upload`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-upload-filename": "smoke.md",
+      "x-upload-content-type": "text/markdown",
+    },
+    body: "# Smoke\n\nProbe.\n",
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 404 && res.status !== 401) {
+    throw new Error(`status ${res.status} — upload surface reachable without a secret`)
+  }
+})
+
 if (failures > 0) {
   console.error(`\n${failures} smoke check(s) failed`)
   process.exit(1)

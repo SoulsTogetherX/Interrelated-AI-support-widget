@@ -246,14 +246,6 @@ class IngestWorker {
       await this.#finishJob(job.id, "failed", "source row no longer exists")
       return
     }
-    if (source.kind === "upload") {
-      // Uploads are parsed at upload time (M3, dashboard); a queue job for
-      // one is a programming error worth failing loudly, not crawling.
-      await this.#finishJob(job.id, "failed", "upload sources are not crawlable")
-      await this.#setSourceStatus(source.id, "failed")
-      return
-    }
-
     await this.#setSourceStatus(source.id, "crawling")
     const seenDocIds: string[] = []
     let docsDone = 0
@@ -290,11 +282,19 @@ class IngestWorker {
       // wrong model is the outcome worth avoiding.
       const embedder = (await this.#resolveEmbedder?.(job.org_id)) ?? this.#embedder
 
-      const events = this.#crawler({
-        kind: source.kind,
-        location: source.location,
-        crawlDepth: source.crawl_depth,
-      })
+      // An UPLOAD is a crawl of exactly one page whose fetch is a database
+      // read (M7.6b). Producing the same event stream a crawler does is what
+      // lets everything below this line stay unchanged: progress and lease
+      // renewal, the vanished-document sweep, the status transitions, and the
+      // failure path all work on an upload for free, and there is no second
+      // ingest path to keep in step with this one.
+      const events = source.kind === "upload"
+        ? this.#uploadEvents(source.id)
+        : this.#crawler({
+          kind: source.kind,
+          location: source.location,
+          crawlDepth: source.crawl_depth,
+        })
       for await (const event of events) {
         // Deploy-time stop: hand the job back between pages. attempts was
         // already incremented by the claim, which is correct — a job that
@@ -357,6 +357,54 @@ class IngestWorker {
       const message = err instanceof CrawlError || err instanceof Error ? err.message : String(err)
       await this.#finishJob(job.id, "failed", message.slice(0, 500))
       await this.#setSourceStatus(source.id, "failed")
+    }
+  }
+
+  /**
+   * An upload source's single "page", read back from what the upload route
+   * extracted (migration 009). The file's bytes are long gone — they were
+   * parsed in the request and never stored — so this is the only thing an
+   * upload can be re-ingested from, which is exactly why the text is kept:
+   * an embedding-model change re-queues every source (§3.22), and a crawl
+   * source answers that by being fetched again while an upload has nothing
+   * to re-fetch.
+   *
+   * Blocks are stored as SPANS and their text is sliced back out here, so
+   * the parser contract — block.text === text.slice(charStart, charEnd) —
+   * holds by construction rather than by two copies agreeing.
+   *
+   * A missing row throws rather than yielding nothing: an upload source with
+   * no extraction is a broken invariant (the route writes both in one
+   * transaction), and a crawl of zero pages that "succeeded" would soft-delete
+   * the document and leave a tenant with a source that reads ready and
+   * answers nothing.
+   */
+  async *#uploadEvents(sourceId: string): AsyncGenerator<CrawlEvent> {
+    const upload = await this.#db
+      .selectFrom("source_uploads")
+      .select(["filename", "title", "text", "blocks"])
+      .where("source_id", "=", sourceId)
+      .executeTakeFirst()
+    if (!upload) throw new CrawlError("uploaded file is missing its extracted text")
+
+    yield { kind: "plan", total: 1 }
+    yield {
+      kind: "page",
+      // documents.url is the filename for an upload: it is what a citation
+      // shows, and what the recrawl short-circuit matches a page on.
+      url: upload.filename,
+      doc: {
+        title: upload.title,
+        text: upload.text,
+        blocks: upload.blocks.map((b) => ({
+          kind: b.kind,
+          ...(b.level !== undefined ? { level: b.level } : {}),
+          text: upload.text.slice(b.charStart, b.charEnd),
+          charStart: b.charStart,
+          charEnd: b.charEnd,
+        })),
+        links: [],
+      },
     }
   }
 

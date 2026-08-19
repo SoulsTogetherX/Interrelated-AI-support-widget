@@ -228,6 +228,55 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
       }
     })
 
+    it("holds one upload's extraction per source, and refuses the empty ones (009)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Upload Co" }).execute()
+      try {
+        const sourceId = newId("src")
+        await db.insertInto("sources")
+          .values({ id: sourceId, org_id: orgId, kind: "upload", location: "handbook.pdf" }).execute()
+        const row = (extra: Record<string, unknown>) => ({
+          source_id: sourceId, filename: "handbook.pdf", format: "pdf" as const,
+          byte_size: 181_000, title: "Handbook", text: "Refunds are issued within 14 days.",
+          blocks: JSON.stringify([{ kind: "paragraph", charStart: 0, charEnd: 34 }]),
+          ...extra,
+        })
+
+        // The states that would mean an upload row exists for a file nothing
+        // could be read from: no text, no bytes, a filename that is not one,
+        // a format no parser answers to, and blocks that are not a list.
+        await expect(db.insertInto("source_uploads").values(row({ text: "" })).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("source_uploads").values(row({ byte_size: 0 })).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("source_uploads").values(row({ filename: "" })).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("source_uploads").values(row({ format: "docx" }) as never).execute()).rejects.toThrow(/check/i)
+        await expect(
+          db.insertInto("source_uploads").values(row({ blocks: JSON.stringify({ kind: "paragraph" }) })).execute(),
+        ).rejects.toThrow(/check/i)
+
+        // The well-formed row is accepted, and jsonb comes back as a VALUE —
+        // the property the worker depends on to slice its blocks back out
+        // without parsing a string.
+        await db.insertInto("source_uploads").values(row({})).execute()
+        const stored = await db.selectFrom("source_uploads").selectAll()
+          .where("source_id", "=", sourceId).executeTakeFirstOrThrow()
+        expect(stored.blocks).toEqual([{ kind: "paragraph", charStart: 0, charEnd: 34 }])
+        expect(stored.text.slice(0, 7)).toBe("Refunds")
+
+        // One file per source: a second upload for the same source is a
+        // primary-key violation, not a silent second extraction.
+        await expect(db.insertInto("source_uploads").values(row({ filename: "other.pdf" })).execute())
+          .rejects.toThrow(/unique|duplicate/i)
+
+        // And the row goes when its source does.
+        await db.deleteFrom("sources").where("id", "=", sourceId).execute()
+        const after = await db.selectFrom("source_uploads").select("source_id")
+          .where("source_id", "=", sourceId).executeTakeFirst()
+        expect(after).toBeUndefined()
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
     it("rejects origins with paths or trailing slashes", async () => {
       const orgId = newId("org")
       await db.insertInto("organizations").values({ id: orgId, name: "Origin Co" }).execute()

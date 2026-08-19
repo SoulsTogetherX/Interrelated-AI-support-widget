@@ -250,7 +250,44 @@ green against the rebuilt prod image: smoke, injection, security 54/54, and
 — the check the container exists to make, since a dynamically-imported
 dual-format dependency is exactly what an image can break — `unpdf`
 resolving and extracting text from a PDF built inside the shipped image.
-Remaining: M7.6b, the upload surface itself. M6.1 is done — the security probe (§6.3, §3.27, §4.4,
+M7.6b is done, and with it **the README's last named gap is closed** —
+**a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
+§3.22, §9.9, §6.1, §6.3, DATAFLOW §3.2, §7.9a). `sources.kind` has allowed
+'upload' since 001 and nothing could produce one; the worker failed such a
+job loudly because there was no other honest thing to do with it. The split
+of work is the whole design and it falls exactly where the
+control-plane/data-plane split already falls: the file is PARSED IN THE
+REQUEST and EMBEDDED BEHIND THE QUEUE. Parsing in the request is what makes
+the refusals useful — "this PDF is a scan, its content is pixels, run OCR
+first", "it is password-protected" — sentences worth the most while the
+tenant still has the file in front of them rather than minutes later on a
+row that says failed; and parsing is the cheap half, CPU bounded by a 10 MB
+cap (the PDF parser's own number, so one cap governs). Embedding stays
+queued because it is external network measured in minutes for a large file,
+and the dashboard runs on Vercel, whose functions cannot hold a request open
+that long. **The bytes are never stored, and the extracted TEXT is** —
+migration 009's `source_uploads` — which is not thrift but a REQUIREMENT the
+naive design would have missed: when an org changes its embedding model
+§3.22 re-queues every source, a crawl answers that by being fetched again,
+and an upload has nothing to re-fetch, so without the stored text a model
+change would silently orphan every uploaded document. Blocks are stored as
+SPANS and sliced back out, so the parser contract holds by construction in
+both directions rather than by two copies agreeing. The worker treats an
+upload as a crawl of ONE page whose fetch is a database read, emitting the
+crawler's own event shape — which is why progress, lease renewal, the
+vanished-document sweep and the failure path all work on it unchanged, and
+why there is no second ingest path to keep in step. Two consequences worth
+naming: Re-crawl now works on uploads (the button says "Re-index"), because
+an upload whose first ingest failed on a wrong credential previously left
+the tenant nothing to click but "upload it again"; and the file travels to
+realtime as `application/octet-stream` with its name and declared type in
+headers, because app.ts mounts a 64 KB JSON parser across every route and a
+customer's `.json` upload would otherwise be claimed and refused by that
+parser before the upload route ran. The security probe's **oversized-upload
+case — the one M6.4 recorded as deferred (§6.3) — is now written**, and it
+asserts not just that 11 MB is refused but that it is refused BEFORE the
+parser runs, since a PDF parser decompresses and refusing afterwards would
+have already done the expensive thing. M6.1 is done — the security probe (§6.3, §3.27, §4.4,
 DATAFLOW §12): a seeded pair of tenants to attack, and 36 black-box checks
 across the trust model's layers — origin allowlist and CORS posture, key
 state (a revoked key byte-identical to an unknown one), token tamper and
@@ -278,11 +315,12 @@ the pipeline; a real provider measures the model). M6.4 closed the
 milestone with the documentation and a full verification ladder. Two things
 the plan's M6 list names are covered differently than a reader might
 expect, and are stated rather than fudged: "oversized uploads" — at M6.4 file
-uploads did not exist (deferred with PDF support), so what the probe bounds is
-every payload the surface DOES accept, the 64 KB JSON body, the 2,000-char
-question, and the 4,000-char socket frame. M7.6a has since built the PDF
-parser, which carries its own size cap tested at the parser (§3.10.7), and
-M7.6b's upload route is where the probe's own oversized case belongs; and
+uploads did not exist (deferred with PDF support), so what the probe bounded
+was every payload the surface DID accept, the 64 KB JSON body, the 2,000-char
+question, and the 4,000-char socket frame. M7.6a built the PDF parser with
+its own size cap tested at the parser (§3.10.7), and M7.6b built the upload
+route and with it the probe's own oversized case — so this one is now CLOSED
+rather than deferred (§6.3); and
 "rotated keys" — at M6.4
 one-click rotation was a dashboard feature that had not been built, so the
 fixture performed a rotation by hand (a key created live, then revoked) and
@@ -830,7 +868,10 @@ so shared/ stays dependency-free at runtime; each consumer resolves the
 types from its own node_modules, and the root package carries kysely as a
 devDependency purely so `typecheck:shared` can see it — the exact
 arrangement fastembed has for providers/local.ts (§2.4.5c). Since M7.5 the
-file also exports one runtime VALUE beside the types: `MAX_RECORDED_SKIPPED_PAGES`
+file also carries `SourceUploadsTable` and `UploadBlockSpan` (migration 009,
+M7.6b — the span-only block shape whose text is reconstructed by slicing, so
+the parser contract cannot be violated by a stale second copy), and one
+runtime VALUE beside the types: `MAX_RECORDED_SKIPPED_PAGES`
 (50), the cap on `ingest_jobs.skipped_pages` that migration 008 enforces
 by CHECK — the PADDED_DIM / halfvec(1024) arrangement, a schema fact stated
 once where both packages can read it (the worker stops recording there; the
@@ -1093,8 +1134,8 @@ M1, tested, and then REMOVED on review: 21 MB of image weight and a
 browser-sized parsing surface, for a feature with no caller — crawled docs
 sites are HTML/Markdown, and nothing could hand the product a PDF. Both
 halves of that objection had to be answered before the format came back,
-and both are. The caller exists (a docs site's linked datasheet, and in
-M7.6b an upload), and the dependency is a different one: `unpdf` is 2.1 MB
+and both are. The caller exists — a docs site's linked datasheet since M7.6a, and since
+M7.6b a file the tenant uploads — and the dependency is a different one: `unpdf` is 2.1 MB
 with ZERO dependencies of its own, against pdf-parse's 21 MB and its two
 (`pdfjs-dist` plus a native canvas). It is also loaded by DYNAMIC IMPORT,
 so a stack that never meets a PDF never pays for it.
@@ -1468,6 +1509,46 @@ construction — the enqueue route creates a fresh source, the re-index skips
 busy sources, the worker's requeue moves the SAME row. Both job-inserting
 routes now say ON CONFLICT DO NOTHING and read the row count, which is the
 handoff table's argument (§3.3.4) applied to the queue.
+
+### §3.3.11 `src/db/migrations/009_source_uploads.ts` — what an uploaded file leaves behind
+One row per upload source (M7.6b), holding what the parser extracted rather
+than the file. `sources.kind` allowed 'upload' from 001 and nothing could
+produce one; this is the missing half.
+
+**The bytes are never stored.** They are parsed in the upload request and
+dropped, for two reasons that both point the same way. The file has nowhere
+to go — there is no object storage in this deployment, and a 10 MB PDF in
+Neon's 0.5 GB (which holds ~78k chunks) would cost more than the ~800 chunks
+extracted from it, as a second copy of the same content in the more
+expensive form, that nothing would ever read again: retrieval reads chunks,
+and a citation deep-links by character offset into text we already have. And
+keeping a customer's file is a liability with no matching asset — the
+`org_provider_credentials` argument (§3.3.3), where retaining superseded
+ciphertexts was rejected on exactly that ground.
+
+**The text is not transient, and that is what forced a table** rather than a
+parse-and-forget route. When an org changes its embedding model, §3.22
+re-queues every source, because vectors are stored per (chunk, model) and a
+new model makes the old corpus invisible rather than wrong. A crawl source
+survives that by being fetched again. An upload has nothing to re-fetch — so
+unless the extraction is kept, a model change would silently orphan every
+uploaded document and the widget would stop answering from them with no
+error anywhere. Keeping it is also what makes an upload a first-class
+source: re-indexable, re-chunkable, and re-crawlable in the one sense that
+means anything for a file.
+
+`blocks` holds SPANS ONLY — `{kind, level?, charStart, charEnd}`. The parser
+contract is `block.text === text.slice(charStart, charEnd)`, so storing the
+text again inside the JSONB would double the row to record what the offsets
+already determine, and would introduce the one way the two copies could
+disagree; the worker slices them back out, so the contract holds on the way
+out as on the way in. `format` is what the parser actually READ (detected
+from the bytes, since magic bytes lead §3.10.3's order), not what the
+browser claimed. `byte_size` is the original file's size — the one fact
+about the bytes that outlives them, so the dashboard can say "2.1 MB PDF"
+about something it no longer has. Keyed BY the source (nothing references an
+upload row individually) with ON DELETE CASCADE, and one file per source: a
+replacement is a new upload.
 
 ### §3.4 `src/db/migrate.ts`
 An `ExplicitMigrationProvider`: migrations are registered by import in a
@@ -1890,7 +1971,21 @@ force-exits.
   credential-less org falls back to the mock and never touches the other
   tenant's provider, and a removed credential stops being used on the
   very next question (no cache to serve it stale).
-- `routes/__tests__/internalSources.test.ts` — DB-gated. The enqueue
+- `routes/__tests__/internalSources.test.ts` — DB-gated. The M7.6b upload
+  block: a PDF uploaded as raw bytes with its name and type in headers,
+  parsed IN the request (title from the Info dictionary, format from the
+  MAGIC BYTES), its text and span-only blocks stored — every span sliced back
+  out of the stored text and none of them carrying a `text` key — with the
+  source at depth 0, the job queued, and the wake fired; a PDF the browser
+  called `text/plain` parsed as a PDF anyway; a markdown upload keeping the
+  heading structure a PDF cannot have; the refusals, each with a sentence and
+  nothing stored (a scan named with OCR, bytes that only claim to be a PDF,
+  an empty file, a nameless one, and one whose text is only whitespace) plus
+  a filename that is a path, which is a legal upload once the path is
+  stripped and must not keep its segments; an oversized file 413 before the
+  parser sees a byte; a secretless upload 401 and an unknown org 404, neither
+  enqueueing; and an upload RE-INDEXED from its stored text — the 422 that
+  used to live in the recrawl route. The enqueue
   surface: source + queued job + the wake callback firing; malformed
   inputs (upload kind, non-URLs, embedded credentials, depth out of
   bounds) rejected with ZERO enqueues; the production vet refusing a
@@ -1935,7 +2030,20 @@ force-exits.
   backwards), and the two silences staying NULL rather than becoming a
   zero the cost metric would average in as free — a provider that reports
   no usage, and a gate refusal that ran no model.
-- `ingest/__tests__/worker.test.ts` — DB-gated. **Run-book note: bring up
+- `ingest/__tests__/worker.test.ts` — DB-gated. M7.6b replaced the case that
+  asserted an upload job fails ("uploads are not crawlable") with the two
+  that now hold: an UPLOAD ingested end to end from its stored extraction —
+  under a crawler that THROWS if it is called, since the only proof an upload
+  never touches the network is a crawler that cannot be used silently — with
+  the document named by the FILE, the chunks carrying the heading trail the
+  stored SPANS reconstructed (proof the blocks survived Postgres as structure
+  and not merely as text), every chunk's text a slice of the stored text, and
+  one embedding per chunk; and an upload source whose `source_uploads` row is
+  MISSING failing loudly rather than being treated as a crawl that found
+  nothing, which would soft-delete the document. Its fixture builds the spans
+  with the real parser rather than by hand — the first attempt computed them
+  by eye and put the `# ` marker inside the heading, which the markdown
+  parser excludes by design, so the heading trail came out wrong. **Run-book note: bring up
   ONLY the compose database (`docker compose up -d database`) for test
   runs.** A running realtime container polls this same Postgres with its
   ingest worker and can adopt a job the suite just requeued — the
@@ -2160,6 +2268,21 @@ arm can never see again — the re-index (§3.22) would be a no-op. The cost
 is one indexed EXISTS per unchanged page; the alternative is a widget
 that silently stops answering.
 
+Since M7.6b the worker also ingests UPLOADS, and does it by producing the
+crawler's own event stream: `#uploadEvents` reads the stored extraction
+(§3.3.11) and yields one `plan` and one `page`, so an upload is a crawl of
+exactly one page whose fetch is a database read. That shape is the point —
+everything below the branch stays unchanged, so progress, lease renewal, the
+vanished-document sweep, the status transitions and the failure path all work
+on an upload for free, and there is no second ingest path to keep in step
+with this one. Blocks come back as spans and their text is SLICED out of the
+stored text, so the parser contract holds on the way out as on the way in. A
+missing `source_uploads` row throws rather than yielding nothing: the route
+writes both in one transaction, so one without the other is a broken
+invariant, and treating it as a crawl that found nothing would soft-delete
+the document and leave a tenant a source that reads ready and answers
+nothing.
+
 Since M7.5 the worker also records what a crawl left OUT, and renews its
 lease as it goes. Every `skipped` (robots.txt) and `error` (dead link,
 off-origin redirect, unparseable body) event increments the job's
@@ -2310,6 +2433,53 @@ document titled from its Info dictionary, 12 chunks, 12 embeddings, and
 retrievable through both arms. `unpdf` also loads and extracts inside the
 shipped prod image, which is the failure a dual ESM/CJS package behind a
 dynamic import would otherwise save for production.
+
+#### §3.10.8 The upload path (`POST /internal/orgs/:orgId/sources/upload`)
+The surface the crawler was never going to provide (M7.6b). It lives on the
+internal API (§3.22) because the dashboard is its only caller, and it is
+described here because what it does is ingest.
+
+**Raw bytes, not multipart.** The dashboard has already parsed the browser's
+FormData (Next does it for a Server Action), so what it holds is a buffer and
+a name; asking it to re-encode that as multipart so this side could decode it
+again would add a body-parser dependency to a service with three, each of
+which earned its place — to move one string. The filename rides a header,
+percent-encoded because header values are latin-1 and filenames are not, and
+any path is stripped from it: a filename here is a LABEL (it becomes
+`documents.url`, which is what a citation from an upload shows), never a
+location. The body's content type is always `application/octet-stream`, and
+that is load-bearing rather than lazy — app.ts mounts `express.json` at 64 KB
+across every route, so a customer's `.json` upload announced as
+`application/json` would be claimed and refused by THAT parser before this
+route ran; the browser's claim about the type travels in its own header,
+where detection treats it as one input among several.
+
+**The parse happens in the request**, and that is the decision worth
+defending. It could have been the worker's job. But a parser's refusals are
+the most useful thing this route produces — a scan named with OCR, a
+password-protected file, bytes that are not a PDF — and they are worth the
+most at the moment the tenant pressed Upload with the file still in front of
+them, not minutes later on a row that says failed. Parsing is also the cheap
+half: CPU, bounded by the size cap. What stays queued is EMBEDDING, which is
+external network measured in minutes for a large file — and the dashboard
+runs on Vercel, whose functions cannot hold a request open that long. So the
+split falls exactly where the control-plane/data-plane split already falls.
+
+The size cap is 10 MB, the PDF parser's own number (§3.10.7 already
+anticipated "the upload route has its own"), so one cap governs and a tenant
+can never be told two different limits. `express.raw`'s refusal is invoked by
+hand so its 413 is JSON like every other refusal here, and it fires BEFORE
+any parsing — a PDF parser decompresses, so refusing an 11 MB body after
+parsing it would have already done the expensive thing, which is what the
+security probe's oversized case asserts (§6.3). A file that parses to nothing
+is refused too: a source that reads "ready" and answers nothing is the state
+a tenant cannot debug.
+
+Then one transaction — `sources` (kind 'upload', location the filename,
+depth 0, since a file has no links to follow) + `source_uploads` (§3.3.11) +
+a queued job — and `onEnqueue`, which in production IS the scheduler. The
+response carries the character count, because that is the only honest answer
+to "did that work?" about a file the service deliberately did not keep.
 
 ### §3.11 `realtime/scripts/enqueueSource.ts`
 Dev-only CLI (`npm run enqueue -- <url> [--depth N] [--sitemap]`):
@@ -2871,10 +3041,19 @@ one INSERT with `ON CONFLICT (source_id) WHERE state IN ('queued',
 source with a crawl already queued or running answers `queued: false` and
 writes nothing, and five concurrent clicks insert one job and fire one wake
 (a test fires them together). No read before the insert, no transaction —
-the race resolves in Postgres, §3.23's playbook. Uploads are refused with a
-sentence (the worker fails them by design; manufacturing a job guaranteed to
-fail is not a re-crawl); a source that is another org's, or does not exist,
-or is not even an id, is one 404 — the org guard's stance one level down.
+the race resolves in Postgres, §3.23's playbook. A source that is another
+org's, or does not exist, or is not even an id, is one 404 — the org guard's
+stance one level down. UPLOADS were refused here with a sentence until
+M7.6b, because the worker failed them by design and manufacturing a job
+guaranteed to fail is not a re-crawl; 009 keeps an upload's text, so
+re-ingesting one is now both possible and worth having — an upload whose
+FIRST ingest failed on a wrong embedding credential or a provider outage
+otherwise left the tenant nothing to click but "upload the file again". The
+route needs to know nothing about the difference; the dashboard calls the
+button "Re-index" for a file.
+
+Since M7.6b it also owns the UPLOAD route (§3.10.8), which is described with
+the ingest pipeline because that is what it does.
 `enqueueReindex` gained the same ON CONFLICT clause, so a click landing
 between its read and its insert can no longer turn a unique violation into
 a rolled-back credential save.
@@ -3187,7 +3366,11 @@ or 401 (configured: secretless request rejected); anything else means
 the admin surface leaks. Since M7.3 the same posture line for
 `POST /v1/sessions`: mounted (not 404), closed (401 without a bearer), and
 carrying NO CORS header — a page that could use a secret key is the one
-thing that route exists to make impossible. Failures are counted
+thing that route exists to make impossible. Since M7.6b the upload route
+gets its own line beside the credential one, though both are on the same
+internal surface, because it is the one internal route that accepts
+MEGABYTES: left open it would let a stranger spend the service's memory and
+its PDF parser, not merely read a status. Failures are counted
 rather than thrown so one broken endpoint doesn't mask the state of the
 rest; every fetch carries a timeout because a probe that can hang turns a
 dead service into a stuck CI job.
@@ -3257,6 +3440,26 @@ shape violations are refused with a sentence and nothing is stored (the
 control that the route parses rather than refusing everything); and no
 answer carries CORS headers, so a browser cannot read the surface cross-
 origin.
+
+**Oversized uploads (M7.6b)** close the last item the plan's M6 list named
+and M6.4 could not run, because file uploads did not exist then — three
+checks in section H: an 11 MB body behind a valid PDF header answered 413
+with the limit in the sentence AND answered before the parser ran (a PDF
+parser decompresses, so refusing after parsing would already have done the
+expensive thing — asserted as a bound on elapsed time, written loose enough
+never to flake on a loaded runner and tight enough that a full parse would
+trip it); a file the parser cannot read answered 422 rather than 500, since
+an unhandled parser throw reaching the top of the route is how a malformed
+file becomes a denial of service; and a secretless upload answered with the
+same empty 401 as every other internal call. That nothing was STORED by a
+refusal is asserted in the unit suite instead, and the probe says why: this
+surface has no sources read route (the dashboard reads that table straight
+from Postgres, §9.9), so a black-box probe cannot observe it, and pretending
+otherwise would be a check that passes because it looks at nothing. The
+smoke probe (§6.1) gained a posture line for the same route, because it is
+the one internal route that accepts megabytes: left open it would let a
+stranger spend the service's memory and its PDF parser, not merely read a
+status.
 
 **[I] server-side sessions (M7.3)** — layer 6, between H and G because G
 drains the buckets. What must hold, and does: a missing, garbage, unknown,
@@ -4193,6 +4396,61 @@ is that page.
   already shows that state. lib/realtime's client test pins the wire: POST,
   the path, the secret header, and `queued` read back with `false` a normal
   answer.
+
+**M7.6b — uploading a file.** The sources page gained a second card, "Or
+upload a file", whose lead note states the one thing a tenant should know
+before using it: the file is read when they upload it and is NOT stored —
+what is kept is the text extracted from it, which is what gets indexed and
+cited — and that a scanned PDF is refused rather than indexed as an empty
+document. `UploadSourceForm` is useActionState-shaped where Re-crawl is a
+plain form action, because an upload is the one source operation that can
+fail for reasons only the FILE knows, and those sentences have to land
+somewhere the tenant is looking. It checks the size before sending (Next's
+Server Action limit would fail the request before the action ran, and
+realtime's fires after 10 MB has crossed the wire; neither can produce a good
+message from inside the browser) and names the file it is about to send,
+because a file input renders differently in every browser and a tenant who
+picked the wrong document should learn that before waiting for it to index.
+`uploadSourceAction` re-checks the OWNER ladder — a Server Action is
+reachable as a direct POST — and reports the character count, the only honest
+answer to "did that work?" about a file the service did not keep.
+`queries.ts` carries each upload's format and size beside its row and
+deliberately selects NEITHER `text` NOR `blocks`: this page shows what the
+file WAS, and a multi-megabyte extraction has no business crossing the wire
+to render a list item (providers/queries.ts's greppable rule about
+`key_ciphertext`, applied to a second column). The row shows "pdf · 2.1 MB"
+where a crawl shows its kind and depth, "indexed" rather than "1 pages
+indexed" (an upload is always one document, and the plural reads as a crawl
+that went nowhere), and its button says **Re-index**. `next.config.ts` raises
+`serverActions.bodySizeLimit` to 12mb — deliberately ABOVE realtime's 10 MB
+cap, so the answer to an oversized file is the 413 with the number in it
+rather than a framework error the tenant cannot act on.
+
+**M7.6b verified live** against the dev servers and the compose database,
+with a REAL document rather than a fixture — M7.6a's lesson, since a
+hand-built PDF has none of the compressed streams, embedded fonts and xref
+streams a document toolchain emits: RFC 9309's own PDF (12 pages, 177 KB)
+uploaded through the form, parsed IN the request, and stored as 22,117
+characters of text with 12 span-only blocks and the title "RFC 9309: Robots
+Exclusion Protocol" from its Info dictionary; the worker ingesting it from
+that stored text into one document, 12 chunks and 12 embeddings; the success
+line reading "RFC 9309 robots.pdf read — 22,117 characters of text. Indexing
+starts now."; the row reading "pdf · 174 KB · indexed" with a **Re-index**
+button; a SCAN (a PDF with no text layer, built by the test suite's own
+fixture writer) refused with "The PDF has no text layer — it is probably a
+scan, which needs OCR before it can be indexed." and no source created;
+Re-index queued, run, and leaving one source with the same 12 chunks rather
+than a duplicate; an 11 MB file refused by the form itself ("enormous.pdf is
+11.0 MB — the limit is 10 MB") with the button disabled, before the upload
+was spent; and `npm run search` returning the uploaded document's chunks
+through BOTH retrieval arms, cited under the FILENAME and each marked "(no
+heading)" — the documented PDF limitation, visible rather than asserted. At
+375px the page never scrolled sideways with nothing past the viewport edge,
+including a 99-character filename, the row stacked; at 1280px the two halves
+sat side by side. The check found one wart and fixed it: a re-indexing upload
+said "crawling — 1/1 pages", which is the product describing itself doing the
+one thing it promises not to do with a file, so `jobLabel` now says
+"indexing…" and "not indexed" for uploads.
 
 **Verified live** against the dev servers and the compose database, with
 two REAL sites rather than fixtures: `https://nodejs.org/en` connected at

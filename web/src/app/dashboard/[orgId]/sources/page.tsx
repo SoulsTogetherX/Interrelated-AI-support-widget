@@ -2,11 +2,14 @@
 // auto-refreshes ONLY while a job is moving (AutoRefresh mounts
 // conditionally), so an idle page is a static snapshot. Since M7.5 each
 // source also says what its last crawl did NOT take and why — robots.txt
-// rules, dead links — and an owner can crawl it again from here.
+// rules, dead links — and an owner can crawl it again from here. Since
+// M7.6b a source can also be a FILE the tenant uploads, which is the same
+// row with a filename where a URL would be.
 import Link from "next/link"
 
 import AddSourceForm from "@/components/AddSourceForm"
 import AutoRefresh from "@/components/AutoRefresh"
+import UploadSourceForm from "@/components/UploadSourceForm"
 import { requireOrgMember } from "@/lib/orgs"
 import { recrawlSourceAction } from "@/lib/sources/actions"
 import { hasActiveJob, listSourcesWithProgress } from "@/lib/sources/queries"
@@ -18,7 +21,7 @@ export const metadata = { title: "Sources — Interrelated" }
 
 function jobLabel(source: SourceWithProgress): string {
   const job = source.job
-  if (!job) return "never crawled"
+  if (!job) return source.kind === "upload" ? "not indexed" : "never crawled"
   // "· N skipped" rides along wherever there is a count to show: while the
   // crawl runs (the number grows with the progress) and once it is done.
   const skipped = job.skippedCount > 0 ? ` · ${job.skippedCount} skipped` : ""
@@ -26,22 +29,38 @@ function jobLabel(source: SourceWithProgress): string {
     case "queued":
       return "queued…"
     case "running":
+      // A file is not crawled, it is re-read from the text we kept — and
+      // "crawling — 1/1 pages" about a document the tenant handed over reads
+      // as the product doing something it explicitly promises not to do.
+      if (source.kind === "upload") return `indexing…${skipped}`
       return job.docsTotal !== null
         ? `crawling — ${job.docsDone ?? 0}/${job.docsTotal} pages${skipped}`
         : `crawling — ${job.docsDone ?? 0} pages${skipped}`
     case "done":
+      // An upload is always one document, and "1 pages indexed" about a file
+      // the tenant just handed over reads as a crawl that went nowhere.
+      if (source.kind === "upload") return `indexed${skipped}`
       return `${source.documentCount} pages indexed${skipped}`
     case "failed":
       return `failed: ${job.error ?? "unknown error"}`
   }
 }
 
-/** A crawl can be queued again unless one is already queued or running,
- *  and never for an upload (the worker does not crawl those). */
+/** A source can be ingested again unless a job is already queued or running.
+ *  Uploads included since M7.6b: migration 009 keeps the extracted text, so
+ *  an upload whose first ingest failed — a wrong embedding credential, a
+ *  provider outage — has something to retry FROM. Before that, its only
+ *  recourse was to upload the file a second time. */
 function canRecrawl(source: SourceWithProgress): boolean {
-  if (source.kind === "upload") return false
   const state = source.job?.state
   return state !== "queued" && state !== "running"
+}
+
+/** Bytes as a tenant would write them — binary units, matching the cap. */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export default async function SourcesPage({
@@ -75,6 +94,21 @@ export default async function SourcesPage({
         </section>
       ) : null}
 
+      {isOwner ? (
+        <section className="sources-card">
+          <h2 className="sources-subtitle">Or upload a file</h2>
+          <p className="sources-note">
+            PDF, Markdown, HTML or plain text, up to 10 MB — for the handbook
+            or policy that is not on a public page. The file is read when you
+            upload it and is <strong>not stored</strong>: what we keep is the
+            text extracted from it, which is what gets indexed and cited. A
+            scanned PDF has no text to extract and is refused rather than
+            indexed as an empty document.
+          </p>
+          <UploadSourceForm orgId={org.id} />
+        </section>
+      ) : null}
+
       <section className="sources-card">
         {sources.length === 0 ? (
           <p className="sources-empty">
@@ -91,7 +125,9 @@ export default async function SourcesPage({
                     <div className="sources-itemmain">
                       <span className="sources-location">{s.location}</span>
                       <span className="sources-kind">
-                        {s.kind}
+                        {s.kind === "upload" && s.upload
+                          ? `${s.upload.format} · ${formatSize(s.upload.byteSize)}`
+                          : s.kind}
                         {s.kind === "url" ? ` · depth ${s.crawlDepth}` : ""}
                       </span>
                     </div>
@@ -104,7 +140,7 @@ export default async function SourcesPage({
                           <input type="hidden" name="orgId" value={org.id} />
                           <input type="hidden" name="sourceId" value={s.id} />
                           <button className="sources-recrawl" type="submit">
-                            Re-crawl
+                            {s.kind === "upload" ? "Re-index" : "Re-crawl"}
                           </button>
                         </form>
                       ) : null}

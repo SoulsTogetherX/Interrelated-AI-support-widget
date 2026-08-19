@@ -35,8 +35,8 @@ loadRepoRootEnv()
 //#endregion
 
 // The config itself is deliberately near-empty: the defaults are correct for
-// this app, and every option added here is one more thing to explain. The
-// one exception:
+// this app, and every option added here is one more thing to explain. Two
+// exceptions:
 //
 // outputFileTracingRoot points at the REPO root, not this package. shared/
 // lives one directory up and is imported through the @shared/* alias with no
@@ -44,8 +44,19 @@ loadRepoRootEnv()
 // has to be told the true project root or traced files outside web/ would be
 // dropped. It also silences Next's "multiple lockfiles" root-inference
 // warning, which this flat multi-package layout triggers by construction.
+//
+// serverActions.bodySizeLimit: a Server Action request is capped at 1 MB by
+// default, and the file-upload action (M7.6b, §9.9) carries the file itself.
+// Deliberately set ABOVE realtime's 10 MB upload cap rather than at it: when
+// Next enforces this limit the action never runs, so the tenant would get a
+// framework error instead of the sentence naming the actual number. The
+// headroom leaves realtime's 413 — and the form's own client-side check —
+// as the things that answer an oversized file.
 const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(__dirname, ".."),
+  experimental: {
+    serverActions: { bodySizeLimit: "12mb" },
+  },
 }
 
 export default nextConfig

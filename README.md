@@ -57,7 +57,8 @@ with pgvector on Neon. The full file-by-file reference is
 [CLAUDE.md](CLAUDE.md); the request-by-request traces are
 [DATAFLOW.md](DATAFLOW.md). Section numbers below refer to CLAUDE.md.
 
-**Ingest** (§3.10) — a source URL goes through an SSRF-guarded fetcher
+**Ingest** (§3.10) — a source is a URL to crawl or a file the tenant
+uploads. A URL goes through an SSRF-guarded fetcher
 (every DNS answer must be public; redirects re-vetted per hop; a
 connect-time hook re-checks the address actually dialed, which closes DNS
 rebinding), a crawler that reads the site's `robots.txt` first and honors
@@ -73,7 +74,11 @@ it is the one dependency this project removed and then re-admitted: a
 format came back only when both objections could be answered — 2.1 MB with
 no dependencies, dynamically imported so a stack that never meets a PDF
 never pays for it, and refusing a scanned PDF with a sentence naming OCR
-rather than storing a source that answers nothing. Storage is `halfvec(1024)` with one partial HNSW
+rather than storing a source that answers nothing. An UPLOAD skips the
+fetcher and the crawler and joins at the parser: it is parsed inside the
+upload request, so a refusal reaches the tenant while the file is still in
+front of them, and everything after that is the ordinary path — the worker
+ingests it as a crawl of one page whose fetch is a database read. Storage is `halfvec(1024)` with one partial HNSW
 index per model and `org_id` denormalized onto the vector table — because
 HNSW searches then filters, and a small tenant inside a large index would
 otherwise get fewer than *k* results. A regression test seeds 20 tenants and
@@ -208,9 +213,14 @@ every CI run.
   sentence. What the design guarantees is narrower and stated: no uncited
   text, no attacker-controlled citation, and the system prompt never in
   anything the visitor sees, all asserted from outside.
-- **Not built:** file uploads. PDFs are read (crawled ones, since M7.6a);
-  what is missing is the surface that lets a customer hand one over
-  directly, and it is named where it would land.
+- **An uploaded file is not kept — its text is.** There is no object storage
+  here, and Neon's 0.5 GB holds ~78k chunks, so a 10 MB PDF would cost more
+  than the ~800 chunks extracted from it, as a second copy of the same
+  content in the more expensive form. The upload is parsed in the request
+  and the bytes are dropped; the extraction is stored, which is also what
+  makes an upload survive an embedding-model change (a crawl re-fetches; an
+  upload has nothing to re-fetch). The practical limit is that we cannot
+  re-parse a file later under a better parser without asking for it again.
 - **A PDF's chunks carry no heading trail.** Headings in a PDF are a
   font-size convention rather than a structure, so inferring them would be
   a heuristic with silent failure modes; PDF chunks are found by their text.

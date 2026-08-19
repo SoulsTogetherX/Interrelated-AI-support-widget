@@ -26,10 +26,13 @@ import { timingSafeEqual } from "node:crypto"
 
 import { newId, isId } from "@shared/utils/ids"
 
+import express from "express"
 import { sql } from "kysely"
 
 import { db } from "@/db/pool"
 import { assertPublicUrl } from "@/ingest/safeFetch"
+import { parseResource, detectFormat } from "@/ingest/parsers"
+import { PdfParseError } from "@/ingest/parsers/pdf"
 import {
   buildEmbeddingProvider,
   buildGenerationProvider,
@@ -74,6 +77,28 @@ interface InternalRouteOptions {
    *  server still has a working close. */
   onHandoffClosed?: (conversationId: string) => void
 }
+//#endregion
+
+//#region Upload body
+/**
+ * The largest file this surface accepts, and the same number the PDF parser
+ * backstops at (§3.10.7) — one cap across the system rather than two that
+ * could disagree about which one a tenant hit.
+ *
+ * It bounds two different things, and only one of them completely. Bytes in
+ * flight, yes. Storage, no: migration 009 keeps the EXTRACTED TEXT, which for
+ * a PDF is a small fraction of the file and for a plain-text upload is the
+ * whole of it — so the honest ceiling on what an upload costs Neon's 0.5 GB
+ * is this number, and it is stated in the README rather than implied.
+ */
+const UPLOAD_MAX_MB = 10
+const UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
+
+/** Every content type, because the browser's claim is an input to detection
+ *  rather than a gate — magic bytes decide (parsers/index.ts), and a type
+ *  allowlist here would refuse the PDF a misconfigured client sends as
+ *  octet-stream while admitting nothing it could not already read. */
+const uploadBody = express.raw({ type: () => true, limit: UPLOAD_MAX_BYTES })
 //#endregion
 
 //#region Auth
@@ -377,6 +402,167 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
   )
 
   /**
+   * Upload a file as a source (M7.6b) — the surface the crawler was never
+   * going to provide, and the last thing the README listed as not built.
+   *
+   * RAW BYTES, not multipart. The dashboard has already parsed the browser's
+   * FormData (Next does it for a Server Action), so what it has is a buffer
+   * and a name; asking it to re-encode that as multipart so this side could
+   * decode it again would add a body-parser dependency to a service with
+   * three, each of which earned its place — to move one string. The filename
+   * rides a header, percent-encoded because HTTP header values are latin-1
+   * and filenames are not.
+   *
+   * The parse happens HERE, in the request, and that is the decision worth
+   * defending. It could have been the worker's job, one more thing the queue
+   * does. But a parser's refusals are the most useful thing this route
+   * produces — "this PDF is a scan, its content is pixels, run OCR first",
+   * "it is password-protected" — and they are worth the most at the moment
+   * the tenant pressed Upload with the file still in front of them, not
+   * minutes later on a row that says failed. Parsing is also the cheap half:
+   * CPU, bounded by the size cap. What the queue keeps is EMBEDDING, which is
+   * external network measured in minutes for a large file — and the dashboard
+   * runs on Vercel, whose functions cannot hold a request open that long.
+   * So the split falls exactly where the control-plane/data-plane split
+   * already falls: parse now, answer, embed in the worker.
+   *
+   * The bytes are never stored (migration 009 explains what is, and why the
+   * text must be). Everything after this route is the ordinary ingest path:
+   * source + job in one transaction, then the wake that IS the scheduler.
+   */
+  app.post(
+    "/internal/orgs/:orgId/sources/upload",
+    requireSecret,
+    requireOrg,
+    // The body parser is invoked by hand so its 413 is JSON like every other
+    // refusal here, instead of Express's default HTML error page.
+    (req: Request, res: Response, next: NextFunction) => {
+      uploadBody(req, res, (err: unknown) => {
+        if (err) {
+          res.status(413).json({ ok: false, error: `The file is larger than ${UPLOAD_MAX_MB} MB.` })
+          return
+        }
+        next()
+      })
+    },
+    async (req: Request, res: Response) => {
+      const rawName = req.header("x-upload-filename") ?? ""
+      let filename = ""
+      try {
+        filename = decodeURIComponent(rawName).trim()
+      } catch {
+        // Malformed percent-encoding: treated as no name at all.
+      }
+      // Mirrors the schema CHECK so the tenant sees a sentence rather than a
+      // constraint violation, and strips any path the browser sent with it —
+      // a name is a label here, never a filesystem location.
+      filename = filename.replace(/^.*[\\/]/, "")
+      if (filename === "" || filename.length > 255) {
+        res.status(422).json({ ok: false, error: "A file name of 1–255 characters is required." })
+        return
+      }
+
+      const body: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
+      if (body.byteLength === 0) {
+        res.status(422).json({ ok: false, error: "The file is empty." })
+        return
+      }
+
+      // The browser's claim about the type, which detection treats as one
+      // input among several — magic bytes lead, so a PDF sent as text/plain
+      // is still parsed as a PDF (parsers/index.ts).
+      //
+      // It rides its OWN header because the body's content-type is always
+      // application/octet-stream on this hop: app.ts mounts express.json at
+      // 64 KB for every route, and a customer uploading a .json file — an API
+      // schema, an exported FAQ — would otherwise have it claimed and refused
+      // by the JSON parser before this route ever ran. To this hop the file is
+      // opaque bytes, which is what it is; what the browser called it is
+      // metadata, and metadata travels beside the filename.
+      const declared = (req.header("x-upload-content-type") ?? "").toLowerCase()
+      const [bareType = "", ...params] = declared.split(";").map((p) => p.trim())
+      const charsetParam = params.find((p) => p.startsWith("charset="))
+      const resource = {
+        url: filename,
+        contentType: bareType === "application/octet-stream" ? "" : bareType,
+        charset: charsetParam ? charsetParam.slice("charset=".length) : null,
+        body,
+      }
+
+      let parsed
+      try {
+        parsed = await parseResource(resource)
+      } catch (err) {
+        // A parser that throws has a reason a tenant can act on — every
+        // PdfParseError message is written to be read by one. Anything else
+        // is a bug, and says only that.
+        const message = err instanceof PdfParseError
+          ? err.message
+          : "The file could not be read."
+        res.status(422).json({ ok: false, error: message[0]?.toUpperCase() + message.slice(1) + "." })
+        return
+      }
+
+      // A file that parsed but holds nothing is refused rather than stored:
+      // a source that is "ready" and answers nothing is the state a tenant
+      // cannot debug. (A scanned PDF never reaches here — the parser refuses
+      // it by name, with OCR in the sentence.)
+      if (parsed.text.trim() === "" || parsed.blocks.length === 0) {
+        res.status(422).json({ ok: false, error: "No text could be read from the file." })
+        return
+      }
+
+      const sourceId = newId("src")
+      const jobId = newId("job")
+      await db.transaction().execute(async (trx) => {
+        await trx.insertInto("sources").values({
+          id: sourceId,
+          org_id: res.locals.orgId as string,
+          kind: "upload",
+          location: filename,
+          // A file has no links to follow. The column defaults to 1, and a
+          // depth on an upload would be a number that means nothing.
+          crawl_depth: 0,
+        }).execute()
+        await trx.insertInto("source_uploads").values({
+          source_id: sourceId,
+          filename,
+          format: detectFormat(resource),
+          byte_size: body.byteLength,
+          title: parsed.title,
+          text: parsed.text,
+          // Spans only — the text is not stored twice (migration 009).
+          blocks: JSON.stringify(parsed.blocks.map((b) => ({
+            kind: b.kind,
+            ...(b.level !== undefined ? { level: b.level } : {}),
+            charStart: b.charStart,
+            charEnd: b.charEnd,
+          }))),
+        }).execute()
+        await trx.insertInto("ingest_jobs").values({
+          id: jobId,
+          org_id: res.locals.orgId as string,
+          source_id: sourceId,
+        }).execute()
+      })
+      options.onEnqueue?.()
+
+      res.json({
+        ok: true,
+        sourceId,
+        jobId,
+        filename,
+        format: detectFormat(resource),
+        title: parsed.title,
+        // What the tenant gets to see about a file we no longer hold: how
+        // much text came out of it, which is the only honest answer to "did
+        // that work?" before the embedding has run.
+        charCount: parsed.text.length,
+      })
+    },
+  )
+
+  /**
    * Re-crawl one source (M7.5) — the action the sources page's new visibility
    * exists for. Until now a source was crawled once, when connected, and
    * again only when the org's embedding model changed; a tenant who saw
@@ -388,11 +574,18 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
    * lives here. Idempotent the cheap way — a source with a job already
    * queued or running answers `queued: false` and writes nothing, since a
    * second job would crawl the same site twice for one outcome (the
-   * re-index helper above makes the same call). Uploads are refused with a
-   * sentence: the worker fails them by design, and manufacturing a job that
-   * is guaranteed to fail is not a re-crawl. A source that is not this org's,
-   * or does not exist, or is not even an id, is one 404 — the org guard's
-   * stance, one level down.
+   * re-index helper above makes the same call). A source that is not this
+   * org's, or does not exist, or is not even an id, is one 404 — the org
+   * guard's stance, one level down.
+   *
+   * UPLOADS were refused here with a sentence until M7.6b, because the worker
+   * failed them by design and manufacturing a job guaranteed to fail is not a
+   * re-crawl. Migration 009 keeps an upload's extracted text, so re-ingesting
+   * one is now both possible and worth having: an upload whose FIRST ingest
+   * failed — a wrong embedding credential, a provider outage — otherwise left
+   * the tenant nothing to click but "upload the file again". Nothing here
+   * needs to know the difference; the worker reads the stored text where a
+   * crawl would fetch. The dashboard calls the button "Re-index" for a file.
    */
   app.post(
     "/internal/orgs/:orgId/sources/:sourceId/recrawl",
@@ -407,16 +600,12 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       }
       const source = await db
         .selectFrom("sources")
-        .select(["id", "kind"])
+        .select("id")
         .where("id", "=", sourceId)
         .where("org_id", "=", res.locals.orgId as string)
         .executeTakeFirst()
       if (!source) {
         res.status(404).end()
-        return
-      }
-      if (source.kind === "upload") {
-        res.status(422).json({ ok: false, error: "Uploaded files are not crawled; upload the file again to replace it." })
         return
       }
 

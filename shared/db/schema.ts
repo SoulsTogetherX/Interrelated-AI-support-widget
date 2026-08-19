@@ -171,6 +171,45 @@ interface SourcesTable {
   created_at: ColumnType<Date, string | Date | undefined, never>
 }
 
+/** One block of an uploaded document, as STORED (migration 009): a span,
+ *  never the text. The parser contract is
+ *  `block.text === text.slice(charStart, charEnd)`, so keeping the text here
+ *  too would double the row to record what the offsets already determine —
+ *  and would create the one way the two copies could disagree. The worker
+ *  slices them back out, so the contract holds on the way out as on the way
+ *  in. `level` rides along only for headings, as in the chunker's Block. */
+interface UploadBlockSpan {
+  kind: "heading" | "paragraph" | "code"
+  level?: number
+  charStart: number
+  charEnd: number
+}
+
+/** What an uploaded file left behind (migration 009) — one row per upload
+ *  source, holding the parser's extraction rather than the file. The bytes
+ *  are parsed in the upload request and dropped; this text is what the
+ *  worker chunks and embeds, and — the reason it is kept at all — the only
+ *  thing an embedding-model change can re-embed, since an upload has
+ *  nothing to re-fetch. */
+interface SourceUploadsTable {
+  source_id: string
+  /** The name the customer's file had; copied to documents.url so a
+   *  citation from an upload can say where it came from. */
+  filename: string
+  /** Which parser read it, DETECTED from the bytes rather than declared. */
+  format: "pdf" | "html" | "markdown"
+  /** The original file's size — the one fact about the bytes that outlives
+   *  them, so the dashboard can say "2.1 MB PDF" about a file it no longer
+   *  has. */
+  byte_size: number
+  title: string | null
+  text: string
+  /** Written as a JSON string (pg would serialize a JS array as a Postgres
+   *  array literal), read back parsed — ingest_jobs.skipped_pages exactly. */
+  blocks: ColumnType<UploadBlockSpan[], string, string>
+  uploaded_at: ColumnType<Date, string | Date | undefined, never>
+}
+
 /** One fetched page or uploaded file. content_hash (sha256 of normalized
  *  text) is the recrawl short-circuit: identical hash → skip re-chunk and
  *  re-embed, which is what keeps recrawls nearly free on embedding quota.
@@ -466,6 +505,7 @@ interface Database {
   org_provider_credentials: OrgProviderCredentialsTable
   allowed_origins: AllowedOriginsTable
   sources: SourcesTable
+  source_uploads: SourceUploadsTable
   documents: DocumentsTable
   chunks: ChunksTable
   chunk_embeddings: ChunkEmbeddingsTable
@@ -492,6 +532,8 @@ export type {
   OrgProviderCredentialsTable,
   AllowedOriginsTable,
   SourcesTable,
+  SourceUploadsTable,
+  UploadBlockSpan,
   DocumentsTable,
   ChunksTable,
   ChunkEmbeddingsTable,

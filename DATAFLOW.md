@@ -229,15 +229,25 @@ IngestWorker poll timer fires
 
 ```
 #runJob                                  realtime/src/ingest/worker.ts
-  → load sources row; kind='upload' → fail loudly (uploads are parsed at
-    upload time in M3, never crawled)
+  → load sources row
   → sources.status = 'crawling'
   → resolveEmbeddingProvider(db, org)    realtime/src/credentials/resolve.ts
       the org's BYO embedding model, decrypted for this job; null → the
       app-level embedder. Resolved ONCE per job: a rotation landing
       mid-crawl would split one source across two vector spaces.
       A decrypt failure throws → job 'failed' (never a silent wrong model)
-  → for await (event of crawl(source))   realtime/src/ingest/crawler.ts
+  → for await (event of EVENTS)
+      kind='upload' → #uploadEvents(source.id)   (M7.6b: a crawl of ONE
+        page whose fetch is a database read — source_uploads gives back the
+        extraction the upload route stored, blocks SLICED out of the text by
+        their spans, so the parser contract holds on the way out as on the
+        way in. A missing row throws: an upload source without its
+        extraction is a broken invariant, and treating it as a crawl that
+        found nothing would soft-delete the document below. Producing the
+        crawler's own event shape is what lets every line after this one —
+        progress, lease renewal, the vanished sweep, the failure path —
+        work on an upload unchanged)
+      otherwise → crawl(source)          realtime/src/ingest/crawler.ts
       (crawl() reads <origin>/robots.txt FIRST — §3.3 — and a root the
        file disallows, or a file that is unreachable, throws CrawlError
        before any page: "nothing crawlable — disallowed by robots.txt
@@ -1008,7 +1018,9 @@ job queued or running:
       → recrawlSource                    web/src/lib/realtime/index.ts
           POST …/internal/orgs/<org>/sources/<src>/recrawl
         → requireSecret → requireOrg     realtime/src/routes/internal.ts
-        → source is this org's and not an upload (else 404 / 422)
+        → source is this org's (else 404). Uploads included since
+          M7.6b — 009 keeps their text, so there is something to
+          re-ingest FROM; the button reads "Re-index" for a file
         → INSERT ingest_jobs … ON CONFLICT (source_id)
              WHERE state IN ('queued','running') DO NOTHING
            (008's partial unique index: one LIVE job per source — five
@@ -1017,6 +1029,68 @@ job queued or running:
           none → {queued: false}, and nothing else happens
       → revalidatePath(sources page)     the source now reads "queued…",
                                          and AutoRefresh mounts
+```
+
+### §7.9a Uploading a file as a source (M7.6b)
+
+The other way documentation gets in: the tenant hands over the file
+instead of naming a page to fetch. The split of work is the point — the
+PARSE happens in the request, the EMBED stays behind the queue.
+
+```
+UploadSourceForm submit  (file input; >10 MB refused in the browser
+  before it is spent — the service enforces it again regardless)
+  → uploadSourceAction                 web/src/lib/sources/actions.ts
+    → currentUser → getOrgForMember → OWNER
+    → file.arrayBuffer()               Next already buffered it to parse
+                                       the FormData; next.config.ts raises
+                                       serverActions.bodySizeLimit to 12mb
+                                       (ABOVE realtime's 10 MB cap, so the
+                                       413 that answers is the one with the
+                                       number in it, not a framework error)
+    → uploadSource                     web/src/lib/realtime/index.ts
+        POST …/internal/orgs/<id>/sources/upload
+        content-type: application/octet-stream   ← NOT the file's own type:
+          realtime mounts express.json at 64 KB across every route, so a
+          .json upload announced as application/json would be claimed and
+          refused by that parser before this route ran
+        x-upload-filename: <percent-encoded>     ← header values are
+          latin-1; filenames are not
+        x-upload-content-type: <the browser's claim>
+      → requireSecret → requireOrg     realtime/src/routes/internal.ts
+      → express.raw({limit: 10 MB})    invoked by hand so its refusal is
+          over the cap → 413 JSON       JSON like every other one here.
+          Nothing is parsed: a PDF parser decompresses, so refusing a big
+          body AFTER parsing would have already done the expensive thing
+      → filename: decode, strip any path (a name is a LABEL here, never a
+          location), 1–255 chars else 422
+      → parseResource({url: filename, contentType, charset, body})
+          realtime/src/ingest/parsers/index.ts — magic bytes lead, so a PDF
+          the browser called text/plain is still read as a PDF (§3.10.3)
+        · PdfParseError → 422 with the parser's own sentence: a SCAN names
+          OCR, a password-protected file says so. This is why the parse is
+          in the request at all — those sentences are worth the most while
+          the tenant still has the file in front of them
+        · parsed but empty → 422 (a source that reads "ready" and answers
+          nothing is the state a tenant cannot debug)
+      → ONE transaction:
+          INSERT sources        (kind='upload', location=filename, depth 0)
+          INSERT source_uploads (filename, format DETECTED, byte_size,
+                                 title, text, blocks AS SPANS — the text is
+                                 not stored twice; migration 009)
+          INSERT ingest_jobs    (queued)
+      → onEnqueue() → worker.wake() → §3.2, which reads the row back
+      → {sourceId, filename, format, title, charCount}
+    → revalidatePath(sources page)
+    → "handbook.pdf read — 4,210 characters of text. Indexing starts now."
+       (the character count is the only honest answer to "did that work?"
+        about a file the service deliberately did not keep)
+
+THE BYTES ARE NEVER STORED. What survives is the extraction — which is
+also what makes the upload a first-class source: when the org changes its
+embedding model, §3.22 re-queues every source, and a crawl answers that by
+being fetched again while an upload has nothing to re-fetch. Without the
+stored text a model change would silently orphan every uploaded document.
 ```
 
 ### §7.10 Reading a transcript — GET `/dashboard/[orgId]/conversations/[id]`

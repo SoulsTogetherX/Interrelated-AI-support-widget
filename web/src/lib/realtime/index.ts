@@ -221,9 +221,76 @@ export async function createSource(
   }
 }
 
-/** Queue a fresh crawl of one source (M7.5) — through realtime for the same
- *  reason connecting one is: the job row is not the whole effect, the wake
- *  is. `queued: false` is a normal answer (a crawl is already queued or
+/**
+ * Upload a file as a source (M7.6b). The one call in this client that does
+ * not go through `call()`, because it does not send JSON: the bytes travel
+ * raw, with the filename and the browser's declared type in headers.
+ *
+ * `application/octet-stream` on the body is deliberate rather than lazy —
+ * realtime mounts a 64 KB JSON parser across every route, so a customer's
+ * `.json` upload announced as `application/json` would be claimed and refused
+ * by that parser before the upload route ran. To this hop the file is opaque
+ * bytes, which is what it is.
+ *
+ * The timeout is longer than the shared 30 s: this request carries up to
+ * 10 MB and realtime parses it before answering (a big PDF is seconds of
+ * CPU). It is still bounded well inside a serverless function's ceiling,
+ * which is the whole reason the EMBEDDING stays behind the queue.
+ */
+export async function uploadSource(
+  orgId: string,
+  file: { name: string; type: string; bytes: ArrayBuffer },
+): Promise<InternalResult<{ sourceId: string; filename: string; format: string; charCount: number }>> {
+  const cfg = config()
+  if (!cfg) {
+    return { ok: false, error: NOT_CONNECTED }
+  }
+  let res: Response
+  try {
+    res = await fetch(`${cfg.baseUrl}/internal/orgs/${orgId}/sources/upload`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        // Percent-encoded: HTTP header values are latin-1, filenames are not.
+        "x-upload-filename": encodeURIComponent(file.name),
+        "x-upload-content-type": file.type || "application/octet-stream",
+        "x-internal-secret": cfg.secret,
+      },
+      body: file.bytes,
+      cache: "no-store",
+      signal: AbortSignal.timeout(120_000),
+    })
+  } catch {
+    return { ok: false, error: "Could not reach the realtime service." }
+  }
+  if (res.status === 401) {
+    return { ok: false, error: "The internal API secret is misconfigured (401)." }
+  }
+  let body: Record<string, unknown> = {}
+  try {
+    body = (await res.json()) as Record<string, unknown>
+  } catch {
+    // Non-JSON body (a proxy's own 413 page, a 404 .end()).
+  }
+  if (!res.ok) {
+    const error = typeof body.error === "string" ? body.error : `Upload failed (${res.status}).`
+    return { ok: false, error }
+  }
+  return {
+    ok: true,
+    value: {
+      sourceId: typeof body.sourceId === "string" ? body.sourceId : "",
+      filename: typeof body.filename === "string" ? body.filename : file.name,
+      format: typeof body.format === "string" ? body.format : "",
+      charCount: typeof body.charCount === "number" ? body.charCount : 0,
+    },
+  }
+}
+
+/** Queue a fresh crawl of one source (M7.5), or re-index an uploaded file
+ *  from its stored text (M7.6b) — through realtime for the same reason
+ *  connecting one is: the job row is not the whole effect, the wake is.
+ *  `queued: false` is a normal answer (a crawl is already queued or
  *  running), not an error. */
 export async function recrawlSource(
   orgId: string,

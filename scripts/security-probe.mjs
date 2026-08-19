@@ -653,6 +653,83 @@ if (!fixture) {
       expect(res.status === 200, `status ${res.status}`)
       expect(res.headers.get("access-control-allow-origin") === null, "CORS header on an internal response")
     })
+
+    // OVERSIZED UPLOADS — the case the plan's M6 list named and M6.4 could
+    // not run, because file uploads did not exist yet (§6.3 recorded the
+    // debt and said this is where it belongs). M7.6b built the route; this
+    // is the check.
+    //
+    // The property is not just "a big body is refused" but WHERE: before the
+    // parser. A PDF parser is the largest attack surface in the ingest path
+    // — it decompresses — so a service that streamed 11 MB into pdf.js and
+    // refused afterwards would have already done the expensive thing.
+    const uploadBytes = (bytes, filename, type = "application/pdf") =>
+      request(`/internal/orgs/${orgA.id}/sources/upload`, {
+        method: "POST",
+        headers: {
+          ...secretHeader,
+          "content-type": "application/octet-stream",
+          "x-upload-filename": encodeURIComponent(filename),
+          "x-upload-content-type": type,
+        },
+        body: bytes,
+      }, 60_000)
+
+    await check("an oversized upload is refused 413, and refused BEFORE the parser runs", async () => {
+      // A valid PDF header with 11 MB behind it: the ONLY thing that can
+      // reject this is the size cap. If the cap were missing, pdf.js would
+      // run on 11 MB of padding and answer something else entirely.
+      const oversized = new Uint8Array(11 * 1024 * 1024 + 16)
+      oversized.set(new TextEncoder().encode("%PDF-1.7\n"), 0)
+      oversized.fill(0x20, 9)
+      const started = Date.now()
+      const res = await uploadBytes(oversized, "oversized.pdf")
+      const body = await res.text()
+      expect(res.status === 413, `status ${res.status}: ${body.slice(0, 200)}`)
+      // The sentence names the limit, because this one is the tenant's to
+      // act on — unlike the uniform refusals an outsider could probe.
+      expect(/larger than \d+ MB/.test(body), `413 does not name the limit: ${body.slice(0, 200)}`)
+      // A parse of 11 MB would not be instant. This is a smell test, not a
+      // proof, and it is written as one: generous enough never to flake on a
+      // loaded CI runner, tight enough that a full parse would trip it.
+      const elapsed = Date.now() - started
+      expect(elapsed < 30_000, `refusal took ${elapsed} ms — did the parser run first?`)
+    })
+
+    await check("an upload the parser cannot read is refused with a sentence, never a 500", async () => {
+      // Bytes claiming to be a PDF and not being one, an empty file, and a
+      // nameless one. Each must be a 422 the tenant can act on — a 500 here
+      // would mean an unhandled parser throw reached the top of the route,
+      // which is how a malformed file becomes a denial of service.
+      //
+      // That nothing was STORED is asserted by the unit suite
+      // (internalSources.test.ts counts the org's sources across every
+      // refusal) rather than here: this surface has no sources read route —
+      // the dashboard reads that table straight from Postgres (§9.9) — so a
+      // black-box probe cannot observe it, and pretending otherwise would be
+      // a check that passes because it looks at nothing.
+      const broken = await uploadBytes(new TextEncoder().encode("%PDF-1.7\nnot actually a pdf"), "broken.pdf")
+      const body = await broken.text()
+      expect(broken.status === 422, `broken pdf → ${broken.status}: ${body.slice(0, 200)}`)
+      const empty = await uploadBytes(new Uint8Array(0), "empty.md", "text/markdown")
+      expect(empty.status === 422, `empty file → ${empty.status}`)
+      const nameless = await uploadBytes(new TextEncoder().encode("# Doc\n\nText.\n"), "", "text/markdown")
+      expect(nameless.status === 422, `nameless file → ${nameless.status}`)
+    })
+
+    await check("an upload without the secret is the same empty 401 as every other internal call", async () => {
+      const res = await request(`/internal/orgs/${orgA.id}/sources/upload`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-upload-filename": "doc.md",
+          "x-upload-content-type": "text/markdown",
+        },
+        body: new TextEncoder().encode("# Doc\n\nText.\n"),
+      })
+      expect(res.status === 401, `status ${res.status}`)
+      expect((await res.text()).length === 0, "401 body is not empty")
+    })
   }
   //#endregion
 

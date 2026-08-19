@@ -457,11 +457,75 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     expect((await source(sourceId)).status).toBe("failed")
   })
 
-  it("fails a queue job for an upload source instead of crawling it", async () => {
+  it("ingests an UPLOAD from its stored extraction, with no network at all (M7.6b)", async () => {
     const org6 = await makeOrg("Upload Co")
-    const { sourceId, jobId } = await enqueue(org6, { kind: "upload", location: "manual.pdf" })
+    const text = "# Handbook\n\nRefunds are issued within 14 days.\n\n## Returns\n\nShip returns to the depot.\n"
+    const sourceId = newId("src")
+    await db.insertInto("sources").values({
+      id: sourceId, org_id: org6, kind: "upload", location: "handbook.md", crawl_depth: 0,
+    }).execute()
+    // Written exactly as the upload route writes it: the real parser's
+    // blocks, reduced to spans. Hand-computed offsets would be a second,
+    // wronger parser (the first attempt at this fixture put the "# " marker
+    // inside the heading, which the markdown parser excludes by design).
+    const parsedUpload = parseMarkdown(text)
+    await db.insertInto("source_uploads").values({
+      source_id: sourceId, filename: "handbook.md", format: "markdown",
+      byte_size: Buffer.byteLength(text), title: parsedUpload.title, text: parsedUpload.text,
+      blocks: JSON.stringify(parsedUpload.blocks.map((b) => ({
+        kind: b.kind,
+        ...(b.level !== undefined ? { level: b.level } : {}),
+        charStart: b.charStart,
+        charEnd: b.charEnd,
+      }))),
+    }).execute()
+    const { jobId } = await enqueue(org6, { location: "handbook.md", sourceId })
+
+    // A crawler that would THROW if it were called: an upload must never
+    // reach the network, and the only proof of that is a crawler which
+    // cannot be used silently.
+    const worker = makeWorker({
+      crawler: () => { throw new Error("an upload must not be crawled") },
+    })
+    expect(await worker.tick()).toBe(true)
+
+    const j = await job(jobId)
+    expect(j.state).toBe("done")
+    expect(j.docs_total).toBe(1)
+    expect(j.skipped_count).toBe(0)
+    expect((await source(sourceId)).status).toBe("ready")
+
+    // One document, named by the FILE — a citation from an upload says where
+    // it came from, and there is no URL to say instead.
+    const docs = await liveDocs(sourceId)
+    expect(docs).toHaveLength(1)
+    expect(docs[0]).toMatchObject({ url: "handbook.md", title: "Handbook" })
+
+    // The chunks carry the heading trail the stored spans reconstructed —
+    // proof the blocks survived the round trip as structure and not just as
+    // text, which is what separates an upload from a flat paste.
+    const chunks = await db.selectFrom("chunks").selectAll()
+      .where("document_id", "=", docs[0]!.id).orderBy("ord").execute()
+    expect(chunks.length).toBeGreaterThan(0)
+    expect(chunks.map((c) => c.heading_path)).toContain("Handbook > Returns")
+    // And every chunk's text really is a slice of the stored text — the
+    // parser contract, checked at the far end of the pipeline.
+    for (const c of chunks) expect(text).toContain(c.text)
+
+    const embeddings = await db.selectFrom("chunk_embeddings").select("chunk_id")
+      .where("org_id", "=", org6).execute()
+    expect(embeddings).toHaveLength(chunks.length)
+  })
+
+  it("fails an upload source whose extraction is missing, rather than emptying it", async () => {
+    // The route writes source and extraction in ONE transaction, so a row
+    // without the other is a broken invariant. Treating it as a crawl that
+    // found nothing would soft-delete the document and leave the tenant a
+    // source that reads ready and answers nothing.
+    const org7 = await makeOrg("Upload Missing Co")
+    const { sourceId, jobId } = await enqueue(org7, { kind: "upload", location: "gone.pdf" })
     expect(await makeWorker().tick()).toBe(true)
-    expect((await job(jobId)).error).toContain("not crawlable")
+    expect((await job(jobId)).error).toContain("missing its extracted text")
     expect((await source(sourceId)).status).toBe("failed")
   })
   //#endregion

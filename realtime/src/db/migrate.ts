@@ -10,6 +10,7 @@ import * as migration005 from "@/db/migrations/005_billing"
 import * as migration006 from "@/db/migrations/006_origin_daily"
 import * as migration007 from "@/db/migrations/007_secret_keys"
 import * as migration008 from "@/db/migrations/008_skipped_pages"
+import * as migration009 from "@/db/migrations/009_source_uploads"
 //#endregion
 
 //#region Type Defs
@@ -45,6 +46,7 @@ const MIGRATIONS: Record<string, Migration> = {
   "006_origin_daily": migration006,
   "007_secret_keys": migration007,
   "008_skipped_pages": migration008,
+  "009_source_uploads": migration009,
 }
 //#endregion
 

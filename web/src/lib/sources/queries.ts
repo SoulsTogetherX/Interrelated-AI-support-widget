@@ -21,6 +21,11 @@ export interface SourceWithProgress {
   status: "pending" | "crawling" | "ready" | "failed"
   lastCrawledAt: Date | null
   documentCount: number
+  /** Present only for `kind: "upload"` (M7.6b) — what the file WAS, kept
+   *  because the file itself is not: it was parsed in the upload request and
+   *  never stored, so its format and size are the only things left to say
+   *  about it (migration 009). */
+  upload: { format: "pdf" | "html" | "markdown"; byteSize: number; uploadedAt: Date } | null
   job: {
     state: "queued" | "running" | "done" | "failed"
     docsDone: number | null
@@ -71,8 +76,23 @@ export async function listSourcesWithProgress(orgId: string): Promise<SourceWith
     .execute()
   const docCount = new Map(counts.map((c) => [c.source_id, Number(c.n)]))
 
+  // Only when the org actually has uploads: the common tenant crawls sites
+  // and would otherwise pay for a query that can only return nothing.
+  // Deliberately NOT selecting `text` or `blocks` — this page shows what the
+  // file was, and a multi-megabyte extraction has no business crossing the
+  // wire to render a row. (The same greppable rule providers/queries.ts
+  // holds about key_ciphertext.)
+  const uploadIds = sources.filter((s) => s.kind === "upload").map((s) => s.id)
+  const uploads = uploadIds.length === 0 ? [] : await db
+    .selectFrom("source_uploads")
+    .select(["source_id", "format", "byte_size", "uploaded_at"])
+    .where("source_id", "in", uploadIds)
+    .execute()
+  const uploadBySource = new Map(uploads.map((u) => [u.source_id, u]))
+
   return sources.map((s) => {
     const job = latestJob.get(s.id) ?? null
+    const upload = uploadBySource.get(s.id)
     return {
       id: s.id,
       kind: s.kind,
@@ -81,6 +101,9 @@ export async function listSourcesWithProgress(orgId: string): Promise<SourceWith
       status: s.status,
       lastCrawledAt: s.last_crawled_at,
       documentCount: docCount.get(s.id) ?? 0,
+      upload: upload
+        ? { format: upload.format, byteSize: upload.byte_size, uploadedAt: upload.uploaded_at }
+        : null,
       job: job
         ? {
             state: job.state,
