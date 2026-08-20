@@ -38,18 +38,25 @@ data, and most of them are CI gates.
 | What the widget costs a host page | **1 request, 6.52 KB gzipped, and nothing further until a visitor opens the bubble** — the bundle fetches no font, stylesheet, chunk or image, and the session mint is deferred to bubble-open | `scripts/widget-size.mjs` (static) + `widget/src/__tests__/cost.test.ts` (behavioral); both CI-enforced |
 | Snippet load → interactive bubble | **9.5 ms p50** warm (10 loads, 9 of them 7.3–16.3 ms), **168 ms** on a cold first load | `widget/fixtures/measure.html` — localhost, so add a CDN's TTFB and transfer |
 | Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
+| Answer path against a real model | **TTFT p50 2.2 s, p95 27.9 s** (free-tier Gemini `gemini-3.6-flash`, n=9, 612 in / 18 out tokens per answer) — bimodal: six under 5 s, three 13–28 s | `npm run ask -- … --llm gemini`, read back from `messages` |
+| Schema-violation rate, Gemini | **0 of 9 answers** needed the contract retry, under native server-side JSON-schema enforcement | `messages.schema_violations` — the column M7.10 added |
 | Tests | 804 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
-Two things the plan wanted measured that this README does **not** claim a
-number for, because they need a real provider key: time-to-first-token and
-cost per 1,000 answers. The pipeline records both per answer (TTFT at the
-first delta, tokens from the provider's own count) and the dashboard's
-metrics page reports them, per model; the demo stack runs keyless. For the
-same reason, each provider adapter is proven against a loopback server
-speaking its real wire protocol, and against the provider itself only when
-that provider's key is in the environment — a key-gated suite that skips
-loudly rather than passing quietly. Anthropic's has never run here: it is
-the one provider with no free tier, and this repo carries no paid key.
+The TTFT and schema-violation rows above come from a **single session with a
+borrowed free-tier key** and n=9 answers, which is why they are reported with
+their spread rather than as a headline: the free tier is bimodal, six of the
+nine answered in under 5 s and three took 13–28 s. Treat them as evidence the
+path works end to end and that Gemini's native enforcement really is strict,
+not as a benchmark. Cost per 1,000 answers is still unclaimed, because
+`gemini-3.6-flash` has no row in the price table — its price was not read off
+the pricing page, and this project prices unknown models as `null` rather than
+guessing (a wrong-but-believable cost figure is worse than none).
+
+Each provider adapter is proven against a loopback server speaking its real
+wire protocol, and against the provider itself only when that provider's key
+is in the environment — a key-gated suite that skips loudly rather than
+passing quietly. Groq and Anthropic have never run here; there is no key for
+the first and no paid account for the second.
 
 ---
 

@@ -419,6 +419,21 @@ work — 0.834 for a query-vs-document pair of the same text against 0.555 for
 an unrelated one, the number the mock can never produce and the honest gap
 M3.6b recorded.
 
+M7.11 also produced the project's **first numbers from a real model**, which
+the README had been explicitly declining to claim: nine grounded answers
+through the live pipeline on `gemini-3.6-flash` — TTFT **p50 2,204 ms, p95
+27,851 ms** (bimodal on the free tier: six under 5 s, three between 13 and
+28 s), 612 input / 18 output tokens each, and **0 of 9 schema violations**,
+which is the first real data in M7.10's new column and confirms §2.4.5h's
+prediction that Gemini's native server-side enforcement makes the retry path
+near-dead. Two honest limits ride with them: n=9 from one borrowed key is
+evidence the path works rather than a benchmark, and TTFT came within ~300 ms
+of total on every sample — under a server-enforced JSON schema the answer
+arrives essentially whole, so streaming buys the visitor nothing that the
+claim-granular protocol was not already going to withhold until verification
+(§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
+model is deliberately unpriced.
+
 M7.6b is done, and with it **the README's last named gap is closed** —
 **a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
 §3.22, §9.9, §6.1, §6.3, DATAFLOW §3.2, §7.9a). `sources.kind` has allowed
