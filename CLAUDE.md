@@ -389,6 +389,36 @@ NOT do is make the plan's provider-comparison TABLE exist: that is an eval
 run across providers and it needs keys this repo does not carry. What it
 does is make that table's hardest column computable at all.
 
+M7.11 is done — **what a real Gemini key found** (§2.4.5h, §2.4.8, §3.8,
+§9.8, §2.6). The key-gated live suite has existed since M3.6b and had never
+run; given a real free-tier key for one session it ran, and found two bugs no
+keyless test could see, both instances of the plan's own "free tiers move
+without notice" risk. First, **the default model was dead for new keys**:
+`gemini-2.5-flash` answers 404 to a newly created key ("no longer available to
+new users"), while the /models listing still advertises it — so an existing
+credential kept working and a new tenant would 404 at their visitors' first
+question. The default is now `gemini-3.6-flash`. Second, and worse, **a
+reasoning model ate the entire answer budget**: Gemini 3.x thinks by default
+and draws those tokens from the SAME `maxOutputTokens` the answer uses — a
+measured call with 300 spent 285 thinking, emitted ZERO characters, and
+finished MAX_TOKENS, which in the pipeline is a truncated JSON document, a
+schema violation, the one retry, and an opaque error for the visitor. The fix
+is a bounded `thinkingConfig.thinkingBudget` sent alongside maxOutputTokens;
+zero is not available (a 400 on 3.x, unlike 2.5), so it is small and positive
+— 128 against the pipeline's 1024 leaves 87% for output, and the call that
+produced nothing returns valid claims JSON with it set. That exposed a third,
+quieter bug: thinking tokens are BILLED as output but reported separately from
+`candidatesTokenCount`, so every reasoning model's cost was under-reported;
+thoughts are now added. `gemini-3.6-flash` deliberately gets NO price row —
+its price was not read off the pricing page, and unknown is null (§2.4.8)
+rather than a guess that would be believed. The suite now passes end to end
+against real Gemini and prints what it measured: 6127 ms to a first answer,
+structured output VALID under real server-side enforcement,
+`gemini-embedding-001` returning 768-d in 295 ms, and task types doing real
+work — 0.834 for a query-vs-document pair of the same text against 0.555 for
+an unrelated one, the number the mock can never produce and the honest gap
+M3.6b recorded.
+
 M7.6b is done, and with it **the README's last named gap is closed** —
 **a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
 §3.22, §9.9, §6.1, §6.3, DATAFLOW §3.2, §7.9a). `sources.kind` has allowed
@@ -1160,6 +1190,21 @@ comparison instead of a constant. Dialect mapping: system messages →
 systemInstruction, assistant → "model" turns, STOP/MAX_TOKENS →
 stop/length. Auth rides the x-goog-api-key HEADER, never ?key= — URLs
 land in logs, and the test asserts the URL is key-free.
+
+Since M7.11 the request also carries a BOUNDED thinking budget whenever the
+caller sets maxTokens, and the reason is measured rather than defensive:
+Gemini 3.x reasons by default and spends those tokens from the SAME
+`maxOutputTokens` the answer does. A live call with 300 spent 285 thinking and
+emitted nothing at all — in the pipeline, a truncated JSON document blamed on
+the model's JSON discipline rather than on never having had room. Zero is not
+an option (`thinkingBudget: 0` is a 400 on 3.x, where 2.5 accepted it), so the
+budget is small and positive; 128 against the pipeline's 1024 leaves 87% for
+output. Only with maxTokens, because that is when the two compete. Usage now
+ADDS `thoughtsTokenCount` to output tokens, because thinking is billed as
+output and reported separately — counting only the visible half under-reported
+every reasoning model, in the direction that gets believed. The default model
+moved to `gemini-3.6-flash` in the same pass: 2.5 Flash is 404 for keys
+created now, though the /models listing still lists it.
 
 #### §2.4.5i `llm/ollama.ts`
 The self-hosted path, speaking native /api/chat (NDJSON) rather than

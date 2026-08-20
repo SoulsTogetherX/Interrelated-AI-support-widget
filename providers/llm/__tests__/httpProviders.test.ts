@@ -210,7 +210,7 @@ describe("GeminiProvider", () => {
     expect(done).toEqual({ type: "done", finishReason: "stop", usage: { inputTokens: 100, outputTokens: 20 } })
 
     const sent = captured()
-    expect(sent.url).toBe("/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+    expect(sent.url).toBe("/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse")
     // Header auth, never ?key= — URLs land in logs.
     expect(sent.headers["x-goog-api-key"]).toBe("g-test")
     expect(sent.url).not.toContain("key=")
@@ -223,6 +223,39 @@ describe("GeminiProvider", () => {
     expect(config["responseMimeType"]).toBe("application/json")
     // The schema goes up VERBATIM — real server-side enforcement.
     expect(config["responseJsonSchema"]).toEqual(request.responseSchema)
+    // A BOUNDED thinking budget rides with maxOutputTokens (M7.11). Gemini
+    // 3.x reasons by default and draws those tokens from the SAME budget the
+    // answer does — a live call with 300 spent 285 of them thinking and
+    // emitted nothing at all, which in the pipeline is a truncated JSON
+    // document and a schema violation.
+    expect(config["thinkingConfig"]).toEqual({ thinkingBudget: 128 })
+  })
+
+  it("sends no thinking budget when the caller sets no token cap", async () => {
+    // The two only compete under maxOutputTokens; with no cap there is
+    // nothing to protect the answer from, and sending the field anyway would
+    // constrain a model the caller deliberately left unconstrained.
+    const { baseUrl, captured } = await boot((_, res) => sse(res, [final]))
+    const provider = new GeminiProvider({ apiKey: "k", baseUrl })
+    await collect(provider.stream({ messages: [{ role: "user", content: "q" }] }))
+    const body = captured().body as Record<string, unknown>
+    const config = body["generationConfig"] as Record<string, unknown> | undefined
+    expect(config?.["thinkingConfig"]).toBeUndefined()
+  })
+
+  it("counts thinking tokens as output — they are billed, and invisible", async () => {
+    // candidatesTokenCount covers only the text the visitor could see, but
+    // Gemini bills thoughts as output too. Counting only the visible half
+    // would under-report the cost of every reasoning model, and
+    // under-reporting is the direction that gets believed.
+    const thinking = JSON.stringify({
+      candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }],
+      usageMetadata: { promptTokenCount: 25, candidatesTokenCount: 63, thoughtsTokenCount: 285 },
+    })
+    const { baseUrl } = await boot((_, res) => sse(res, [thinking]))
+    const provider = new GeminiProvider({ apiKey: "k", baseUrl })
+    const { done } = await collect(provider.stream(request))
+    expect(done!.usage).toEqual({ inputTokens: 25, outputTokens: 63 + 285 })
   })
 
   it("renames assistant turns to model turns", async () => {

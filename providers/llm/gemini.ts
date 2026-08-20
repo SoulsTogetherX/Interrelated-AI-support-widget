@@ -27,15 +27,54 @@ interface GeminiStreamChunk {
     content?: { parts?: Array<{ text?: unknown }> }
     finishReason?: unknown
   }>
-  usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown }
+  usageMetadata?: {
+    promptTokenCount?: unknown
+    candidatesTokenCount?: unknown
+    /** Reasoning tokens, on models that think. Billed as output. */
+    thoughtsTokenCount?: unknown
+  }
 }
 //#endregion
 
 //#region Constants
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-/** 2.5 Flash: the free tier's default; Flash-Lite exists for orgs that hit
- *  rate limits harder than quality needs. Overridden per-credential in M3. */
-const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+/** The free tier's general-purpose Flash model; the Lite siblings exist for
+ *  orgs that hit rate limits harder than quality needs, and any of them can
+ *  be overridden per-credential (M3).
+ *
+ *  Bumped from `gemini-2.5-flash` at M7.11, and the reason is worth keeping:
+ *  a live call with a NEW free-tier key returns 404 for 2.5 Flash — "no
+ *  longer available to new users … please update to gemini-3.6-flash" —
+ *  even though the /models listing still advertises it. So an existing key
+ *  kept working while a new tenant's first question 404'd, which is a class
+ *  of failure no keyless test can see and the plan named in its risk table:
+ *  free tiers move without notice. The gated live suite (§3.8) is what
+ *  caught it, on the first run that ever had a key. */
+const GEMINI_DEFAULT_MODEL = "gemini-3.6-flash"
+/**
+ * Cap on the tokens Gemini may spend THINKING before it writes anything.
+ *
+ * Measured, not guessed (M7.11). Gemini 3.x models reason by default, and
+ * their thoughts are drawn from the SAME `maxOutputTokens` budget the answer
+ * is: a live call with maxOutputTokens 300 spent 285 tokens thinking, emitted
+ * ZERO characters, and finished MAX_TOKENS. In the pipeline that is a
+ * truncated JSON document — a schema violation, then the one retry, then very
+ * likely the same again, and the visitor gets an opaque error. The widget
+ * would simply not work for a tenant on a 3.x model.
+ *
+ * Zero is not an option: `thinkingBudget: 0` is a 400 on 3.x ("invalid
+ * argument"), unlike 2.5 where it disabled thinking outright. So the budget
+ * is small and positive — enough for the short deliberation a grounded
+ * extraction needs, small enough that the answer always has room. 128
+ * against the pipeline's 1024 leaves 87% of the budget for output, and the
+ * same call that failed above returns valid claims JSON with it set.
+ *
+ * Sent whenever the caller sets maxTokens, because that is exactly when the
+ * two compete. A model that does not support the field answers 400 at the
+ * Test button (§3.21 does a live round-trip before saving), which is the
+ * designed place to discover it rather than a visitor's first question.
+ */
+const GEMINI_THINKING_BUDGET = 128
 //#endregion
 
 //#region Provider
@@ -65,7 +104,12 @@ class GeminiProvider implements LLMProvider {
 
     const generationConfig = {
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-      ...(request.maxTokens !== undefined ? { maxOutputTokens: request.maxTokens } : {}),
+      ...(request.maxTokens !== undefined
+        ? {
+            maxOutputTokens: request.maxTokens,
+            thinkingConfig: { thinkingBudget: GEMINI_THINKING_BUDGET },
+          }
+        : {}),
       // responseJsonSchema takes our standard JSON Schema as-is. The older
       // responseSchema field wants Gemini's OpenAPI-subset dialect (no
       // additionalProperties) — a lossy translation we refuse to maintain.
@@ -111,7 +155,16 @@ class GeminiProvider implements LLMProvider {
       }
       const meta = chunk.usageMetadata
       if (meta && typeof meta.promptTokenCount === "number" && typeof meta.candidatesTokenCount === "number") {
-        usage = { inputTokens: meta.promptTokenCount, outputTokens: meta.candidatesTokenCount }
+        // Thinking tokens are BILLED as output and reported separately, so
+        // they are added rather than ignored: a cost metric that counted only
+        // the visible answer would under-report every reasoning model, and
+        // under-reporting is the direction that gets believed. Absent on
+        // models that do not think, hence the ?? 0.
+        const thoughts = typeof meta.thoughtsTokenCount === "number" ? meta.thoughtsTokenCount : 0
+        usage = {
+          inputTokens: meta.promptTokenCount,
+          outputTokens: meta.candidatesTokenCount + thoughts,
+        }
       }
     }
     yield { type: "done", finishReason, usage }
@@ -120,6 +173,6 @@ class GeminiProvider implements LLMProvider {
 //#endregion
 
 //#region Exports
-export { GeminiProvider, GEMINI_DEFAULT_MODEL }
+export { GeminiProvider, GEMINI_DEFAULT_MODEL, GEMINI_THINKING_BUDGET }
 export type { GeminiOptions }
 //#endregion

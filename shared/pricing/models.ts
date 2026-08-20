@@ -73,6 +73,19 @@ const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   // a model to be brief.
   "gemini-2.5-flash": { inputPerMTok: 0.30, outputPerMTok: 2.50 },
   "gemini-2.5-flash-lite": { inputPerMTok: 0.10, outputPerMTok: 0.40 },
+  // The 2.5 rows are kept although the adapter's default moved to
+  // gemini-3.6-flash at M7.11: a NEW free-tier key gets 404 for 2.5 Flash
+  // ("no longer available to new users"), but existing credentials and every
+  // answer already in `messages` still name it, and a price list that
+  // forgot them would silently unprice a tenant's history.
+  //
+  // The 3.x flash family is deliberately ABSENT rather than estimated. Its
+  // prices were not read off the pricing page on PRICES_AS_OF, so under this
+  // file's own first rule they are unknown, and unknown is null — the cost
+  // metric reports those answers as unpriced and says how many, which is the
+  // designed behavior. Adding a guessed row would be the exact
+  // wrong-but-believable number the exact-matching rule exists to prevent.
+  // Filling them in is a two-line change once someone checks the page.
 
   // Anthropic (providers/llm/anthropic.ts). The only provider in the table
   // with no free tier, which is why its prices being dated matters most
