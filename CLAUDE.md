@@ -434,6 +434,41 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M7.12 is done — **the number that justifies iterative scans** (§3.29, §7.8,
+§3.14, eval/RESULTS.md). The plan's metrics list asks for "recall with and
+without iterative scans under tenant filtering", and §3.12 had been claiming
+for six milestones that "the eval harness measures the with/without delta —
+the number that justifies the setting" when no such measurement existed. It
+does now: `npm run tenant-scan` seeds N tenants of 30 chunks into ONE shared
+index and asks each for its own five nearest rows, with the setting on and
+off. **With iterative scans off, starvation begins at 8 tenants and by 16
+tenants 15 of 16 lose more than half their own corpus — a 52.5-point recall
+loss — while every query still returns 200.** With it on, every tenant gets
+exactly k at every measured size, and the latency cost is inside the noise.
+The harness verifies the PLAN per sweep point and reports a row that left
+HNSW as unmeasured rather than as a finding, because an exact plan sorts
+every matching row and therefore cannot starve — its 100% would read as
+"iterative scans are unnecessary", the exact opposite of the truth. That
+check earned itself on the first run: without it the sweep reported 5/8
+starved at 240 vectors beside 0/32 at 960, non-monotonic and impossible if
+both rows had measured the same plan.
+
+The same increment gave the eval harness a `--embedder` flag (the plan's
+"per embedding provider" retrieval metric needs one) and, with it, the
+jittered retry the plan's risk table asks for — a PATIENT policy, because a
+corpus ingest is background work where a visitor's three-attempts-in-eight-
+seconds would abandon a run that a 30-second wait would finish. Making the
+harness able to switch models exposed a real bug it had carried all along:
+its content-hash short-circuit did not know about models, so a Gemini run
+that died partway on a rate limit left 196 of the corpus's 661 chunks
+embedded under one model and none under the other, and the next local run
+skipped exactly those documents as "unchanged" — hybrid recall@5 fell from
+75.0% to 46.3%, a floor violation whose cause was invisible in the score.
+The fix is the ingest worker's own second condition (§3.10.5), which the
+harness never had: unchanged text is enough only if the chunks already carry
+vectors under the model about to be scored. Found by running it, not by
+reading it.
+
 M7.6b is done, and with it **the README's last named gap is closed** —
 **a customer can hand the product a file** (§3.3.11, §3.10.8, §3.10.5,
 §3.22, §9.9, §6.1, §6.3, DATAFLOW §3.2, §7.9a). `sources.kind` has allowed
@@ -2958,10 +2993,32 @@ failure:
    exit 1 and CI goes red. `--no-floor` exists for experiments; absence of
    floor.json warns (bootstrap) rather than passes silently.
 
-The embedder is ALWAYS the local model. EMBEDDING_PROVIDER=mock is refused
-by name with an explanation — the promise made in §2.4.5b: quality
-measured over semantics-free vectors is noise, and refusing beats
-producing an impressive-looking nonsense table.
+The embedder is the local model by default, and since M7.12 `--embedder`
+picks which REAL one is scored — the plan asks for recall "per embedding
+provider", which needed a second one to exist. What is refused is unchanged
+and still by name: a SEMANTICS-FREE embedder, not a remote one (the promise
+made in §2.4.5b — quality measured over meaningless vectors is noise, and
+refusing beats producing an impressive-looking nonsense table).
+
+Two things landed with that flag, both because switching models is what
+exposed them:
+
+- **Jittered retry on every embed call**, the plan's risk-table instruction,
+  with a PATIENT policy rather than §3.15.5's interactive one: 8 attempts
+  inside a 5-minute budget, because a corpus ingest is background work where
+  a visitor's three-attempts-in-eight-seconds would abandon a run that a
+  30-second wait would finish. A full remote run hits a free tier's
+  per-minute quota partway through the corpus; without this it simply stops.
+- **The short-circuit now knows about MODELS.** Unchanged text was enough to
+  skip a document, which is wrong the moment two embedders share a corpus —
+  the ingest worker learned this at M3.6b (§3.10.5) and the harness never
+  did. A remote run that died on a rate limit left 196 of the corpus's 661
+  chunks embedded under one model and none under the other; the next local
+  run skipped exactly those as "unchanged", the dense arm could see 70% of
+  the corpus, and hybrid recall@5 fell from 75.0% to 46.3% — a floor
+  violation whose cause was invisible in the score. Unchanged text is now
+  enough only if the chunks already carry vectors under the model about to
+  be scored.
 
 A fifth mode since M2.7: `--sweep-threshold` measures the groundedness
 gate's signal (via the PRODUCTION evaluateGroundedness, not a copy) on
@@ -3290,6 +3347,48 @@ visitor still gets their session; there is no mint transaction to join
 because a token is signed, not stored. Missing-Origin and bad-key refusals
 are NOT counted: neither names an org without a lookup the route
 deliberately does not spend on requests it refuses for free.
+
+### §3.29 `realtime/scripts/runTenantScan.ts` — what iterative scans are worth (M7.12)
+`npm run tenant-scan`. The runner for §7.8's scoring, in realtime/ for
+runEval.ts's reason: it drives realtime's retrieval code and needs its
+dependencies, while the scoring stays a package-less module the root runner
+typechecks and unit-tests.
+
+It produces the number §3.12 had been promising since M1 and nothing
+delivered. N tenants of 30 chunks go into ONE shared index; each asks for its
+own five nearest rows, once with `hnsw.iterative_scan = 'relaxed_order'` and
+once with it off. The published sweep is in eval/RESULTS.md: starvation
+begins at 8 tenants and reaches 15 of 16 at 480 vectors, a 52.5-point recall
+loss, with no measurable latency cost for the fix at this scale.
+
+Three things make it trustworthy, and two of them are ways it was wrong
+first:
+
+- **ONE connection, with `enable_seqscan` and `enable_sort` both off.** The
+  pgvector knobs are transaction-local, so on a pooled connection the SET and
+  the search can land on different backends; and a seqscan is not the only
+  exact route — every non-HNSW plan must SORT by distance, and at fixture
+  sizes those plans sit at the planner's break-even. That is the trap that
+  cost the M7.1 ladder a red run (§3.8).
+- **The plan is VERIFIED per sweep point**, and a row that left HNSW is
+  reported as unmeasured rather than as a finding. An exact plan sorts every
+  matching row and therefore cannot starve, so its 100% would read as
+  "iterative scans are unnecessary" — the most damaging way this measurement
+  could be wrong. The first run had only a comment saying this mattered and
+  no check implementing it, and duly reported 5/8 starved at 240 vectors
+  beside 0/32 at 960: non-monotonic, and impossible if both rows had measured
+  the same plan.
+- **Mock embeddings, deliberately**, where the quality eval refuses them by
+  name (§2.4.5b). What is under test is the FILTER, not which chunk answers
+  better: uniform random directions make the discard rate depend on tenant
+  count alone, while real embeddings cluster by topic and would confound it.
+  A foreign row coming back would be a filtering BUG rather than starvation,
+  so the harness throws on one instead of folding it into recall.
+
+Everything it creates is deleted at the end, including on Ctrl-C, like
+§10.3's load harness. Its first run also failed on a `content_hash` CHECK,
+because the fixture used a label where the column requires a 64-character
+sha256 — the schema holding a harness to the same rule as the product.
 
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 
@@ -4217,6 +4316,25 @@ retrieval the probe asks the page's own text). Seeded into the security
 fixture's org A by §3.27, beside its plain pages, under the same source: to
 the pipeline these are simply more of the tenant's documentation, which is
 the threat.
+
+### §7.8 `eval/tenantScan.ts`
+The scoring half of the tenant-filtering measurement (M7.12) — pure and
+database-free, the same split as §7.3's metrics and its runner (§3.29), for
+the same reason: the numbers reach a README, so they get a test a reader can
+redo by hand. `summarizeScan` turns per-tenant outcomes into starved count,
+mean rows returned, recall, and latency percentiles.
+
+Two decisions carry it. **Recall here is not the golden set's recall**: a
+tenant asking for k rows of its OWN corpus should get k, so recall is
+rows-delivered over rows-asked-for, and a value below 1 means the index
+handed back fewer than the tenant asked for — a mechanical property of
+filtering and geometry rather than a question of which chunk answers better.
+And **an empty run throws rather than reporting zeros**, §7.3's stance: "no
+tenant starved" and "no tenant was measured" are opposite findings, and a
+sweep that silently produced the first from the second would be a published
+lie. Percentiles are nearest-rank for loadtest/histogram.ts's reason, and are
+duplicated here rather than imported because eval/ and loadtest/ are separate
+alias roots that nothing else joins.
 
 ---
 

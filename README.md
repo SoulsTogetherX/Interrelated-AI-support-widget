@@ -32,6 +32,7 @@ data, and most of them are CI gates.
 | Retrieval, hybrid dense + lexical with RRF | **recall@5 75.0%, recall@10 83.8%, MRR@10 52.6, nDCG@10 59.7** on an 80-question hand-written golden set over 31 Fastify docs pages | `npm run eval` — [eval/RESULTS.md](eval/RESULTS.md); CI fails below recall@5 = 70 |
 | Dense-only, for the delta hybrid buys | recall@5 72.5%, recall@10 81.3% | same run |
 | Retrieval latency (hybrid, warm, local model) | p50 70 ms · p95 107 ms | same run |
+| What multi-tenant iterative scans are worth | **52.5 points of recall.** With `hnsw.iterative_scan` off, 15 of 16 tenants sharing one index get fewer than the *k* rows they asked for (47.5% recall) while every query still returns 200; with it on, every tenant gets exactly *k* at every measured size, at no measurable latency cost | `npm run tenant-scan` — [eval/RESULTS.md](eval/RESULTS.md); the plan verified per sweep point, so a row that left the index is reported unmeasured rather than as a finding |
 | Refusal threshold | **0.34** cosine distance for bge-small — 0% false refusals on the golden set, 100% correct refusals on off-topic questions, derived from an 80 + 40 question sweep, not picked by feel | [eval/RESULTS.md §threshold](eval/RESULTS.md) |
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
 | Widget bundle | **6.52 KB gzipped**, zero runtime dependencies, Shadow DOM, CSP-safe | `scripts/widget-size.mjs` — CI budget 15 KB |
@@ -40,7 +41,7 @@ data, and most of them are CI gates.
 | Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
 | Answer path against a real model | **TTFT p50 2.2 s, p95 27.9 s** (free-tier Gemini `gemini-3.6-flash`, n=9, 612 in / 18 out tokens per answer) — bimodal: six under 5 s, three 13–28 s | `npm run ask -- … --llm gemini`, read back from `messages` |
 | Schema-violation rate, Gemini | **0 of 9 answers** needed the contract retry, under native server-side JSON-schema enforcement | `messages.schema_violations` — the column M7.10 added |
-| Tests | 804 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
+| Tests | 817 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 The TTFT and schema-violation rows above come from a **single session with a
 borrowed free-tier key** and n=9 answers, which is why they are reported with

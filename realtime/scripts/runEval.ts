@@ -134,14 +134,29 @@ function parseArgs(argv: readonly string[]): {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
 
-  // The refusal, by name, promised in providers/embedding/mock.ts: a
-  // quality eval over semantics-free vectors measures nothing.
-  if (process.env.EMBEDDING_PROVIDER && process.env.EMBEDDING_PROVIDER !== "local") {
+  // --embedder picks WHICH real model is scored (M7.11). The plan asks for
+  // recall "per embedding provider and per strategy, since the delta is the
+  // story", and until a key existed there was only one real embedder to
+  // score. The refusal below is unchanged and still by name: what is
+  // rejected is a SEMANTICS-FREE embedder, not a remote one.
+  const embedderChoice = (() => {
+    const raw = process.argv.slice(2)
+    const idx = raw.indexOf("--embedder")
+    if (idx !== -1) return raw[idx + 1] ?? "local"
+    return process.env.EMBEDDING_PROVIDER ?? "local"
+  })()
+
+  if (embedderChoice !== "local" && embedderChoice !== "gemini") {
     console.error(
-      `EMBEDDING_PROVIDER=${process.env.EMBEDDING_PROVIDER} refused: the eval measures retrieval QUALITY, ` +
-      "and only the local model (bge-small-en-v1.5) produces real semantics without an API key. " +
-      "The mock exists for plumbing tests; its scores here would be noise.",
+      `embedder "${embedderChoice}" refused: the eval measures retrieval QUALITY, so it runs only on ` +
+      "models with real semantics — local (bge-small-en-v1.5, keyless) or gemini " +
+      "(gemini-embedding-001, needs GEMINI_API_KEY). The mock exists for plumbing tests; " +
+      "its scores here would be noise, which is the promise providers/embedding/mock.ts makes.",
     )
+    process.exit(1)
+  }
+  if (embedderChoice === "gemini" && !process.env.GEMINI_API_KEY) {
+    console.error("--embedder gemini needs GEMINI_API_KEY (see .env.example)")
     process.exit(1)
   }
 
@@ -152,12 +167,47 @@ async function main(): Promise<void> {
   const { chunkBlocks } = await import("@shared/chunking/chunker")
   const { newId } = await import("@shared/utils/ids")
   const { padVector, toPgvector } = await import("@shared/utils/vectors")
+  const { withRetry } = await import("@/answer/retry")
   const { scoreRun } = await import("@eval/metrics")
   const { resolveAnchor } = await import("@eval/resolve")
   const { LocalEmbeddingProvider } = await import("@providers/embedding/local")
 
   await migrateToLatest(db) // idempotent; lets a fresh CI container self-prepare
-  const embedder = new LocalEmbeddingProvider()
+  // Each embedder stores under its OWN model name, so the two corpora coexist
+  // in one eval org and a switch re-embeds rather than corrupting the other's
+  // vectors — the same per-(chunk, model) property the product relies on when
+  // a tenant changes provider (§3.22).
+  /**
+   * The eval is BACKGROUND work, so its retry policy is the patient one —
+   * the division of labor §3.15.5 describes, where the caller decides
+   * because only the caller knows whether someone is waiting. A visitor gets
+   * three attempts inside 8 seconds because failing fast beats a spinner; a
+   * corpus ingest can afford to wait out a per-minute quota, and the
+   * alternative is a run that dies half-embedded and re-embeds everything on
+   * the next attempt. Measured need: a full Gemini run hits the free tier's
+   * per-minute embedding quota partway through the corpus, and without this
+   * it simply stops.
+   */
+  const EVAL_RETRY = { maxAttempts: 8, budgetMs: 300_000, baseDelayMs: 2_000, maxDelayMs: 60_000 }
+  const embed = (texts: readonly string[], task?: "document" | "query") =>
+    withRetry(
+      () => embedder.embed(texts, task !== undefined ? { task } : undefined),
+      {
+        onRetry: ({ attempt, delayMs, error }) => {
+          const why = error instanceof Error ? error.message.slice(0, 80) : String(error)
+          console.log(`  [retry ${attempt}] waiting ${Math.round(delayMs / 1000)}s — ${why}`)
+        },
+      },
+      EVAL_RETRY,
+    )
+
+  const embedder = embedderChoice === "gemini"
+    ? new (await import("@providers/embedding/gemini")).GeminiEmbeddingProvider({
+        apiKey: process.env.GEMINI_API_KEY as string,
+        ...(process.env.GEMINI_EMBED_MODEL ? { model: process.env.GEMINI_EMBED_MODEL } : {}),
+      })
+    : new LocalEmbeddingProvider()
+  console.log(`embedder: ${embedder.model}`)
 
   //#region Ingest the corpus snapshot
   // Plain consts (not narrowed lets): the ids are captured by the retrieve
@@ -203,7 +253,26 @@ async function main(): Promise<void> {
     const existing = await db.selectFrom("documents").select(["id", "content_hash"])
       .where("source_id", "=", sourceId).where("url", "=", file.url)
       .where("deleted_at", "is", null).executeTakeFirst()
-    if (existing && existing.content_hash === contentHash) {
+    // Unchanged text is only enough if this document's chunks ALREADY carry
+    // vectors under the model about to be scored — the ingest worker's second
+    // condition (§3.10.5), which the harness needed the moment --embedder
+    // made switching models possible and did not have.
+    //
+    // Found by QA rather than by reasoning: a Gemini run that died partway
+    // through on a rate limit left 196 of the corpus's 661 chunks embedded
+    // under gemini and none under bge, and the next local run skipped exactly
+    // those documents as "unchanged". The dense arm could then see 70% of the
+    // corpus, and hybrid recall@5 fell from 75.0% to 46.3% — a floor
+    // violation whose cause was invisible in the score itself.
+    const embeddedHere = existing === undefined
+      ? false
+      : (await db.selectFrom("chunk_embeddings")
+          .innerJoin("chunks", "chunks.id", "chunk_embeddings.chunk_id")
+          .select(({ fn }) => fn.countAll<string>().as("n"))
+          .where("chunks.document_id", "=", existing.id)
+          .where("chunk_embeddings.model", "=", embedder.model)
+          .executeTakeFirst())?.n !== "0"
+    if (existing && existing.content_hash === contentHash && embeddedHere) {
       skipped++
       continue
     }
@@ -216,7 +285,7 @@ async function main(): Promise<void> {
     const embedTexts = chunks.map((c) => (c.headingPath ? `${c.headingPath}\n${c.text}` : c.text))
     const vectors: string[] = []
     for (let i = 0; i < embedTexts.length; i += EMBED_BATCH) {
-      const batch = await embedder.embed(embedTexts.slice(i, i + EMBED_BATCH))
+      const batch = await embed(embedTexts.slice(i, i + EMBED_BATCH), "document")
       for (const v of batch) vectors.push(toPgvector(padVector(v)))
     }
 
@@ -296,7 +365,7 @@ async function main(): Promise<void> {
   const queryVectors = new Map<string, number[]>()
   for (let i = 0; i < golden.length; i += EMBED_BATCH) {
     const batch = golden.slice(i, i + EMBED_BATCH)
-    const vecs = await embedder.embed(batch.map((g) => g.question))
+    const vecs = await embed(batch.map((g) => g.question), "query")
     batch.forEach((g, j) => queryVectors.set(g.id, vecs[j] as number[]))
   }
   //#endregion
@@ -332,7 +401,7 @@ async function main(): Promise<void> {
     const noanswerSignals: Array<{ category: NoAnswerEntry["category"]; signal: number }> = []
     for (let i = 0; i < noanswer.length; i += EMBED_BATCH) {
       const batch = noanswer.slice(i, i + EMBED_BATCH)
-      const vecs = await embedder.embed(batch.map((n) => n.question))
+      const vecs = await embed(batch.map((n) => n.question), "query")
       for (const [j, entry] of batch.entries()) {
         noanswerSignals.push({ category: entry.category, signal: await gateSignal(entry.question, vecs[j] as number[]) })
       }

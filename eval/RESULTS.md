@@ -52,6 +52,48 @@ top up anything the filter discards. This knob starts to matter at
 production index sizes (tens of thousands of vectors); the sweep exists so
 that the day the curve stops being flat is *observed*, not guessed.
 
+## Iterative scans under tenant filtering
+
+The plan asks for "recall with and without iterative scans under tenant
+filtering", and this is the number that justifies
+`hnsw.iterative_scan = 'relaxed_order'` being on. It is measured by
+`npm run tenant-scan` (realtime/), which seeds N tenants of 30 chunks each
+into ONE shared index and asks each of them for its own five nearest rows.
+
+| tenants | vectors | plan | starved (on) | recall (on) | starved (off) | recall (off) | p50 on | p50 off |
+|---|---|---|---|---|---|---|---|---|
+| 2 | 60 | HNSW | 0/2 | 100.0% | 0/2 | 100.0% | 50 ms | 48 ms |
+| 4 | 120 | HNSW | 0/4 | 100.0% | 0/4 | 100.0% | 49 ms | 49 ms |
+| 8 | 240 | HNSW | 0/8 | 100.0% | **5/8** | **77.5%** | 48 ms | 55 ms |
+| 16 | 480 | HNSW | 0/16 | 100.0% | **15/16** | **47.5%** | 49 ms | 49 ms |
+| 32 | 960 | exact — unmeasured | — | — | — | — | — | — |
+
+*Starved* means a tenant asked for k=5 rows of its own corpus and got fewer.
+*Recall* is rows delivered over rows asked for. `ef_search = 40` throughout.
+
+**The finding: with iterative scans off, starvation begins at 8 tenants and
+by 16 tenants 15 of 16 lose more than half their own corpus — a 52.5-point
+recall loss — while every query still returns HTTP 200.** With the setting
+on, every tenant gets exactly k at every measured size. The latency cost is
+inside the noise here (48–55 ms either way), so at this scale the setting is
+free; that is not a promise about a 100k-vector index, which is why the
+harness sweeps rather than asserting a constant.
+
+Two things about the method, because both are ways this measurement could
+have been wrong and one of them *was*:
+
+- **The plan is verified per row, and a row that left the index is reported
+  as unmeasured rather than as a finding.** An exact plan sorts every
+  matching row, so it cannot starve — its 100% would read as "iterative
+  scans are unnecessary", the exact opposite of the truth. The 32-tenant row
+  is that case. The first run of this harness had no such check and produced
+  5/8 starved at 240 vectors beside 0/32 at 960: non-monotonic, and
+  impossible if both rows had measured the same plan.
+- **Mock embeddings, deliberately**, where the quality eval above refuses
+  them by name. What is under test is the FILTER, not which chunk answers
+  better: uniform random directions make the discard rate depend on tenant
+  count alone, while real embeddings cluster by topic and would confound it.
+
 ## Chunk size ablation (400 vs 800 target tokens)
 
 | Target | hybrid @5 | hybrid @10 | MRR@10 | nDCG@10 |
