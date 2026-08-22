@@ -32,6 +32,7 @@ data, and most of them are CI gates.
 | Retrieval, hybrid dense + lexical with RRF | **recall@5 75.0%, recall@10 83.8%, MRR@10 52.6, nDCG@10 59.7** on an 80-question hand-written golden set over 31 Fastify docs pages | `npm run eval` — [eval/RESULTS.md](eval/RESULTS.md); CI fails below recall@5 = 70 |
 | Dense-only, for the delta hybrid buys | recall@5 72.5%, recall@10 81.3% | same run |
 | Retrieval latency (hybrid, warm, local model) | p50 70 ms · p95 107 ms | same run |
+| Ingest throughput, and where the time goes | The pipeline itself (fetch → parse → chunk → store, HNSW maintenance included) sustains **144 chunks/s**; with a real embedder in the loop, **embedding is ~98% of the wall** (215 s vs 4.6 s for 31 pages / 661 chunks, local model on CPU); an unchanged re-crawl short-circuits to **1.0 s** with zero texts embedded | `npm run ingest-bench` — loopback corpus through the real worker; production adds network, politeness pacing, and the embedding provider's rate limits |
 | What multi-tenant iterative scans are worth | **52.5 points of recall.** With `hnsw.iterative_scan` off, 15 of 16 tenants sharing one index get fewer than the *k* rows they asked for (47.5% recall) while every query still returns 200; with it on, every tenant gets exactly *k* at every measured size, at no measurable latency cost | `npm run tenant-scan` — [eval/RESULTS.md](eval/RESULTS.md); the plan verified per sweep point, so a row that left the index is reported unmeasured rather than as a finding |
 | Refusal threshold | **0.34** cosine distance for bge-small — 0% false refusals on the golden set, 100% correct refusals on off-topic questions, derived from an 80 + 40 question sweep, not picked by feel | [eval/RESULTS.md §threshold](eval/RESULTS.md) |
 | Handoff socket under load | **300 concurrent sockets connected, nothing errored or dropped; round trip p50 26 ms / p95 72 ms** at 100 msg/s (that round trip includes a Postgres write — the server persists before it broadcasts); connect p50 flat at ~10 ms from 200 to 300 sockets; a knee between 200 and 250 msg/s where messages go late, traced to the 5-connection pool | [loadtest/RESULTS.md](loadtest/RESULTS.md) |
@@ -43,7 +44,7 @@ data, and most of them are CI gates.
 | Embedding provider, measured rather than assumed | `gemini-embedding-001` beats the local `bge-small-en-v1.5` by **+15.0 points of recall@5** (hybrid **90.0%** vs 75.0%, @10 96.9% vs 83.8%), and the hybrid miss list drops from **12 of 80 questions to 2** | `npm run eval -- --embedder gemini` — [eval/RESULTS.md](eval/RESULTS.md); the lexical arm is byte-identical across both runs, so only the dense arm moved |
 | Answer path against a real model | **TTFT p50 6.9 s** over 19 answers on free-tier Gemini `gemini-3.6-flash` (3,711 in / 115 out tokens per answer, ten retrieved chunks per prompt); an earlier n=9 run on a six-chunk toy corpus measured p50 2.2 s | `npm run compare`, read back from `messages` |
 | Schema-violation rate, Gemini | **1 of 19 answers** needed the contract retry under native server-side JSON-schema enforcement — near-dead rather than dead, where an earlier n=9 run saw 0 | `messages.schema_violations` — the column M7.10 added |
-| Tests | 836 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
+| Tests | 836 across the repo, the integration suites against a real pgvector Postgres (15 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 The rows measured against a real model come from **borrowed free-tier keys**
 at n=19 and n=20, which is a sample rather than a benchmark and is reported
@@ -68,9 +69,13 @@ Each provider adapter is proven against a loopback server speaking its real
 wire protocol, and against the provider itself only when that provider's key
 is in the environment — a key-gated suite that skips loudly rather than
 passing quietly, and a comparison table that prints a **SKIPPED row naming
-the reason** rather than omitting a provider. Groq, Anthropic and Ollama have
-never run here: no key for the first, no paid account for the second, no local
-model for the third.
+the reason** rather than omitting a provider. Groq, Anthropic, Ollama, and
+the generic OpenAI-compatible adapter's real-endpoint cases (pointed at
+xAI's api.x.ai) have never run here: no key for the first, no paid account
+for the second, no local model for the third — and for the fourth, a valid
+key whose newly created xAI team holds no credits, every endpoint answering
+the same 403 until it is funded. Each suite sits gated, waiting on exactly
+that.
 
 ---
 

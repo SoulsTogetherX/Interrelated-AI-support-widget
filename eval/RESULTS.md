@@ -377,3 +377,52 @@ of skipping — but each direction of this comparison costs a full re-embed of
 the corpus, which is the dominant cost of the whole measurement on a metered
 tier. Switching back to the local model afterwards reproduced the published
 75.0% baseline exactly, which is the check that the corpus survived the trip.
+
+## Ingest throughput (M8.7)
+
+The last metric in the plan's latency list with no producer: how fast the
+production ingest path actually is. `npm run ingest-bench` serves this
+corpus (31 pages, ~584 KB) over loopback HTTP as a sitemap source and
+drives the REAL worker — one `IngestWorker.tick()` per row over the real
+crawler, the real parsers, the real chunker, and the per-page short
+transactions production uses — so the number is the production path with
+only the network made free. Reproduce with:
+
+```
+cd realtime && npm run ingest-bench       # -- --mock-only skips the local model
+```
+
+| configuration | pages | chunks | texts embedded | wall | pages/s | chunks/s |
+|---|---|---|---|---|---|---|
+| cold, mock embedder (everything but embedding) | 31 | 661 | 661 | 4.60 s | 6.7 | 144 |
+| cold, local `bge-small-en-v1.5` (the CI model, CPU) | 31 | 661 | 661 | 214.7 s | 0.1 | 3 |
+| unchanged re-crawl (content-hash short-circuit) | 31 | 661 | **0** | 1.00 s | 31.1 | — |
+
+Three findings, in decreasing order of how much they matter:
+
+- **Embedding is ~98% of the wall.** 4.6 s of fetch + parse + chunk + store
+  against 215 s once a real (local, CPU) embedder is in the loop. §3.3.1
+  has claimed since M1 that the queue's real throughput ceiling is
+  embedding, not Postgres — this is that claim as a measurement, and it is
+  why the worker embeds OUTSIDE its transaction and why a second worker
+  would buy almost nothing.
+- **The re-crawl short-circuit is worth 216×.** An unchanged site re-crawls
+  in 1.0 s with zero texts embedded — the harness wraps the embedder in a
+  counter to prove the zero rather than assume it — which is what a
+  tenant's Re-crawl button costs when nothing changed, and why it is safe
+  to click freely.
+- **The pipeline itself sustains ~144 chunks/s stored**, HNSW index
+  maintenance included (the mock's partial index is registered, so every
+  insert pays it) — at the free tier's ~78k-chunk ceiling (§3.3.1), the
+  non-embedding half of a full corpus rebuild is minutes, not hours.
+
+What the numbers exclude, on purpose: network (loopback fetches),
+politeness (`fetchDelayMs` 0 here, where production paces every fetch plus
+any robots.txt Crawl-delay up to 5 s — deliberate per-page floors that
+would otherwise BE the measurement), and model load (the ONNX engine is
+warmed outside the timed window — a boot cost, not a per-crawl cost).
+These are single runs on one machine: a second mock run measured 3.6 s
+where the first measured 4.6, so read the orders of magnitude, not the
+third digit. And the local-model row is the KEYLESS stack's number — a
+hosted embedding tier is metered (per ITEM on Gemini's batch endpoint,
+above), so its ingest throughput is its quota, not this pipeline.

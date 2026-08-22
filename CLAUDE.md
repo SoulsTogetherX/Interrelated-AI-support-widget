@@ -435,6 +435,38 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M8.7 is done — **ingest throughput, measured** (§3.31, §3.3.1, §3.10.5,
+eval/RESULTS.md, §9.9). The last metric in the plan's latency list with no
+producer at all — retrieval latency and TTFT have had committed producers
+for milestones while ingest speed existed only as anecdotes. `npm run
+ingest-bench` serves the committed eval corpus (31 pages, ~584 KB) over
+loopback HTTP as a sitemap source and drives the REAL worker — the real
+crawler under the worker suite's permissive-hostGuard idiom, real parsers,
+real chunker, the per-page short transactions production uses — so the
+number is the production path with only the network made free, and the
+exclusions (loopback, politeness zeroed, ONNX warmed outside the window)
+are printed with the table because a throughput figure that hides its
+exclusions reads as a promise. Three rows, three findings: **embedding is
+~98% of the wall** (215 s with the local CPU model against 4.6 s for
+everything else over the same 661 chunks) — §3.3.1's claim that the
+queue's ceiling is embedding rather than Postgres, as a measurement, and
+the reason the worker embeds outside its transaction; the pipeline itself
+sustains **~144 chunks/s stored** with HNSW maintenance included; and the
+content-hash short-circuit is worth **216×** — an unchanged re-crawl costs
+1.0 s and embeds ZERO texts, proven by a counting embedder rather than
+assumed, which is what a tenant's Re-crawl button costs when nothing
+changed. Two wrongness guards, both earned: the runner REFUSES to start
+when the queue holds live jobs (tick() claims the OLDEST queued row, so
+suite residue would hijack the bench — it fired on the very first run, on
+a worker-test job the day's full suite had left `running`), and a run with
+any skipped page fails loudly rather than publishing a rate over a
+silently shrunken denominator. Glue-only by §3.11's stance, so no suite of
+its own; not a CI gate, for loadtest's reason. The same commit refreshed
+the README rows M8.6 dated: the key-gated count is 15 now (the three xAI
+cases skip keylessly, so the 836 passing stays), and the never-run-live
+list names the compat adapter's xAI cases beside Groq, Anthropic and
+Ollama, each waiting on exactly one thing.
+
 M8.6 is done — **the compat adapter meets a real endpoint, and what a
 fresh Gemini key found** (§3.8, §2.4.5g, §2.6). Two keys arrived for one
 session, each for testing only, and each verified something no loopback
@@ -3811,6 +3843,47 @@ harness fails on its precondition with the exact command to fix it rather
 than measuring an empty corpus, which is the one thing that would have been
 expensive: every question would have been refused by the gate and the table
 would have reported a provider that never ran as a provider that refused.
+
+### §3.31 `realtime/scripts/runIngestBench.ts` — ingest throughput (M8.7)
+`npm run ingest-bench`. The plan's latency list names "ingest throughput"
+beside retrieval-only latency and TTFT; both of those have had committed
+producers for milestones while ingest speed existed only as anecdotes
+("9 pages in 4 seconds", §9.9). This is the producer, in realtime/ for its
+siblings' reason (§3.14, §3.29, §3.30) — and GLUE-ONLY by §3.11's stance:
+it composes the tested pieces (the worker, the crawler, the parsers, the
+chunker) and adds no logic of its own to drift, which is why it has no
+suite of its own where the tenant scan's scoring half does.
+
+The shape: the committed eval corpus (31 pages, ~584 KB) served over
+loopback HTTP as a sitemap source, one `IngestWorker.tick()` per row over
+the real crawler (`fetchDelayMs` 0, permissive hostGuard — the worker
+suite's idiom), and three rows because they answer different questions:
+cold under the mock embedder (everything but embedding), cold under the
+local model (the CI-real number, with the ONNX engine warmed OUTSIDE the
+timed window because model load is a boot cost, not a per-crawl cost), and
+an unchanged re-crawl — the §3.10.5 short-circuit as a number, with the
+embedder wrapped in a counter so the zero is proven rather than assumed.
+Published in eval/RESULTS.md and the README's table: **embedding is ~98%
+of the wall** (215 s against 4.6 s for the same 31 pages / 661 chunks) —
+§3.3.1's "the ceiling is embedding-API limits, not Postgres" as a
+measurement — the pipeline itself sustains **~144 chunks/s** stored with
+HNSW maintenance included, and the short-circuit is worth **216×** (1.0 s,
+zero texts embedded). The exclusions are printed with the table: loopback
+network, politeness zeroed (production paces every fetch, plus Crawl-delay
+— deliberate floors that would otherwise BE the measurement), model load
+warmed away; and the local-model row is the KEYLESS stack's number, since
+a hosted tier's ingest throughput is its quota (§7.9's per-item metering).
+
+Wrongness guards, each from a sibling's scar: it REFUSES to start when the
+queue holds live jobs, because tick() claims the OLDEST queued row and
+suite residue would hijack the bench — the §3.8 run-book gotcha, and it
+fired on this harness's very first run (a worker-test job the full suite
+had left `running` against `docs.example.com`); and a run with ANY skipped
+page fails loudly with the recorded reasons, because a throughput number
+over a silently shrunken denominator reads fine and means nothing.
+Everything it creates is deleted at the end, Ctrl-C included. Not a CI
+gate, for loadtest's reason (§10.4): throughput on a shared runner
+measures the runner.
 
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 

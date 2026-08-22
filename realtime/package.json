@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tenant-scan": "tsx scripts/runTenantScan.ts",
-    "compare": "tsx scripts/runProviderComparison.ts"
+    "compare": "tsx scripts/runProviderComparison.ts",
+    "ingest-bench": "tsx scripts/runIngestBench.ts"
   },
   "dependencies": {
     "express": "^5.2.1",
