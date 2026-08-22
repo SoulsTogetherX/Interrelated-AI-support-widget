@@ -15,8 +15,9 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M7 — what the plan states but never scheduled —
-underway. Every milestone the plan SCHEDULED (M0–M6) is complete.** M7
+**Current milestone: M8 — the same mandate continued — underway. Every
+milestone the plan SCHEDULED (M0–M6) is complete, and M7 — what the plan
+states but never scheduled — is complete through M7.12.** M7
 began as the plan's own trust-model section (layers 4–6, which no milestone
 ever named), taken in order of size, and finished that at M7.3; since then
 it has worked through the rest of what the plan's prose commits to and its
@@ -433,6 +434,73 @@ arrives essentially whole, so streaming buys the visitor nothing that the
 claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
+
+M8.6 is done — **the compat adapter meets a real endpoint, and what a
+fresh Gemini key found** (§3.8, §2.4.5g, §2.6). Two keys arrived for one
+session, each for testing only, and each verified something no loopback
+test can. The first closes the live suite's blindest spot: the generic
+OpenAI-compatible adapter — the one row of the plan's table that covers
+OpenRouter, Together, vLLM and LM Studio — had never met a real remote
+endpoint, because Groq shares the code path but its gated cases have never
+had a key either. The suite now carries an xAI-gated entry (`XAI_API_KEY`,
+read by nothing else in the repo): the exact self-hosted credential shape
+a tenant would save — provider openai_compatible, base URL
+https://api.x.ai/v1, an explicit non-reasoning model (`XAI_MODEL`
+overrides; a reasoning default would re-arm M7.11's thinking trap with no
+thinking-budget knob to bound it) — with the base URL through the
+PRODUCTION SSRF vet. What the key found is recorded rather than smoothed
+over: a newly created xAI team has NO credits, and until it is funded on
+console.x.ai every endpoint (the models listing included) answers one 403
+naming that console — `GET /v1/api-key` calls the key itself fine while
+`team_blocked` is true. All three cases were run against that state ON
+PURPOSE: the validator accepted the shape, the vet resolved api.x.ai, the
+vault cycle encrypted and decrypted the real key, the adapter made a real
+HTTPS call, and each case failed with the provider's own sentence — no
+crash, no key echoed — so the moment the team is funded they go green with
+no code change, M7.8's standing arrangement extended to a fourth key.
+
+The same run fixed a bug that had sat latent in the suite for five
+milestones because only Gemini had ever run it: the structured-output
+case's hand-built system prompt said "match the provided schema" while
+PROVIDING none — Gemini and Anthropic survive that because responseSchema
+reaches them natively (responseJsonSchema; a forced tool), but a
+json_object provider (Groq, the compat adapter) receives no schema at all
+and would have been asked to guess the shape. The case now sends the
+PRODUCTION prompt (buildAnswerMessages over a fixture RetrievedChunk) and
+mirrors the pipeline one step further: on a schema violation, ONE retry
+through the real buildRetryMessages, both outcomes printed so the
+per-provider violation rate stays observable. That mirror earned itself
+the same afternoon: gemini-3.7-flash (new since M8.3) hit a demand spike —
+503s, and one 200 stream that died after 10 characters with finish=other —
+while a manual replication of the identical request answered perfectly a
+minute later, the exact transient §3.15.2's one retry absorbs. Re-run, the
+case answered valid in 6.9 s, first try.
+
+What the fresh Gemini key measured, and the rate-limit fact the suite had
+been stating wrong. The new `AQ.`-format key authenticates (header auth is
+format-agnostic); gemini-3.6-flash is ALIVE for a new key — round trip
+1,095 ms, the vault-cycled key answering at a 22.8 s free-tier tail — and
+the embedding path reproduced M7.11's numbers exactly: 768-d in 294 ms,
+task types 0.834 same-text vs 0.555 unrelated. The /models listing has
+moved again (gemini-3.7-flash and gemini-embedding-2 are new; 2.5-flash is
+still advertised despite M7.11 finding it dead for new keys — unprobed
+here, because the listing is not the truth and a generate call costs
+quota). Then the suite's own three back-to-back generate calls tripped the
+per-MINUTE limit, and its failure message — written after M8.3 met the
+per-DAY quota — blamed the day, advice that sends the reader the wrong
+way. Both fixes are in: the structured case waits one bounded 60 s for the
+window the suite itself spent (a rate limit says nothing about the claims
+contract the case measures), and the 429 sentence now names BOTH limits
+and how to tell them apart. The daily quota's exact shape is confirmed
+from the 429 body: `GenerateRequestsPerDayPerProjectPerModel-FreeTier`,
+limit 20, per MODEL — so `GEMINI_MODEL=gemini-3.7-flash` pinned the re-run
+to a fresh bucket, which is what the override exists for — and its
+RetryInfo ("retry in 11s") is fiction: the bucket is hard until the
+rollover. Part of the day's 20 was spent before this session touched the
+key, which is worth knowing when a fresh key 429s early: AI Studio usage
+bills the same per-model bucket as the API. Ladder: realtime typecheck and
+456 keyless tests green; nothing outside a test file and .env.example
+changed, so no prod boot and no probes (§1.2).
 
 M8.5 is done — **the source ceiling is enforced, and sources became
 deletable** (§3.22, §2.4.9, §9.9, §3.8, DATAFLOW §7.9b). The plan catalog
@@ -2498,24 +2566,39 @@ force-exits.
 - `credentials/__tests__/liveProviders.test.ts` — **key-gated**, the
   fastembed pattern (§2.4.5c) applied to providers: each provider's cases
   run only when ITS key is in the environment (`GROQ_API_KEY`,
-  `GEMINI_API_KEY` — the same variables the CLI and server fallback read,
-  §2.6; there is deliberately no test-only variable to keep in sync).
-  What only a real provider can answer: does it accept the exact payload
-  the Test button sends and report a resolved model; does the key still
-  authenticate after an AES-GCM encrypt/decrypt cycle (a subtle encoding
-  or AAD corruption would pass every loopback test and fail only here);
-  and does its structured output honor the claims contract — logged
-  per-provider so §2.4.5h's "enforcement ranges from real to advisory"
-  becomes an observation instead of an assumption. A 429 is reported as
-  the free-tier rate limit it is, with the retry delay. With no keys the
-  cases skip AND a guard test asserts the keyless default, so "gated off"
-  can never be mistaken for "passed". CI sets no keys, by design. Since
-  M3.6b Gemini — the only free tier serving both roles — also runs the
-  EMBEDDING credential path: that the reduced output dimension we request
-  is honored and storable (the whole basis for halfvec(1024)), that a
-  batch comes back in order, and that a query embedding really is nearer
-  its own passage than an unrelated one — which is both a semantic check
-  the mock cannot make and the proof that taskType is doing something.
+  `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` — the same variables the CLI and
+  server fallback read, §2.6; there is deliberately no test-only variable
+  to keep in sync — plus, since M8.6, `XAI_API_KEY`, the one deliberate
+  exception: nothing else reads it, because its job is to prove the
+  GENERIC OpenAI-compatible adapter against a real hosted endpoint,
+  api.x.ai, through the exact self-hosted credential shape a tenant would
+  save — openai_compatible + base URL + explicit model, the base URL
+  through the PRODUCTION SSRF vet, which no loopback test can run
+  un-mocked. The entry's model default is NON-reasoning on purpose, and
+  `XAI_MODEL` pins a run). What only a real provider can answer: does it
+  accept the exact payload the Test button sends and report a resolved
+  model; does the key still authenticate after an AES-GCM encrypt/decrypt
+  cycle (a subtle encoding or AAD corruption would pass every loopback
+  test and fail only here); and does its structured output honor the
+  claims contract — since M8.6 under the PRODUCTION prompt
+  (buildAnswerMessages, because the old hand-built prompt promised a
+  schema it never provided, which only a natively-enforcing provider
+  survives) with the pipeline's own one-retry mirror (buildRetryMessages;
+  a violation and its rescue are both printed, so §2.4.5h's "enforcement
+  ranges from real to advisory" stays an observation) — and a bounded
+  60 s wait for a 429, because the suite's own three back-to-back calls
+  can trip a fresh key's per-minute window, which is one of two limits
+  the failure sentence now tells apart (per-minute: re-run in a minute;
+  per-day: 20/model on the free tier, hard until rollover). With no keys
+  the cases skip AND a guard test asserts the keyless default, so "gated
+  off" can never be mistaken for "passed". CI sets no keys, by design.
+  Since M3.6b Gemini — the only free tier serving both roles — also runs
+  the EMBEDDING credential path: that the reduced output dimension we
+  request is honored and storable (the whole basis for halfvec(1024)),
+  that a batch comes back in order, and that a query embedding really is
+  nearer its own passage than an unrelated one — which is both a semantic
+  check the mock cannot make and the proof that taskType is doing
+  something.
 - `routes/__tests__/internal.test.ts` — DB-gated, real HTTP listener, a
   loopback OpenAI-compatible fake as the tenant's provider (recording
   every request so tests assert what left the process). Pinned: uniform
