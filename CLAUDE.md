@@ -466,7 +466,14 @@ about the parser's 422, not the cap's 409) and seed-demo's demo org (the
 playground tour's first sources step is "crawl nodejs.org", which a full
 free org would refuse). Verified with the full ladder against the rebuilt
 prod image — smoke, injection, security 57/57 — plus 456 realtime tests (8
-new) and web's suite and build. One flake recorded rather than shrugged at:
+new) and web's suite and build, then verified LIVE in a real browser against
+the dev servers: a fresh free org reading "0 of 1 source on the Free plan",
+a connect flipping it to "the plan is full" with both buttons on the row, a
+second connect surfacing the exact 409 sentence in the form with nothing
+landed, Delete emptying the subtree (checked in the database) and freeing
+the slot, a QUEUED row offering Delete but not Re-crawl and its job dying
+with the source, and at 375px `scrollWidth === clientWidth === 375` with
+nothing past the viewport edge. One flake recorded rather than shrugged at:
 the wake-driven worker test's 2-second poll ceiling went red once on an
 idle machine and green on every re-run; the ceiling is 10 s now, binding
 only when something is really wrong since the loop exits on success.
