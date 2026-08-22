@@ -41,7 +41,7 @@ data, and most of them are CI gates.
 | Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
 | Answer path against a real model | **TTFT p50 2.2 s, p95 27.9 s** (free-tier Gemini `gemini-3.6-flash`, n=9, 612 in / 18 out tokens per answer) — bimodal: six under 5 s, three 13–28 s | `npm run ask -- … --llm gemini`, read back from `messages` |
 | Schema-violation rate, Gemini | **0 of 9 answers** needed the contract retry, under native server-side JSON-schema enforcement | `messages.schema_violations` — the column M7.10 added |
-| Tests | 817 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
+| Tests | 828 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
 The TTFT and schema-violation rows above come from a **single session with a
 borrowed free-tier key** and n=9 answers, which is why they are reported with
@@ -282,6 +282,18 @@ docker compose up -d database   # Postgres 18 + pgvector on :5433
 cd realtime && npm ci && npm run dev          # migrates, then listens on :3000
 cd ../web   && npm ci && npm run dev          # the dashboard on :3001
 ```
+
+**Or boot the whole thing in one command:**
+
+```bash
+npm run playground
+```
+
+That starts the database, the realtime service, the dashboard and a set of
+pretend customer websites with the widget installed, seeds a real
+documentation corpus and a dashboard login, and prints where everything is —
+no API keys needed. [PLAYGROUND.md](PLAYGROUND.md) is a fifteen-minute guided
+tour of the product through it.
 
 Keyless out of the box: `npm run seed-demo` in `realtime/` seeds a fixture
 org, `npm run ask -- "<question>"` drives the whole grounded loop from the

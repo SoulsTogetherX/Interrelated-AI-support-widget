@@ -9,7 +9,8 @@
     "typecheck:shared": "tsc -p shared/tsconfig.json",
     "typecheck:providers": "tsc -p providers/tsconfig.json",
     "typecheck:eval": "tsc -p eval/tsconfig.json",
-    "typecheck:loadtest": "tsc -p loadtest/tsconfig.json"
+    "typecheck:loadtest": "tsc -p loadtest/tsconfig.json",
+    "playground": "node scripts/playground.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

@@ -49,3 +49,5 @@ PHASE_NOTES.md
 # probe seed service and read by scripts/security-probe.mjs and
 # scripts/injection-probe.mjs. Per-run droppings, like eval/results/.
 .probe/
+# Playground droppings: generated local secrets (scripts/playground.mjs).
+.playground/

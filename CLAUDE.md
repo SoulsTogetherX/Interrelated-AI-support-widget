@@ -434,6 +434,36 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M8.1 is done — **the whole product in one command** (§6.5, PLAYGROUND.md).
+Every milestone so far measured, hardened or documented the product; none of
+them made it easy to USE. Booting the stack by hand is six coordinated steps
+whose failure modes are all silent — realtime's dev server does not read
+`.env` while its CLIs do, the dashboard degrades to setup notices unless three
+variables agree across two processes, the seeded demo org has no dashboard
+login, and `/demo`'s own origin is not on the allowlist `seed-demo` writes
+(a bug found by this increment: the page rendered and then 403'd every mint).
+`npm run playground` owns all of it: preflight (Docker, deps, ports, `.env`),
+database, widget build, three dev servers, two seeds, and a banner with the
+URLs and credentials. Keyless — the mock answers by quoting retrieved
+documentation, so the grounded loop is real even where the model is not.
+Three decisions carry it: generated secrets PERSIST in gitignored
+`.playground/secrets.json`, because `CREDENTIAL_MASTER_KEY` encrypts tenant
+provider keys and resolve.ts throws loudly rather than degrading — a fresh key
+per run would break every answer for an org whose key was saved last session;
+env layering is four rules with `EMBEDDING_PROVIDER=local` a HARD override,
+since seed and query sides disagreeing means the dense arm sees nothing and
+every question refuses; and children spawn as direct node entrypoints rather
+than npm shims, so the recorded pid is the true supervisor and `taskkill /T`
+clears the tree (verified live: ten processes, one call, all three ports
+freed). Verified end to end on a cold boot — banner, a grounded cited answer
+and a refusal through the real SSE route, dashboard login, the widget mounted
+on the Tailwind fixture answering with citations, `/demo` minting 200 from its
+own origin, teardown leaving the database up, and a `--skip-seed` reboot
+reusing both the corpus and the secrets. It also surfaced a product bug it did
+not fix: the Providers page's Test button waits 15 s with no retry, and this
+machine's free-tier Gemini answered in 5.9 s, 0.9 s and then 503'd at 11 s —
+recorded for the next increment rather than smuggled into this one.
+
 M7.12 is done — **the number that justifies iterative scans** (§3.29, §7.8,
 §3.14, eval/RESULTS.md). The plan's metrics list asks for "recall with and
 without iterative scans under tenant filtering", and §3.12 had been claiming
@@ -4021,6 +4051,68 @@ its PDF parser, not merely read a status. Failures are counted
 rather than thrown so one broken endpoint doesn't mask the state of the
 rest; every fetch carries a timeout because a probe that can hang turns a
 dead service into a stuck CI job.
+
+### §6.5 `scripts/playground.mjs` + `playground-core.mjs` — the whole product in one command (M8.1)
+`npm run playground`. The odd one out in `scripts/`: its siblings PROBE a
+running stack, and this one BOOTS one — database, realtime, the dashboard and
+the fixture host pages — seeds a real corpus and a dashboard login, and prints
+where everything is. Same zero-dependency rule (node stdlib only), because a
+tool for exercising the product should not need its own install step.
+
+**Why it exists.** Doing this by hand is six coordinated steps whose failure
+modes are all silent: realtime's dev server does not read `.env` while its
+CLIs do (§3.11's asymmetry), the dashboard degrades to setup notices unless
+`INTERNAL_API_SECRET` / `REALTIME_INTERNAL_URL` / `NEXT_PUBLIC_WIDGET_API_URL`
+are set AND agree across two processes, the org `seed-demo` creates has no
+dashboard login at all, and `/demo`'s own origin is not on the allowlist that
+`seed-demo` writes. Every one of those reads as "the product is broken"
+rather than "the wiring is wrong", which is the worst way for a demo to fail.
+
+**The pure/glue split** (`playground-core.mjs`) is §7.3's and §10.1's, applied
+to a dev tool: everything that can be wrong in a way a test would catch — env
+layering, secret generation, dotenv parsing, the banner — is a pure function
+the root vitest suite pins, and `playground.mjs` is the part that spawns
+processes and opens sockets.
+
+Three decisions carry it:
+
+- **Secrets PERSIST, in gitignored `.playground/secrets.json`.** The generated
+  trio includes `CREDENTIAL_MASTER_KEY`, which encrypts tenant provider keys
+  at rest — and §3.21's resolve.ts throws LOUDLY on a decrypt failure rather
+  than degrading. A fresh key per run would therefore break every answer for
+  an org whose Groq key was pasted in a previous session, with no hint as to
+  why. The file is reconciled field-by-field so a future field can arrive
+  without regenerating that one, and a user-supplied key that DIFFERS from the
+  persisted one is honored with a warning naming the consequence.
+- **Env layering is four rules, not one.** Shell wins over `.env` (the
+  convention `web/next.config.ts` and every realtime CLI already state);
+  `.env` fills what the shell left; the playground fills what neither set; and
+  four variables are HARD overrides because they are invariants of the
+  playground rather than preferences — `EMBEDDING_PROVIDER=local` (the seed
+  embeds under this model and the chat route embeds questions with it; if the
+  two disagree the dense arm sees nothing and every question refuses),
+  `INGEST_WORKER=1`, and the two ports the fixture HTML and the seeded
+  allowlist hardcode. Each override warns, naming old → new.
+- **Children are spawned as DIRECT node entrypoints** (tsx's `cli.mjs`,
+  next's `bin/next`), never through npm scripts. An `npm.cmd` shim on Windows
+  makes the recorded pid a wrapper whose death orphans the real servers —
+  the exact mechanism that has left :3000/:3001 haunted between sessions. With
+  the true supervisor pid recorded, `taskkill /T` clears the tree, which a
+  live check confirmed: ten processes, one call, all three ports freed.
+
+`web/scripts/seedPlayground.ts` is the half that must live in web/: users are
+web's domain (scrypt, the HIBP screen, the encrypted-email blind index), and a
+second implementation in realtime would drift. It is idempotent, handles the
+one-owner partial unique index in every direction (seed-demo's org is created
+OWNERLESS, so the first run takes owner; a race or a pre-existing owner
+degrades honestly to agent), recovers a userId by blind index when the account
+exists with a changed password, and allowlists `/demo`'s own origins — the bug
+nobody had noticed because nobody had opened `/demo` with a widget that
+worked.
+
+`PLAYGROUND.md` is the guided tour and states plainly what is real (retrieval,
+verification, the trust model, every metric) versus what is a mock until a key
+is connected (the model).
 
 ### §6.3 `scripts/security-probe.mjs` (M6.1)
 The trust model attacked from the outside, the way a script on the internet

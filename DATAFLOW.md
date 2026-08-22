@@ -2207,3 +2207,86 @@ quotes each chunk's first, legitimate line and therefore measures the
 pipeline's containment; against a real provider the same run measures that
 provider. What CI asserts is the part that holds for every model: no uncited
 text, no attacker URL cited, no system prompt in anything the visitor sees.
+
+---
+
+## §13 The playground — one command to a running product (M8.1)
+
+`npm run playground` (scripts/playground.mjs, §6.5). Not a request path: the
+trace of a BOOT, and the one place every wiring dependency between the three
+services is stated in one order rather than discovered one silent failure at
+a time.
+
+```
+npm run playground
+  → preflight()                        scripts/playground.mjs
+      docker info                      engine reachable, or "start Docker Desktop"
+      .env present                     else copy .env.example (compose has no
+                                       defaults for POSTGRES_*, so its absence
+                                       fails later and far less legibly)
+      node_modules probes              realtime tsx · next bin · web tsx ·
+                                       widget esbuild · ROOT fastembed
+                                       (providers/embedding/local.ts resolves
+                                       it upward), each naming its `npm ci`
+      ports 3000/3001/4400             a CONNECT probe, not a bind probe: on
+                                       Windows a specific-address bind can
+                                       coexist with another process's wildcard
+                                       listener, so bind would pass on a port
+                                       an orphan owns
+  → ensureSecrets()                    .playground/secrets.json (gitignored)
+      reconcileSecrets                 field-by-field; CREDENTIAL_MASTER_KEY is
+                                       NEVER silently regenerated — it encrypts
+                                       tenant provider keys and §3.21 throws
+                                       loudly on a decrypt failure
+  → assembleEnv()                      playground-core.mjs — four layers:
+      1 process.env                    shell always wins (§2.6's convention)
+      2 .env fill-missing              POSTGRES_*, provider keys, LLM_PROVIDER
+      3 playground fill-missing        the secret trio, REALTIME_INTERNAL_URL,
+                                       NEXT_PUBLIC_WIDGET_API_URL, DEMO_
+                                       PUBLISHABLE_KEY, LLM_PROVIDER=mock,
+                                       INGEST_POLL_MS=0
+      4 HARD overrides (warn)          EMBEDDING_PROVIDER=local · INGEST_WORKER=1
+                                       · BACKEND_PORT=3000 · FIXTURE_PORT=4400
+  → docker compose up -d database      then `compose exec database pg_isready`
+                                       until ready (an open port is not a ready
+                                       Postgres)
+  → widget build                       the one npm-shim spawn; it EXITS, and the
+                                       esbuild arg list stays in widget/package.json
+  → spawn realtime  (cwd realtime/)    node realtime/node_modules/tsx/…/cli.mjs
+                                       watch src/server.ts — cwd is load-bearing
+                                       twice: widgetBundlePath resolves from it
+                                       and fastembed caches into local_cache/
+      → poll GET :3000/api/ready       migrations run inside this window; the
+                                       poll races the child's own exit, so a
+                                       crash reports as a crash
+  → spawn web (:3001) + fixtures (:4400)
+  → seed, sequentially                 realtime seedWidgetDemo --corpus fastify
+                                       (org, pk, :4400 origins, 31 pages under
+                                       LOCAL embeddings)
+                                       then web seedPlayground.ts:
+                                         registerUser → authenticateUser →
+                                         blind-index lookup (the account may
+                                         exist with a changed password)
+                                         membership under org_members_one_owner
+                                         allowlist :3000 — /demo serves the
+                                         widget with data-api="" (same-origin),
+                                         so its mint carries Origin :3000, which
+                                         seed-demo never writes
+                                       PLAYGROUND_RESULT {json} → the banner
+  → banner                             URLs, credentials, what is mock
+  → supervise                          any child exiting → teardown(1)
+
+Ctrl-C → teardown
+  win32   taskkill /pid <pid> /T /F    works because the recorded pid is the
+                                       REAL tsx/next supervisor: an npm.cmd
+                                       shim would leave the servers orphaned
+                                       (the mechanism behind every haunted
+                                       :3000 in this project's history)
+  posix   SIGTERM → 5s → SIGKILL
+  process.on("exit") sweep             the mintty hard-kill path
+  the database container is LEFT UP    data lives in its volume
+```
+
+The two seeds are sequential rather than parallel because the second one
+needs the org the first creates; both run after `/api/ready` because both
+need the schema realtime's boot migrates.

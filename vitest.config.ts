@@ -20,6 +20,9 @@ export default defineConfig({
       "providers/**/*.test.ts",
       "eval/**/*.test.ts",
       "loadtest/**/*.test.ts",
+      // The playground orchestrator's pure core (scripts/ is otherwise
+      // zero-dependency .mjs probes with no runner of their own).
+      "scripts/**/*.test.mjs",
     ],
     environment: "node",
   },
