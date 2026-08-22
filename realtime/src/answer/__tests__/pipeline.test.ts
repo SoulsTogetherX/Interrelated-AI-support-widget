@@ -563,6 +563,86 @@ describe.skipIf(!DB_CONFIGURED)("answer pipeline", () => {
     expect(llm.calls).toHaveLength(1)
   })
   //#endregion
+
+  //#region The deadline (M8.4)
+  // The failure the retry policy CANNOT see: a provider that accepts the
+  // connection and never fails — no error, no retry, nothing bounding the
+  // wait. M8.3 measured one first token arriving after 310 seconds, held
+  // open because Node's fetch has no default timeout and the only abort was
+  // the visitor closing the tab. The hanging fixture below is that
+  // provider: it resolves ONLY when the request's signal aborts, which is
+  // exactly what a real fetch does when its socket is quietly held.
+
+  class HangingLLMProvider {
+    readonly model = "hanging-llm"
+    calls = 0
+    // eslint-disable-next-line require-yield
+    async *stream(request: { signal?: AbortSignal }): AsyncGenerator<never> {
+      this.calls++
+      await new Promise<never>((_, reject) => {
+        const fail = () => reject(request.signal?.reason ?? new Error("aborted"))
+        if (request.signal?.aborted) return fail()
+        request.signal?.addEventListener("abort", fail, { once: true })
+      })
+    }
+  }
+
+  it("cuts off a provider that never answers at the deadline — once, with the question kept", async () => {
+    const llm = new HangingLLMProvider()
+    let conversationId: string | undefined
+    await expect(
+      answerQuestion({
+        db, embedder, llm, orgId, visitorId: "vis-hang", question: REFUND_TEXT,
+        deadlineMs: 60,
+        onEvent: (e) => { if (e.type === "meta") conversationId = e.conversationId },
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" })
+
+    // Called exactly ONCE: a TimeoutError is an abort to retry.ts's
+    // classification, so the policy must not spend a second attempt on a
+    // deadline that has already passed.
+    expect(llm.calls).toBe(1)
+    // The visitor's question survives — persisted before retrieval, the
+    // same guarantee every other failure path holds — and no assistant row
+    // exists for an answer that never arrived.
+    const messages = await db.selectFrom("messages")
+      .select("role").where("conversation_id", "=", conversationId!).execute()
+    expect(messages.map((m) => m.role)).toEqual(["visitor"])
+  })
+
+  it("never kills an answer that arrives in time", async () => {
+    // The composed signal must be invisible on the happy path: a scripted
+    // mock answers instantly, far inside a generous deadline.
+    const llm = new MockLLMProvider([
+      { text: scriptedAnswer([{ text: "Refunds take five business days.", chunkId: refundChunkId, quote: "within five business days" }]) },
+    ])
+    const result = await answerQuestion({
+      db, embedder, llm, orgId, visitorId: "vis-in-time", question: REFUND_TEXT,
+      deadlineMs: 5_000,
+    })
+    expect(result.refused).toBe(false)
+    expect(result.content).toBe("Refunds take five business days.")
+  })
+
+  it("does not reach for the platform fallback after the deadline", async () => {
+    // The case where checking only the VISITOR's signal would go wrong: by
+    // the time the deadline has fired the visitor's wait is spent, and
+    // running the standby would bill the platform for an answer nobody will
+    // be shown. The fallback's script staying unconsumed is the proof.
+    const llm = new HangingLLMProvider()
+    const fallback = new MockLLMProvider([
+      { text: scriptedAnswer([{ text: "unreachable", chunkId: refundChunkId, quote: "within five business days" }]) },
+    ])
+    await expect(
+      answerQuestion({
+        db, embedder, llm, llmFallback: fallback, orgId,
+        visitorId: "vis-hang-fb", question: REFUND_TEXT, deadlineMs: 60,
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" })
+    expect(llm.calls).toBe(1)
+    expect(fallback.calls).toHaveLength(0)
+  })
+  //#endregion
 })
 
 describe.skipIf(DB_CONFIGURED)("answer pipeline (no database)", () => {

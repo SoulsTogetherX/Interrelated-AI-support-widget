@@ -580,6 +580,17 @@ schema failure ×2       NO assistant row; AnswerSchemaError to the caller;
                         is visible at all
 abort (visitor gone)    provider throws mid-stream; nothing persisted past
                         the visitor message
+deadline (M8.4)         the answer as a whole outlived ANSWER_DEADLINE_MS
+                        (60 s default) — a provider accepted the call and
+                        went quiet, the failure no retry policy can see
+                        because nothing ever fails. AbortSignal.timeout,
+                        composed with the visitor's signal, aborts every
+                        in-flight provider call; the pipeline throws
+                        TimeoutError (never retried — isAbort), no
+                        assistant row, the visitor message kept. At the
+                        route the visitor is STILL WATCHING, so unlike the
+                        abort above this one gets the terminal opaque
+                        {type:"error"} event (§3.15.6)
 ```
 
 ### §5.3 The HTTP surface — bubble-open → session → SSE answer (M2.5)
@@ -2350,9 +2361,13 @@ visitor sees, so the harness paces itself instead), the embedder is pinned
 across every provider (retrieval decides what a model is asked to ground in),
 and a provider with no key produces a row saying so rather than no row at all.
 
-What the flow CANNOT bound, discovered by running it: `answerQuestion` has no
-deadline of its own. `postStream` passes only a caller-supplied signal, Node's
-`fetch` has no default timeout, and the only abort on the whole path is
-`req.on("close")` in §5.3's route. A provider that accepts the connection and
-goes quiet therefore holds its stream — one answer here took 310 s to a first
-token — and the harness, having no visitor to close a tab, waits.
+What the flow could NOT bound when it first ran, discovered by running it:
+`answerQuestion` had no deadline of its own — `postStream` passes only a
+caller-supplied signal, Node's `fetch` has no default timeout, and the only
+abort on the whole path was `req.on("close")` in §5.3's route. A provider
+that accepted the connection and went quiet held its stream — one answer
+here took 310 s to a first token — and the harness, having no visitor to
+close a tab, waited. **M8.4 closed it** (§5.2's deadline row): the pipeline
+now carries a 60 s wall-clock deadline of its own, so the same hung provider
+today records as the `error` outcome a visitor would have experienced, at
+the deadline rather than at the provider's whim.

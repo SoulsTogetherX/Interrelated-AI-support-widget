@@ -91,6 +91,14 @@ interface WidgetRouteOptions {
   tokenSecret: string
   /** Groundedness threshold override (ANSWER_MAX_DISTANCE env at boot). */
   maxDistance?: number
+  /** Deadline override for the whole answer (ANSWER_DEADLINE_MS env at
+   *  boot; pipeline default 60 s — see DEFAULT_ANSWER_DEADLINE_MS for the
+   *  measured arithmetic behind the number). Unlike dailyAnswerCap below,
+   *  this may move in EITHER direction: it is an operational bound with no
+   *  cross-layer contract to break — a deployment fronting a slow
+   *  self-hosted model legitimately widens it, a demo legitimately
+   *  tightens it. */
+  answerDeadlineMs?: number
   /** A deployment-wide ceiling on answers per org per UTC day
    *  (WIDGET_DAILY_ANSWER_CAP). Since M5.3 the cap normally comes from the
    *  org's PLAN (shared/billing/plans.ts); this can only TIGHTEN it, never
@@ -499,7 +507,13 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         "vary": "origin",
       })
 
-      // A closed tab must stop the token spend mid-generation.
+      // A closed tab must stop the token spend mid-generation. Kept as the
+      // route's OWN controller rather than folded into the pipeline's
+      // deadline signal, because the catch below needs to tell the two
+      // apart: a visitor who left gets silence (nobody is listening), while
+      // a deadline that fired mid-answer leaves a visitor still staring at
+      // the stream — they get the terminal error event like any other
+      // failure, so the widget can recover their input.
       const aborter = new AbortController()
       req.on("close", () => aborter.abort())
 
@@ -536,6 +550,7 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
           question,
           ...(conversationId !== undefined ? { conversationId: conversationId as string } : {}),
           ...(options.maxDistance !== undefined ? { maxDistance: options.maxDistance } : {}),
+          ...(options.answerDeadlineMs !== undefined ? { deadlineMs: options.answerDeadlineMs } : {}),
           signal: aborter.signal,
           onEvent: (event) => sseWrite(res, event),
         })

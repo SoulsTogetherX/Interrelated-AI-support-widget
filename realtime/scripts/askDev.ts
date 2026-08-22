@@ -129,6 +129,15 @@ main().catch((err) => {
       process.exit(1)
     }
   }
+  // The answer deadline (M8.4): the provider accepted the call and then
+  // never answered inside DEFAULT_ANSWER_DEADLINE_MS. Named, because the
+  // bare DOMException message does not say WHOSE timeout fired, and a
+  // developer probing a slow self-hosted model would otherwise grep for a
+  // timeout this CLI never set.
+  if (err instanceof Error && err.name === "TimeoutError") {
+    console.error("the provider did not answer inside the pipeline's deadline (ANSWER_DEADLINE_MS, 60s default) — it accepted the call and went quiet")
+    process.exit(1)
+  }
   console.error("ask failed:", err instanceof Error ? err.message : err)
   process.exit(1)
 })

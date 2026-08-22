@@ -58,6 +58,17 @@ interface AnswerPipelineOptions {
   maxDistance?: number
   k?: number
   signal?: AbortSignal
+  /** Wall-clock ceiling on the WHOLE answer — embed, retrieve, generate,
+   *  the schema retry included — after which every in-flight provider call
+   *  is aborted and the pipeline throws (M8.4). Distinct from the retry
+   *  policy's budget, which bounds time spent WAITING BETWEEN failures: a
+   *  provider that accepts the connection and goes quiet never fails, so no
+   *  retry budget ever starts counting, and M8.3 measured exactly that — a
+   *  first token after 310 seconds, held open because Node's fetch has no
+   *  default timeout and the only abort was the visitor closing the tab.
+   *  Defaults to DEFAULT_ANSWER_DEADLINE_MS; ANSWER_DEADLINE_MS overrides
+   *  per deployment (§3.18). */
+  deadlineMs?: number
   onEvent?: (event: AnswerEvent) => void
   /** Retry-policy seams (M7.7) — tests inject a sleep and a random so the
    *  backoff is deterministic and instant; production passes nothing and
@@ -115,6 +126,31 @@ const NOTHING_VERIFIED_TEXT = "I couldn't verify an answer to that from the docu
  *  spend a tenant's quota on one question. length-cutoffs surface as parse
  *  failures and are counted by the schema-violation metric. */
 const MAX_ANSWER_TOKENS = 1024
+
+/**
+ * The answer path's deadline (M8.4) — the bound §3.15.5's retry policy
+ * cannot provide, because that policy only runs when a call FAILS, and the
+ * failure mode M8.3 measured is a call that never does: a provider accepted
+ * the connection and produced its first token after 310 seconds, with
+ * nothing anywhere able to stop it but the visitor closing the tab.
+ *
+ * 60 seconds is a product judgment bounded on both sides by measured
+ * numbers. Below: the free tier this product is designed around answered at
+ * a TTFT p95 of 27.9 s, answers arrive essentially whole at TTFT under
+ * server-enforced schemas (§2.4.5h), and the one schema retry doubles the
+ * generation — so p95 twice over is ~56 s, and a tighter deadline would cut
+ * off answers the provider was actually going to deliver. Above: nobody
+ * watches a chat bubble for a minute, so a longer deadline only spends the
+ * tenant's tokens on answers nobody reads. Killing mid-stream is safe for
+ * the retry policy's reason: nothing generated reaches the visitor until it
+ * is verified, so an aborted stream has shown nobody anything.
+ *
+ * Enforced with `AbortSignal.timeout` composed alongside the visitor's own
+ * signal, so the two aborts share every code path below — the timers are
+ * unref'd, so a CLI run never hangs on one — and a deadline abort is a
+ * `TimeoutError`, which retry.ts's isAbort already refuses to retry.
+ */
+const DEFAULT_ANSWER_DEADLINE_MS = 60_000
 //#endregion
 
 //#region Helpers
@@ -166,12 +202,20 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   const { db, embedder, llm, orgId, question } = options
   const emit = options.onEvent ?? (() => {})
   const startedAt = Date.now()
+  // The deadline starts HERE — before the embed, because a hung embedding
+  // provider was exactly as unbounded as a hung generation — and is composed
+  // with the visitor's signal so both aborts travel one wire: every provider
+  // call below aborts when EITHER the visitor leaves or the deadline passes.
+  // Only the signal is consulted after generation, so a deadline can never
+  // kill an answer that already arrived — the persist step runs to the end.
+  const deadline = AbortSignal.timeout(options.deadlineMs ?? DEFAULT_ANSWER_DEADLINE_MS)
+  const signal = options.signal !== undefined ? AbortSignal.any([options.signal, deadline]) : deadline
   // One hooks object for every provider call in this pipeline, so the
   // visitor's abort reaches the backoff as well as the request: a closed tab
   // must stop a WAIT just as surely as it stops a generation.
   const retryHooks: RetryHooks = {
     ...(options.retry ?? {}),
-    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    signal,
   }
 
   if (question.trim().length === 0) throw new Error("question must not be blank")
@@ -300,7 +344,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     temperature: 0,
     maxTokens: MAX_ANSWER_TOKENS,
     responseSchema: ANSWER_JSON_SCHEMA,
-    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    signal,
   }
 
   // Which provider's text this answer is actually made of. Starts as the
@@ -330,7 +374,11 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
       return await withRetry(primary, retryHooks)
     } catch (err) {
       const fallback = options.llmFallback
-      if (fallback === undefined || options.signal?.aborted) throw err
+      // The COMPOSED signal, deliberately: a deadline that has already
+      // passed is a visitor already gone, and running the standby then
+      // would spend tokens on an answer nobody will be shown — the exact
+      // case checking only the visitor's own signal would miss.
+      if (fallback === undefined || signal.aborted) throw err
       console.warn(
         `[answer] ${llm.model} failed after retries; trying ${fallback.model}:`,
         err instanceof Error ? err.message : err,
@@ -527,6 +575,6 @@ async function persistAssistantMessage(db: Kysely<Database>, row: {
 //#endregion
 
 //#region Exports
-export { answerQuestion, AnswerSchemaError, REFUSAL_TEXT, NOTHING_VERIFIED_TEXT }
+export { answerQuestion, AnswerSchemaError, REFUSAL_TEXT, NOTHING_VERIFIED_TEXT, DEFAULT_ANSWER_DEADLINE_MS }
 export type { AnswerPipelineOptions, AnswerResult }
 //#endregion

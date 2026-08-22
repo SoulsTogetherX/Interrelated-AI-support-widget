@@ -434,6 +434,43 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M8.4 is done — **the answer path has a deadline** (§3.15.6, §3.18, §3.8,
+§2.6, DATAFLOW §5.2, §14). M8.3 found the gap and deliberately did not fix
+it in a measurement commit: nothing bounded a provider that accepts the
+connection and goes quiet — Node's `fetch` has no default timeout,
+`postStream` passes only a caller-supplied signal, and the only abort on the
+whole path was the visitor closing the tab, so one measured answer held its
+SSE stream open for 310 seconds to a first token. The fix is sixty seconds
+of wall clock on the WHOLE answer — embed, retrieve, generate, the schema
+retry included — as `AbortSignal.timeout` composed with the visitor's signal
+by `AbortSignal.any`, so both aborts travel one wire through every provider
+call. The number is bounded on both sides by measured facts (free-tier TTFT
+p95 27.9 s doubled by the one schema retry is ~56 s below it; nobody watches
+a chat bubble for a minute above it), and killing mid-stream is safe for the
+retry policy's own reason: nothing generated reaches the visitor until it is
+verified, so an aborted stream has shown nobody anything. The composition
+cost almost nothing because the earlier layers were already shaped for it —
+a deadline abort is a `TimeoutError`, which retry.ts's `isAbort` has refused
+to retry since M7.7 — and the two places that DID need care are each pinned
+by a test: the platform fallback now checks the COMPOSED signal (a deadline
+that has passed is a visitor already gone, and the standby would spend
+tokens on an answer nobody will be shown), and the route keeps its own
+controller SEPARATE so its catch can tell the aborts apart — a visitor who
+left gets silence, a deadline that fired mid-answer gets the ordinary opaque
+error event, because someone is still watching the stream and the widget
+recovers their input. `ANSWER_DEADLINE_MS` overrides per deployment in
+EITHER direction (an operational bound, unlike the daily cap's
+tighten-only), guarded POSITIVE at boot because its zero is uniquely
+destructive — `AbortSignal.timeout(0)` fires before the first provider byte,
+an outage wearing a configuration's clothes. Verified with the full ladder
+against the rebuilt prod image — smoke, injection, security 57/57 — plus 448
+realtime tests (4 new: the hung provider cut off once and unretried with the
+question kept, the happy path untouched, the fallback refused after the
+deadline, and the route's stream CONCLUDING at the deadline as meta → one
+opaque error with elapsed asserted). The README's known-limitations bullet
+this replaces is deleted, and the compare harness now reports a slow answer
+against the deadline instead of reporting that nothing exists.
+
 M8.3 is done — **the provider comparison table, both halves** (§7.9, §7.10,
 §3.30, §3.14, eval/RESULTS.md). The plan calls this table "the strongest
 evidence the author evaluated rather than guessed", and it was the last of
@@ -2550,13 +2587,29 @@ force-exits.
   would make the by-model metrics quietly wrong); the FIRST provider's error
   rethrown when the fallback fails too; the fallback never reached when the
   primary simply answered; and an abort landing mid-backoff stopping the
-  retry that would have succeeded. The M5.2 block
+  retry that would have succeeded. The M8.4 block covers the deadline
+  (§3.15.6) with a HANGING provider — one that resolves only when its
+  signal aborts, which is what a real fetch does against a quietly held
+  socket: cut off at a 60 ms test deadline with a `TimeoutError`, called
+  exactly ONCE (a deadline abort is never retried), the question kept and
+  no assistant row; a generous deadline invisible on the happy path; and
+  the platform fallback NOT consulted after the deadline — the composed
+  signal's case, where checking only the visitor's own signal would spend
+  tokens on an answer nobody will be shown. The M5.2 block
   covers what an answer cost: the provider's reported usage landing on the
   row verbatim, the RETRY summing both attempts (recording only the
   successful one would make schema violations look free, which is exactly
   backwards), and the two silences staying NULL rather than becoming a
   zero the cost metric would average in as free — a provider that reports
   no usage, and a gate refusal that ran no model.
+- `routes/__tests__/widgetDeadline.test.ts` — DB-gated (M8.4), its own file
+  with its own app instance for widgetByo's reason: the deadline under test
+  is 120 ms, and configuring it on the main suite's shared app would put
+  every chat case under it. Drives the real HTTP hop: a hung provider's
+  stream CONCLUDES at the deadline (elapsed asserted, where the behavior
+  this replaces would sit until vitest's own timeout) as meta → one opaque
+  `{type:"error"}` with no other key, the provider called once, the
+  question persisted, no assistant row.
 - `ingest/__tests__/worker.test.ts` — DB-gated. M7.6b replaced the case that
   asserted an upload job fails ("uploads are not crawlable") with the two
   that now hold: an UPLOAD ingested end to end from its stored extraction —
@@ -3310,6 +3363,63 @@ bucket 429 to it, §8.1); making the PROVIDER's state visible would weaken a
 deliberate trust-model property — failure detail on a public stream is
 reconnaissance — to say something the visitor can act on no differently.
 
+### §3.15.6 The answer deadline (M8.4) — the bound the retry policy cannot be
+Sixty seconds, wall-clock, on the WHOLE answer — embed, retrieve, generate,
+the schema retry included — enforced in pipeline.ts as `AbortSignal.timeout`
+composed with the visitor's own signal via `AbortSignal.any`, so both aborts
+travel one wire through every provider call. It exists because §3.15.5's
+policy only runs when a call FAILS, and the failure M8.3 measured is a call
+that never does: a provider accepted the connection and produced its first
+token after 310 seconds, held open because Node's `fetch` has no default
+timeout, `postStream` passes only a caller-supplied signal, and the only
+abort on the whole path was the visitor closing the tab. No retry budget
+ever started counting, because nothing ever went wrong.
+
+The number is bounded on both sides by measured facts, stated at the
+constant (`DEFAULT_ANSWER_DEADLINE_MS`): below, the free tier's TTFT p95 of
+27.9 s doubled by the one schema retry is ~56 s, so a tighter deadline would
+cut off answers the provider was actually going to deliver; above, nobody
+watches a chat bubble for a minute, so a longer one only spends the tenant's
+tokens on answers nobody reads. Killing mid-stream is safe for the retry
+policy's own reason — nothing generated reaches the visitor until verified,
+so an aborted stream has shown nobody anything.
+
+Five consequences, each pinned by a test or carried by an existing rule:
+
+- **A deadline abort is a `TimeoutError`, which retry.ts's `isAbort` already
+  classifies as never-retryable** — the composition needed no change there,
+  and the pipeline test proves the hung provider is called exactly once.
+- **The platform fallback checks the COMPOSED signal**, not the visitor's:
+  a deadline that has passed is a visitor already gone, and running the
+  standby then would spend tokens on an answer nobody will be shown — the
+  one place where checking only `options.signal` would have been a bug.
+- **The route keeps its OWN controller** (§3.18) precisely so its catch can
+  tell the two aborts apart: a visitor who left gets silence, while a
+  deadline fired mid-answer leaves someone still staring at the stream —
+  they get the ordinary opaque `{type:"error"}` event (a deadline is a
+  provider fact, and provider facts on a public stream are reconnaissance),
+  and the widget recovers their input. `widgetDeadline.test.ts` drives that
+  end to end: meta → error, stream concluded, question kept, no assistant
+  row.
+- **A deadline can never kill an answer that already arrived**: only
+  provider calls consult the signal, so the persist step runs to the end.
+- **The signal only ever aborts waiting-on-provider work**, so the question
+  is already history (persisted before retrieval) on every deadline path.
+
+`ANSWER_DEADLINE_MS` overrides per deployment, and — unlike
+`WIDGET_DAILY_ANSWER_CAP`, which may only tighten — in EITHER direction: it
+is an operational bound with no cross-layer contract to break, a deployment
+fronting a slow self-hosted model legitimately widens it and a demo
+legitimately tightens it. It is guarded POSITIVE at boot where its siblings
+are not, because its zero is uniquely destructive: `AbortSignal.timeout(0)`
+fires before the first provider byte, so a mistyped "0" would be an outage
+wearing a configuration's clothes. What the deadline deliberately does NOT
+do is become visible to the visitor as anything but the ordinary failure —
+§3.15.5's last paragraph applies unchanged. The CLIs name it on their side
+of the trust line: `npm run ask` prints which timeout fired, and the compare
+harness's slow-answer note now reports against the deadline instead of
+reporting that nothing exists.
+
 ### §3.16 `realtime/scripts/askDev.ts`
 Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
 con_…] [--llm mock|groq|gemini|ollama|anthropic] [--tamper]`): the full M2 loop
@@ -3624,7 +3734,12 @@ the question must be embedded by whatever model embedded the org's
 chunks; the ingest worker reads that same row, so the two cannot drift.
 Headers flush before retrieval so TTFB
 precedes the slow work; a closed tab aborts the pipeline mid-generation via
-AbortController; every failure past the SSE boundary is one opaque
+AbortController; since M8.4 the pipeline also carries its own DEADLINE
+(§3.15.6 — 60 s default, ANSWER_DEADLINE_MS to override), and the route
+keeps its controller SEPARATE from it so the catch can tell the two aborts
+apart: a visitor who left gets silence, a deadline that fired mid-answer
+gets the terminal error event, because someone is still watching the
+stream; every failure past the SSE boundary is one opaque
 {type:"error"} event (failure detail on a public stream is
 reconnaissance — including hijack probes of another visitor's
 conversation id, which learn nothing but "error"). CORS is hand-rolled
@@ -4642,7 +4757,11 @@ connection and goes quiet holds an SSE stream open indefinitely. One answer
 reached its first token after 310 seconds, and at n=19 the nearest-rank p95
 IS that worst sample. Not fixed here: a deadline on the answer path is a
 change to a public surface and belongs with its own verification ladder
-rather than smuggled into a measurement.
+rather than smuggled into a measurement. **M8.4 has since built exactly
+that** (§3.15.6): a 60-second wall-clock deadline on the whole answer,
+composed with the visitor's signal, with its own ladder — so a 310-second
+stream is no longer representable, and the harness records anything past
+the deadline as the `error` outcome a visitor would have experienced.
 
 ---
 

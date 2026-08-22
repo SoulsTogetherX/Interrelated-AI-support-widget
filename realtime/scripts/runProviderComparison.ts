@@ -346,10 +346,13 @@ async function main(): Promise<void> {
       console.log(`      ${s.provider}: ${s.inputTokens} input / ${s.outputTokens} output tokens over ${s.answered} answers.`)
     }
     // The slowest answer, named. At small n the nearest-rank p95 IS the
-    // worst sample (rank ceil(0.95 × 19) = 19 of 19), so a single hung
+    // worst sample (rank ceil(0.95 × 19) = 19 of 19), so a single slow
     // stream becomes a headline number — and a reader deserves to know it
     // was one question rather than a tail. Naming it here is what turned a
-    // 310-second p95 into a finding instead of a mystery.
+    // 310-second p95 into a finding instead of a mystery — the finding that
+    // became M8.4's deadline, which now bounds this harness too: an answer
+    // slower than DEFAULT_ANSWER_DEADLINE_MS (60 s) records as an `error`
+    // outcome, exactly as a visitor would have experienced it.
     for (const r of rawOutcomes) {
       const slowest = r.outcomes
         .filter((o) => o.ttftMs !== null)
@@ -357,8 +360,8 @@ async function main(): Promise<void> {
       if (slowest && (slowest.ttftMs ?? 0) > 30_000) {
         console.log(
           `slow: ${r.provider} — ${slowest.questionId} reached its first token after ` +
-          `${Math.round((slowest.ttftMs ?? 0) / 1000)}s. Nothing in the pipeline bounds this: ` +
-          `the only abort is the visitor closing the tab (§3.18), and Node's fetch has no default timeout.`,
+          `${Math.round((slowest.ttftMs ?? 0) / 1000)}s, inside the pipeline's deadline ` +
+          `(ANSWER_DEADLINE_MS, 60 s default — §3.15.6) but far past the p50.`,
         )
       }
     }

@@ -275,7 +275,10 @@ Four more readings, and the last two are limits rather than results:
   as long as it likes. p50 6.9 s is the number that describes the experience;
   p95 here describes a gap. **Not fixed in this increment** — a deadline on
   the answer path is a change to a public surface and belongs with its own
-  verification, not smuggled into a measurement.
+  verification, not smuggled into a measurement. (M8.4 has since built it:
+  a 60-second wall-clock deadline on the whole answer, `ANSWER_DEADLINE_MS`
+  to override, with its own test ladder — so on a re-run this sample would
+  record as an `error` outcome at 60 s rather than as a 310-second answer.)
 - **Cost per 1,000 answers is still unclaimable for this model.**
   `gemini-3.6-flash` has no row in `shared/pricing/models.ts`, and this
   project prices unknown models as `null` rather than guessing (§2.4.8), so

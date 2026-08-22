@@ -105,6 +105,11 @@ async function start(): Promise<void> {
   const llmFallback = fallbackName ? buildLLMProvider(fallbackName) : undefined
   const maxDistance = Number(process.env.ANSWER_MAX_DISTANCE)
   const dailyCap = Number(process.env.WIDGET_DAILY_ANSWER_CAP)
+  // Guarded for POSITIVE, unlike its siblings above, because its zero is
+  // uniquely destructive: AbortSignal.timeout(0) fires before the first
+  // provider byte, so a mistyped "0" would turn every answer on the
+  // deployment into the opaque error — an outage, not a tightening.
+  const answerDeadlineMs = Number(process.env.ANSWER_DEADLINE_MS)
   // One secret, resolved once: the widget's session tokens are signed with
   // it directly and the handoff tickets with a key DERIVED from it
   // (handoff/ticket.ts). Both halves must agree, so neither reads env
@@ -163,6 +168,7 @@ async function start(): Promise<void> {
       tokenSecret,
       ...(Number.isFinite(maxDistance) ? { maxDistance } : {}),
       ...(Number.isFinite(dailyCap) ? { dailyAnswerCap: dailyCap } : {}),
+      ...(Number.isFinite(answerDeadlineMs) && answerDeadlineMs > 0 ? { answerDeadlineMs } : {}),
     },
     ...(internal ? { internal } : {}),
     demo: {

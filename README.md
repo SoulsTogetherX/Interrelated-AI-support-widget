@@ -56,10 +56,13 @@ unknown models as `null` rather than guessing (a wrong-but-believable cost
 figure is worse than none); the token counts are published instead, so anyone
 holding the current price sheet can compute it. And **TTFT p95**, because at
 n=19 the nearest-rank p95 is the single worst observation, and that
-observation — 310 seconds — measures a gap rather than a provider: nothing on
-the answer path imposes a deadline, since Node's `fetch` has no default
-timeout and the only abort in the whole path is the visitor closing the tab.
-That is a known limitation, listed below, found by this measurement.
+observation — 310 seconds — measured a gap rather than a provider: at the
+time, nothing on the answer path imposed a deadline, so a provider that
+accepted the connection and went quiet held the stream for as long as it
+liked. That finding became the next increment: the pipeline now bounds every
+answer at 60 seconds of wall clock (see limitations below), so the 310-second
+stream is no longer representable — it would end as an ordinary error at the
+deadline, which is also how the comparison harness records it on a re-run.
 
 Each provider adapter is proven against a loopback server speaking its real
 wire protocol, and against the provider itself only when that provider's key
@@ -264,16 +267,16 @@ every CI run.
   from a context-quoting mock. Retrieval quality is a real number (local
   embedding model in CI); injection *containment* is a real number; the
   injection *relay rate* and TTFT are per-model numbers that need a key.
-- **Nothing on the answer path imposes a deadline.** Node's `fetch` has no
-  default timeout, the provider adapters pass only a caller-supplied signal,
-  and the only abort in the whole path is the visitor closing the tab. A
-  provider that accepts the connection and then goes quiet holds an SSE
-  stream open for as long as it likes — the provider comparison measured one
-  answer that reached its first token after 310 seconds. The retry policy
-  bounds *failures* (§3.15.5: three attempts inside 8 seconds, honouring
-  `Retry-After` only when it fits the budget); it does not bound a call that
-  never fails and never finishes. A server-side deadline is the fix and is
-  not yet written.
+- **The answer deadline is a constant, not a negotiation.** Every answer —
+  embed, retrieve, generate, the one schema retry — must conclude inside 60
+  seconds (`ANSWER_DEADLINE_MS` to override), after which every in-flight
+  provider call is aborted and the visitor gets the ordinary failure state
+  with their input recovered. That bound exists because the provider
+  comparison measured one answer reaching its first token after 310 seconds
+  — a provider that accepts the connection and goes quiet never *fails*, so
+  the retry policy never sees it. What the deadline does not do is
+  distinguish itself to the visitor: a deadline is a provider fact, and
+  provider facts on a public stream are reconnaissance.
 - **Grounding's honest limit.** A page the tenant crawled is the tenant's
   documentation, and a grounded answer may quote it — including a poisoned
   sentence. What the design guarantees is narrower and stated: no uncited
