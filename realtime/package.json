@@ -15,7 +15,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "tenant-scan": "tsx scripts/runTenantScan.ts"
+    "tenant-scan": "tsx scripts/runTenantScan.ts",
+    "compare": "tsx scripts/runProviderComparison.ts"
   },
   "dependencies": {
     "express": "^5.2.1",

@@ -434,6 +434,43 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M8.3 is done — **the provider comparison table, both halves** (§7.9, §7.10,
+§3.30, §3.14, eval/RESULTS.md). The plan calls this table "the strongest
+evidence the author evaluated rather than guessed", and it was the last of
+its named metrics with no producer at all — M7.10 said so in as many words
+("what this does NOT do is make the plan's provider-comparison TABLE exist").
+The first decision is that the plan's five columns are **not one
+measurement**: recall@5 belongs to the EMBEDDING provider and the other four
+to the GENERATION provider, so they are produced by two harnesses and
+published as two tables — mixing them would let a better embedder flatter a
+worse model. `npm run compare` (new) asks the golden set through the REAL
+answer pipeline once per generation provider, reading schema violations back
+from `messages.schema_violations` so the published number is the product's
+own record; `npm run eval -- --embedder gemini` (the M7.12 flag, never run
+until now) produces the embedding half. **The headline is the strip rate:**
+a real model had **23.8% of its claims stripped** where the context-quoting
+mock strips 0% — the mock being the control that proves the number is about
+the model rather than the harness, and the delta being this project's thesis
+as a measurement. Beside it: **1 schema violation in 19 answers** (M7.11 saw
+0 in 9, so Gemini's native enforcement is near-dead rather than dead), and on
+the embedding side **+15.0 points of recall@5** for `gemini-embedding-001`
+over the local `bge-small-en-v1.5` (90.0% vs 75.0% hybrid), with the hybrid
+miss list falling from 12 questions to 2 and the lexical arm byte-identical
+across both runs as the control that says only the dense arm moved. Three
+limits are stated where the numbers are rather than smoothed over: the free
+tier is **20 generate requests per DAY** for `gemini-3.6-flash` (which is why
+n is 20 and not 80, and which the harness records as an ordinary `error`
+outcome rather than crashing), `gemini-3.6-flash` stays deliberately unpriced
+so cost per 1k reads "—" while the token counts are published for anyone
+holding the price sheet, and **`batchEmbedContents` is metered PER ITEM** —
+100/minute on the free tier — which contradicts §2.4.5a's stated rationale
+for the batch-first interface and is why the local model remains the default
+and the CI path. Groq, Anthropic and Ollama appear as SKIPPED rows naming
+their reason, never omitted. The run also surfaced a gap it deliberately did
+not fix: **nothing in the answer path imposes a deadline** — one answer
+reached its first token after 310 seconds, and the only abort in the whole
+path is the visitor closing the tab (§7.10, §3.18).
+
 M8.2 is done — **the Test button calibrated to the provider it tests**
 (§3.21, §3.8). The playground's own "paste a free key" step failed, and the
 cause was a guess made before this project had ever called a real provider:
@@ -3452,6 +3489,69 @@ Everything it creates is deleted at the end, including on Ctrl-C, like
 because the fixture used a label where the column requires a 64-character
 sha256 — the schema holding a harness to the same rule as the product.
 
+### §3.30 `realtime/scripts/runProviderComparison.ts` — the provider table (M8.3)
+`npm run compare`. The harness half of §7.9, in realtime/ for runEval.ts's
+and runTenantScan.ts's reason: it drives realtime's answer pipeline and needs
+its dependencies, while the scoring stays a package-less module the root
+runner typechecks and unit-tests.
+
+It asks the first N questions of the golden set through the **real pipeline**
+(`answerQuestion` — retrieve → gate → prompt → stream → parse → verify →
+strip → persist), once per generation provider. Driving the production path
+rather than calling `stream()` directly is the point: what the plan wants
+compared is not raw model output but what this PRODUCT does with it, since
+the citation-verification and strip rates are properties of that whole path.
+It is also why the schema-violation count is READ BACK from
+`messages.schema_violations` rather than counted privately — the published
+number is then the product's own record, and M7.10's column is proven end to
+end rather than asserted.
+
+Four decisions carry it:
+
+- **The pipeline's retry policy is left alone.** §3.15.5 sets it from a
+  product judgment — three attempts inside 8 seconds, because that is how
+  long someone watches a chat bubble — and widening it to flatter a free tier
+  would publish a latency no visitor will ever see. The harness paces ITSELF
+  instead (`--pace-ms`, default 6 s ≈ 10 requests/minute), so it stays under
+  the free tier rather than manufacturing rate limits a real tenant's traffic
+  would not produce; a 429 that survives the visitor's own budget is recorded
+  as the `error` outcome it really is, which is how the 20-per-day wall
+  appears in the table instead of crashing the run.
+- **Every provider named gets a row, including the ones with no key** — the
+  key-gated idiom (§3.8, §2.4.5c): `buildLLMProvider`'s one-line usage error
+  is caught and printed as a SKIPPED row with its reason, because "gated off"
+  silently omitted is indistinguishable from "passed".
+- **One embedder for the whole sweep**, enforced rather than documented.
+  Retrieval decides which chunks a model is asked to ground in, so letting it
+  vary between rows would confound the comparison with the thing runEval
+  measures separately. The harness refuses to start if the eval corpus has no
+  embeddings under that model, naming `npm run eval` — asking questions
+  against a corpus the query model cannot see would measure the gate refusing
+  rather than the provider answering.
+- **The raw per-question outcomes are written to
+  `eval/results/provider-comparison.json`** (gitignored, like runEval's own
+  droppings) BEFORE the harness deletes the conversations it created. Without
+  it the published table would be summary statistics whose underlying data no
+  longer exists anywhere, which is the "it works well in my testing" the
+  anti-tutorial rules refuse — and it is the difference between a 310-second
+  p95 being a finding and being a mystery. The first run predated this and
+  duly could not name its own outlier; the report now prints the slowest
+  answer and the reason nothing bounds it.
+
+Questions are the FIRST n, never a sample: a published comparison has to be
+re-runnable into the same table, and a random subset would move the numbers
+between runs for reasons that have nothing to do with the providers. A fresh
+conversation per question, so the prompt does not grow as the run goes on.
+
+**Run-book note, learned the way the worker suite's was (§3.8): realtime's
+DB-gated test suite cleans up organizations, the eval org among them.** So
+`npm run eval` → `npm test` → `npm run compare` finds no corpus, and the
+sequence to run is eval, compare, then tests — or simply re-run the eval. The
+harness fails on its precondition with the exact command to fix it rather
+than measuring an empty corpus, which is the one thing that would have been
+expensive: every question would have been refused by the gate and the table
+would have reported a provider that never ran as a provider that refused.
+
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 
 #### §3.17.1 `src/widget/sessionToken.ts`
@@ -4483,6 +4583,66 @@ sweep that silently produced the first from the second would be a published
 lie. Percentiles are nearest-rank for loadtest/histogram.ts's reason, and are
 duplicated here rather than imported because eval/ and loadtest/ are separate
 alias roots that nothing else joins.
+
+### §7.9 `eval/providerComparison.ts`
+The scoring half of the provider comparison (M8.3) — the plan's "strongest
+evidence the author evaluated rather than guessed", and the last of its
+named metrics with no producer. Pure and database-free, the §7.3/§7.8 split,
+with its runner at §3.30.
+
+The plan asks for "the same eval run across every provider — recall@5,
+citation-verification rate, schema-violation rate, p50 TTFT, cost per 1k
+answers", and the first decision here is that **those five columns are not
+one measurement**: recall@5 is a property of the EMBEDDING provider (runEval's
+`--embedder`, §3.14) and the other four of the GENERATION provider. They are
+measured and published separately because mixing them would let a better
+embedder flatter a worse model, and the entire point of the table is that a
+reader can attribute a number to a decision.
+
+The load-bearing decision is that **a contract failure is counted and is not
+an answer.** When a model breaks the JSON contract twice the pipeline throws
+and writes NO assistant row (§3.15.3), so a summary built only from message
+rows would score a systematically failing provider as PERFECT — its worst
+outcome recorded as no outcome. That is exactly the trap migration 010 was
+written around (§3.3.12), and this file reproduces the product's own split
+rather than inventing a second one: violations that landed on an answer come
+from `messages.schema_violations`, and the ones that produced nothing are a
+column of their own, as `usage_daily.schema_failures` is in production. An
+outright provider failure (a 401, a rate limit the visitor's budget could not
+clear) is a THIRD outcome, because "held the wire and failed the schema" and
+"never produced a document" are different findings about a vendor.
+
+Every rate is `number | null`, §9.13's null-not-zero applied to a comparison:
+a provider that refused everything has no citation-verification rate, and 0%
+would read as "it cited and every citation was fake" while 100% would read as
+flawless. Cost is over answers that COULD be priced, with the count of those
+that could not travelling beside it — dividing a partial cost by a full
+denominator under-reports in the direction that gets believed. TTFT
+percentiles exclude refusals, the bug §9.13 found live. An empty run throws.
+
+### §7.10 What the comparison measured
+Published in eval/RESULTS.md; the two findings worth citing from here.
+**A real model had 23.8% of its claims stripped** where the context-quoting
+mock strips 0% — the mock is the control that proves the number is about the
+model rather than the harness, and the delta is this project's thesis as a
+measurement. **Gemini's native schema enforcement is near-dead rather than
+dead**: 1 violation in 19 answers, where M7.11 saw 0 in 9. Two limits ride
+with them and are stated where the numbers are: the free tier for
+`gemini-3.6-flash` is **20 generate requests per day**, which is why n is 20
+rather than 80, and `gemini-3.6-flash` is deliberately unpriced (§2.4.8), so
+cost per 1k stays "—" while the token counts are published for anyone holding
+the price sheet.
+
+The run also surfaced a gap it did not fix, recorded in the tradition of
+§3.15.5 and loadtest/RESULTS.md: **nothing in the answer path imposes a
+deadline.** Node's `fetch` has no default timeout, `postStream` passes only a
+caller-supplied signal, and the widget route's only abort is `req.on("close")`
+— the visitor closing the tab (§3.18) — so a provider that accepts a
+connection and goes quiet holds an SSE stream open indefinitely. One answer
+reached its first token after 310 seconds, and at n=19 the nearest-rank p95
+IS that worst sample. Not fixed here: a deadline on the answer path is a
+change to a public surface and belongs with its own verification ladder
+rather than smuggled into a measurement.
 
 ---
 

@@ -2290,3 +2290,69 @@ Ctrl-C → teardown
 The two seeds are sequential rather than parallel because the second one
 needs the org the first creates; both run after `/api/ready` because both
 need the schema realtime's boot migrates.
+
+---
+
+## §14 The provider comparison — one question, five providers (M8.3)
+
+`npm run compare` (realtime/). The plan's provider table, produced by driving
+§5's answer pipeline once per generation provider over §7's golden questions.
+The embedding half is `npm run eval -- --embedder gemini`, which is §4.4's
+flow with a different model, and is not repeated here.
+
+```
+npm run compare -- --questions 20 [--providers …] [--embedder local|gemini]
+
+  preconditions
+    the "EVAL HARNESS (do not use)" org exists            ← runEval created it
+    that org has embeddings under the chosen embedder     ← else refuse, naming
+                                                            `npm run eval`
+    (asking questions a corpus's model cannot see would
+     measure the GATE refusing, not the provider answering)
+
+  for each provider named (default: all five)
+    buildLLMProvider(name)                                 §3.15.4's one table
+      ├─ throws "needs GROQ_API_KEY" → SKIPPED row, reason printed, next
+      └─ ok → the sweep below
+
+    for each of the first N golden questions
+      wait --pace-ms (6 s default; 0 for mock)             ← stay under the
+                                                             free tier rather
+                                                             than manufacture
+                                                             429s
+      answerQuestion({db, embedder, llm, orgId, visitorId: cmp_<run>, question})
+        │  the REAL §5 pipeline — retrieve → gate → prompt → stream →
+        │  parse (one retry) → verify → strip → persist
+        ├─ resolves            → outcome "answered" | "refused"
+        │    SELECT schema_violations FROM messages WHERE id = messageId
+        │      └─ the product's own record (§3.3.12), not a private counter
+        │    claims → verified count; usage → costUsd(model, in, out)
+        ├─ AnswerSchemaError   → outcome "contract_failure"
+        │    no assistant row exists — which is WHY it is its own outcome
+        └─ anything else       → outcome "error"  (401, 429 past the
+                                  visitor's own retry budget, transport)
+
+    summarizeProvider(provider, llm.model, outcomes)        §7.9, pure
+                                                            └─ throws on an
+                                                               empty run
+
+  eval/results/provider-comparison.json  ← raw per-question outcomes, WRITTEN
+                                           BEFORE the cleanup below, so the
+                                           published table has data behind it
+  DELETE FROM conversations WHERE visitor_id = cmp_<run>    ← §10.3's stance;
+                                           also keeps the eval org the corpus
+                                           RESULTS.md describes
+```
+
+Three things this flow does deliberately, each argued at §3.30: the
+pipeline's retry policy is untouched (widening it would publish a latency no
+visitor sees, so the harness paces itself instead), the embedder is pinned
+across every provider (retrieval decides what a model is asked to ground in),
+and a provider with no key produces a row saying so rather than no row at all.
+
+What the flow CANNOT bound, discovered by running it: `answerQuestion` has no
+deadline of its own. `postStream` passes only a caller-supplied signal, Node's
+`fetch` has no default timeout, and the only abort on the whole path is
+`req.on("close")` in §5.3's route. A provider that accepts the connection and
+goes quiet therefore holds its stream — one answer here took 310 s to a first
+token — and the harness, having no visitor to close a tab, waits.

@@ -204,3 +204,173 @@ distance scale, nothing more. When BYO embedding providers land (M3), an
 org on a different model needs its own sweep — which is why the tool is
 a repeatable command, not a one-off notebook, and why
 `ANSWER_MAX_DISTANCE` exists as the per-deployment override.
+
+## Provider comparison — generation (M8.3)
+
+The plan asks for "the same eval run across every provider — recall@5,
+citation-verification rate, schema-violation rate, p50 TTFT, cost per 1k
+answers". Those five columns are not one measurement: **recall@5 is a
+property of the embedding provider** (the section below) and the other four
+are **properties of the generation provider**, measured here by
+`npm run compare` (realtime/). Mixing them would let a better embedder
+flatter a worse model, which is the opposite of what the table is for.
+
+Method: the first 20 questions of `golden.jsonl`, asked through the **real
+answer pipeline** (`answerQuestion` — retrieve → gate → prompt → stream →
+parse → verify → strip → persist), with the embedder pinned to
+`bge-small-en-v1.5` for every provider so retrieval is identical across
+rows. Schema violations are read back from `messages.schema_violations`,
+the column the product itself writes. Reproduce with:
+
+```
+docker compose up -d database
+cd realtime && npm run eval && npm run compare -- --questions 20
+```
+
+| provider | model | answered | refused | failed | citation ✓ | strip | violations/answer | TTFT p50 | TTFT p95 | $/1k answers |
+|---|---|---|---|---|---|---|---|---|---|---|
+| mock | `mock-llm` | 20 | 0 | 0 | 100.0% | 0.0% | 0.00 | 313 ms | 344 ms | $0.0000 |
+| gemini | `gemini-3.6-flash` | 19 | 0 | 1 | **76.2%** | **23.8%** | **0.05** | 6,938 ms | 309,743 ms | — |
+| groq | *skipped — no `GROQ_API_KEY`* | | | | | | | | | |
+| ollama | *skipped — no `OLLAMA_MODEL`* | | | | | | | | | |
+| anthropic | *skipped — no `ANTHROPIC_API_KEY`* | | | | | | | | | |
+
+Blank rows are **skipped, not zero**: `groq` and `anthropic` have no key in
+this environment and `ollama` no local model, and the harness prints each
+one's reason rather than omitting the row — "gated off" silently dropped is
+indistinguishable from "passed" (§3.8's stance).
+
+**The headline is the strip rate.** The mock quotes retrieved chunks by
+construction, so it verifies at 100% and is the control that proves the
+measurement is of the model rather than of the harness. A real model asked
+the same 20 questions over the same retrieved chunks had **23.8% of its
+claims stripped** — very nearly one citation in four quoted something that
+was not verbatim in the chunk it named, and the visitor never saw any of
+them. That number is this project's entire thesis expressed as a
+measurement: a citation is not a citation because a model emitted one.
+
+Four more readings, and the last two are limits rather than results:
+
+- **Schema violations: 0.05 per answer** — one of 19 answers needed the
+  contract retry. M7.11 measured 0 of 9 on the same model and concluded
+  Gemini's native `responseJsonSchema` enforcement makes the retry path
+  near-dead; at n=19 it is near-dead rather than dead, which is the more
+  useful statement and the one only a larger run could make. No answer
+  failed the contract twice, so `usage_daily.schema_failures` stayed 0.
+- **The one failure was a quota wall, not a model fault.** The free tier for
+  `gemini-3.6-flash` is **20 generate requests per day** — the harness spent
+  19 answers plus one contract retry and hit `RESOURCE_EXHAUSTED` on the
+  20th question. That is a real constraint on the plan's `$0` design and the
+  reason n is 20 rather than 80: the full golden set is four days of free
+  tier per provider.
+- **TTFT p95 is one sample, and nothing bounds it.** At n=19 the nearest-rank
+  p95 IS the worst observation, and that observation was 310 seconds. The
+  mechanism is confirmed even though the run that saw it did not keep the
+  per-question record (the harness now writes one to
+  `eval/results/provider-comparison.json`): **nothing in the answer path
+  imposes a deadline.** Node's `fetch` has no default timeout, `postStream`
+  passes only a caller-supplied signal, and the widget route's only abort is
+  `req.on("close")` — the visitor closing the tab (§3.18). A provider that
+  accepts a connection and goes quiet therefore holds an SSE stream open for
+  as long as it likes. p50 6.9 s is the number that describes the experience;
+  p95 here describes a gap. **Not fixed in this increment** — a deadline on
+  the answer path is a change to a public surface and belongs with its own
+  verification, not smuggled into a measurement.
+- **Cost per 1,000 answers is still unclaimable for this model.**
+  `gemini-3.6-flash` has no row in `shared/pricing/models.ts`, and this
+  project prices unknown models as `null` rather than guessing (§2.4.8), so
+  the column reads "—" rather than a believable wrong number. What is
+  published instead is the input the reader needs: **70,514 input and 2,185
+  output tokens over 19 answers**, or ~3,711 in / ~115 out per answer, from
+  which anyone holding the current price sheet can compute the figure. (The
+  mock is priced at a true $0.00 and reports $0.0000, which is the one
+  honest zero in the table.) Note these prompts are larger than M7.11's
+  ~612 input tokens because the eval corpus retrieves ten chunks of real
+  documentation rather than a six-chunk toy corpus.
+
+**Not measured, and why:** Groq (no key here), Anthropic (no free tier and
+no paid account — the plan's `$0` constraint), Ollama (no local model on
+this machine). The key-gated suite covers each the moment its key is in
+`.env`, with no code change. An xAI (Grok) key was available for this
+session and is *not* in the table: xAI is not one of the product's five
+providers, and the key's team carried no credits, so an adapter written for
+it could not have been exercised — adding an unverifiable provider is the
+one thing this repo's provider table exists to not do.
+
+## Provider comparison — embeddings (M8.3)
+
+The other half of the plan's provider table: **recall@k per embedding
+provider**, which `runEval`'s `--embedder` flag has supported since M7.12
+and which had never been run against anything but the local model. Same
+corpus, same 80 questions, same k, `ef_search`, and chunk target — the only
+thing that changes is which model turns text into vectors. Reproduce with:
+
+```
+cd realtime && npm run eval -- --embedder gemini
+```
+
+| strategy | metric | `bge-small-en-v1.5` (384-d, local) | `gemini-embedding-001` (768-d) | delta |
+|---|---|---|---|---|
+| dense | recall@1 | 35.6 | **58.8** | +23.2 |
+| dense | recall@5 | 72.5 | **87.5** | +15.0 |
+| dense | recall@10 | 81.3 | **95.6** | +14.3 |
+| dense | MRR@10 | 51.4 | **73.1** | +21.7 |
+| dense | nDCG@10 | 58.1 | **78.0** | +19.9 |
+| hybrid | recall@1 | 35.6 | **57.5** | +21.9 |
+| hybrid | recall@5 | 75.0 | **90.0** | +15.0 |
+| hybrid | recall@10 | 83.8 | **96.9** | +13.1 |
+| hybrid | MRR@10 | 52.6 | **73.1** | +20.5 |
+| hybrid | nDCG@10 | 59.7 | **78.4** | +18.7 |
+| hybrid | misses at k=10 | 12 / 80 | **2 / 80** | −10 |
+| lexical | recall@5 | 13.8 | 13.8 | 0.0 |
+
+**The hosted model is worth 15 points of recall@5 and drops the failure list
+from twelve questions to two.** Both surviving misses are paraphrase
+questions whose answer is a behaviour rather than a phrase — q030 ("check
+whether the response has already been sent") and q033 ("does a response
+schema actually make my API faster") — the same category the local model's
+failure analysis above identified, now with the easier ten removed.
+
+Three things about the method:
+
+- **The lexical row is the control.** It is byte-identical across the two
+  runs (recall@5 13.8, MRR@10 10.4, nDCG@10 11.3) because it never touches
+  an embedding — so anything that moved, moved because of the dense arm.
+  A lexical row that had drifted would mean the corpus or the chunking had
+  changed underneath the comparison and neither column meant anything.
+- **Fusion costs a little at rank 1 and pays at rank 5.** Under Gemini,
+  hybrid recall@1 (57.5) is *below* dense recall@1 (58.8): RRF damps a
+  strong dense rank-1 by consensus with a weak lexical arm. It is a real
+  cost, it is small, and it buys +2.5 points at k=5 and +1.3 at k=10 — the
+  trade RRF exists to make, visible here because a better dense arm is what
+  makes the top-1 worth losing.
+- **Retrieval latency does not pay for the quality.** p50 56–57 ms against
+  the local model's 62 ms, measured the same way (retrieval only, query
+  embedding excluded). The 768-d vectors zero-pad into the same
+  `halfvec(1024)` column, so the index does the same amount of work.
+
+**What it costs, which is the reason the local model is still the default.**
+`gemini-embedding-001`'s free tier is
+`EmbedContentRequestsPerMinutePerUserPerProjectPerModel = 100`, and
+**`batchEmbedContents` is metered per ITEM, not per request** — a 50-text
+batch spends 50 of that 100. Embedding this 661-chunk corpus therefore costs
+661 requests and takes a minimum of ~7 minutes of pure quota time; the run
+above spent most of its wall clock inside the harness's patient retry
+(§3.14) absorbing 429s. That is worth stating plainly because §2.4.5a
+justifies the batch-first `EmbeddingProvider` interface on the grounds that
+"free tiers rate-limit per REQUEST" — for Gemini's embedding endpoint that
+is **not** true, and batching there buys round-trips, not quota. The local
+model remains the CI and default path: it is keyless, unmetered, and
+reproduces the floor on every run, and the eval gate has to run on every
+pull request from a fork.
+
+One practical note for anyone reproducing this: **the two embedded corpora do
+not coexist.** Re-ingesting a document deletes and recreates its chunks, and
+`chunk_embeddings` cascades from chunks, so switching `--embedder` drops the
+previous model's vectors with the rows they hung on. Nothing is left *wrong*
+— the per-(chunk, model) property still holds, and the model-aware
+short-circuit added at M7.12 is what makes the switch back re-embed instead
+of skipping — but each direction of this comparison costs a full re-embed of
+the corpus, which is the dominant cost of the whole measurement on a metered
+tier. Switching back to the local model afterwards reproduced the published
+75.0% baseline exactly, which is the check that the corpus survived the trip.

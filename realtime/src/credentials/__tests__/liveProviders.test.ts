@@ -90,8 +90,15 @@ function describeFailure(error: unknown): string {
     const retry = error.retryAfterMs !== null ? ` (retry in ~${Math.ceil(error.retryAfterMs / 1000)}s)` : ""
     // LLMHttpError.message already carries the provider label and status
     // (§2.4.5f), so it is used verbatim — re-prefixing would double it.
+    // NOT necessarily "re-run in a moment", which is what this said until
+    // M8.3 measured it: `gemini-3.6-flash`'s free tier is 20 generate
+    // requests per DAY, so a 429 here can mean the quota is gone until the
+    // window rolls over — and telling someone to retry in a moment would
+    // send them round a loop that cannot succeed. The retry hint below is
+    // the provider's own; when it is absent, the day is the likelier answer.
     return error.status === 429
-      ? `rate limited${retry} — free tiers are per-minute; re-run in a moment. ${error.message}`
+      ? `rate limited${retry} — a free tier, not a broken adapter: per-minute for embeddings, ` +
+        `but per-DAY for generation (20/day on gemini-3.6-flash). ${error.message}`
       : error.message
   }
   return error instanceof Error ? error.message : String(error)

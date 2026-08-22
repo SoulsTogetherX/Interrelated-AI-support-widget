@@ -39,25 +39,35 @@ data, and most of them are CI gates.
 | What the widget costs a host page | **1 request, 6.52 KB gzipped, and nothing further until a visitor opens the bubble** — the bundle fetches no font, stylesheet, chunk or image, and the session mint is deferred to bubble-open | `scripts/widget-size.mjs` (static) + `widget/src/__tests__/cost.test.ts` (behavioral); both CI-enforced |
 | Snippet load → interactive bubble | **9.5 ms p50** warm (10 loads, 9 of them 7.3–16.3 ms), **168 ms** on a cold first load | `widget/fixtures/measure.html` — localhost, so add a CDN's TTFB and transfer |
 | Security gate | **57 black-box checks** against the shipped image (origin allowlist, key state, token replay, tenant isolation, SSRF, credential read-back, secret-key sessions, oversized uploads, socket, rate limits) + **9 poisoned documents** through the answer path | `scripts/security-probe.mjs`, `scripts/injection-probe.mjs` — CI e2e job |
-| Answer path against a real model | **TTFT p50 2.2 s, p95 27.9 s** (free-tier Gemini `gemini-3.6-flash`, n=9, 612 in / 18 out tokens per answer) — bimodal: six under 5 s, three 13–28 s | `npm run ask -- … --llm gemini`, read back from `messages` |
-| Schema-violation rate, Gemini | **0 of 9 answers** needed the contract retry, under native server-side JSON-schema enforcement | `messages.schema_violations` — the column M7.10 added |
+| What verification actually catches | **23.8% of a real model's claims were stripped** — quoted spans that were not verbatim in the chunk they cited, withheld from the visitor — against **0%** for the context-quoting mock over the same 20 questions and the same retrieved chunks | `npm run compare` — [eval/RESULTS.md](eval/RESULTS.md); the mock is the control that proves the number is about the model, not the harness |
+| Embedding provider, measured rather than assumed | `gemini-embedding-001` beats the local `bge-small-en-v1.5` by **+15.0 points of recall@5** (hybrid **90.0%** vs 75.0%, @10 96.9% vs 83.8%), and the hybrid miss list drops from **12 of 80 questions to 2** | `npm run eval -- --embedder gemini` — [eval/RESULTS.md](eval/RESULTS.md); the lexical arm is byte-identical across both runs, so only the dense arm moved |
+| Answer path against a real model | **TTFT p50 6.9 s** over 19 answers on free-tier Gemini `gemini-3.6-flash` (3,711 in / 115 out tokens per answer, ten retrieved chunks per prompt); an earlier n=9 run on a six-chunk toy corpus measured p50 2.2 s | `npm run compare`, read back from `messages` |
+| Schema-violation rate, Gemini | **1 of 19 answers** needed the contract retry under native server-side JSON-schema enforcement — near-dead rather than dead, where an earlier n=9 run saw 0 | `messages.schema_violations` — the column M7.10 added |
 | Tests | 836 across the repo, the integration suites against a real pgvector Postgres (12 more are key-gated and skip without provider keys or the local embedding model) | `npm test` per package |
 
-The TTFT and schema-violation rows above come from a **single session with a
-borrowed free-tier key** and n=9 answers, which is why they are reported with
-their spread rather than as a headline: the free tier is bimodal, six of the
-nine answered in under 5 s and three took 13–28 s. Treat them as evidence the
-path works end to end and that Gemini's native enforcement really is strict,
-not as a benchmark. Cost per 1,000 answers is still unclaimed, because
-`gemini-3.6-flash` has no row in the price table — its price was not read off
-the pricing page, and this project prices unknown models as `null` rather than
-guessing (a wrong-but-believable cost figure is worse than none).
+The rows measured against a real model come from **borrowed free-tier keys**
+at n=19 and n=20, which is a sample rather than a benchmark and is reported
+as one. The binding constraint is the free tier itself: `gemini-3.6-flash`
+allows **20 generate requests per day**, so the full 80-question golden set
+is four days per provider. Two numbers are deliberately *not* claimed. **Cost
+per 1,000 answers**, because `gemini-3.6-flash` has no row in the price table
+— its price was not read off the pricing page, and this project prices
+unknown models as `null` rather than guessing (a wrong-but-believable cost
+figure is worse than none); the token counts are published instead, so anyone
+holding the current price sheet can compute it. And **TTFT p95**, because at
+n=19 the nearest-rank p95 is the single worst observation, and that
+observation — 310 seconds — measures a gap rather than a provider: nothing on
+the answer path imposes a deadline, since Node's `fetch` has no default
+timeout and the only abort in the whole path is the visitor closing the tab.
+That is a known limitation, listed below, found by this measurement.
 
 Each provider adapter is proven against a loopback server speaking its real
 wire protocol, and against the provider itself only when that provider's key
 is in the environment — a key-gated suite that skips loudly rather than
-passing quietly. Groq and Anthropic have never run here; there is no key for
-the first and no paid account for the second.
+passing quietly, and a comparison table that prints a **SKIPPED row naming
+the reason** rather than omitting a provider. Groq, Anthropic and Ollama have
+never run here: no key for the first, no paid account for the second, no local
+model for the third.
 
 ---
 
@@ -254,6 +264,16 @@ every CI run.
   from a context-quoting mock. Retrieval quality is a real number (local
   embedding model in CI); injection *containment* is a real number; the
   injection *relay rate* and TTFT are per-model numbers that need a key.
+- **Nothing on the answer path imposes a deadline.** Node's `fetch` has no
+  default timeout, the provider adapters pass only a caller-supplied signal,
+  and the only abort in the whole path is the visitor closing the tab. A
+  provider that accepts the connection and then goes quiet holds an SSE
+  stream open for as long as it likes — the provider comparison measured one
+  answer that reached its first token after 310 seconds. The retry policy
+  bounds *failures* (§3.15.5: three attempts inside 8 seconds, honouring
+  `Retry-After` only when it fits the budget); it does not bound a call that
+  never fails and never finishes. A server-side deadline is the fix and is
+  not yet written.
 - **Grounding's honest limit.** A page the tenant crawled is the tenant's
   documentation, and a grounded answer may quote it — including a poisoned
   sentence. What the design guarantees is narrower and stated: no uncited

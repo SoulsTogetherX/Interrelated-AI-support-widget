@@ -173,10 +173,18 @@ async function main(): Promise<void> {
   const { LocalEmbeddingProvider } = await import("@providers/embedding/local")
 
   await migrateToLatest(db) // idempotent; lets a fresh CI container self-prepare
-  // Each embedder stores under its OWN model name, so the two corpora coexist
-  // in one eval org and a switch re-embeds rather than corrupting the other's
-  // vectors — the same per-(chunk, model) property the product relies on when
-  // a tenant changes provider (§3.22).
+  // Each embedder stores under its OWN model name, so a switch re-embeds
+  // rather than corrupting the other model's vectors — the per-(chunk, model)
+  // property the product relies on when a tenant changes provider (§3.22).
+  //
+  // What that does NOT mean, corrected at M8.3 after a run demonstrated it:
+  // the two corpora do not COEXIST here. Re-ingesting a document deletes and
+  // recreates its chunks (below), and chunk_embeddings cascades from chunks —
+  // so switching embedders drops the previous model's vectors along with the
+  // rows they hung on. Nothing is left wrong, which is the property that
+  // matters; but comparing two embedders costs a full re-embed EACH WAY, and
+  // on a metered free tier that is the dominant cost of the comparison
+  // (eval/RESULTS.md records what it cost against Gemini).
   /**
    * The eval is BACKGROUND work, so its retry policy is the patient one —
    * the division of labor §3.15.5 describes, where the caller decides
