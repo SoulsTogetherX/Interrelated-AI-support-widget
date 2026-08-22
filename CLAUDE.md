@@ -434,6 +434,26 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M8.2 is done — **the Test button calibrated to the provider it tests**
+(§3.21, §3.8). The playground's own "paste a free key" step failed, and the
+cause was a guess made before this project had ever called a real provider:
+`testGenerationRoundTrip` waited 15 s and never retried. M7.11 had since
+MEASURED the free tier this product is designed around at a TTFT p95 of
+27.9 s; the live suite watched a structured-output call take 29.4 s; and the
+playground produced a 503 after 11 s. Both failure modes told a tenant with a
+perfectly good key that something was wrong with it. The budget is now 25 s —
+bounded by the 30 s web already waits for the whole internal call, because
+anything at or past that turns a provider timeout into a dashboard timeout
+that names nothing — with ONE extra attempt for the retryable class only
+(429/408/5xx/transport), sharing the same wall clock so two waits cannot
+become two budgets. A 401 is never retried (§3.15.5's weather-versus-fact
+distinction, applied to a form), and neither is an adapter's own contract
+violation. The tail is answered by a sentence rather than a bigger number:
+"free tiers are often slow — try again before assuming the key is wrong."
+Eight keyless tests pin the policy, and the fix was verified against real
+Gemini through the internal route: two Test calls succeeded at 16.3 s and
+19.4 s of provider latency, both of which the old cap would have refused.
+
 M8.1 is done — **the whole product in one command** (§6.5, PLAYGROUND.md).
 Every milestone so far measured, hardened or documented the product; none of
 them made it easy to USE. Booting the stack by hand is six coordinated steps
@@ -2326,6 +2346,18 @@ force-exits.
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
   the opposite choice and someone will one day "align" them).
+- `credentials/__tests__/roundTrip.test.ts` — keyless and instant (M8.2):
+  the Test button's attempt policy, which is a set of DECISIONS about
+  failures rather than anything with real latency, so the providers are
+  scripted and the file runs in milliseconds. Pinned: a transient 503 and a
+  429 each earn a second attempt and succeed (the 503 is the failure this
+  machine's free tier actually produced); a 401 and a 400 are attempted ONCE,
+  because a wrong key is just as wrong a second later; two attempts is the
+  cap rather than "until it works", since a person is watching a form; the
+  budget-exhausted sentence names slowness rather than the key; the embedding
+  twin follows the same policy; and an adapter's own contract violation
+  (wrong vector count) is never retried, because it is a fact about the
+  model and the message is already written for a human.
 - `credentials/__tests__/resolve.test.ts` — DB-gated (M7.8), the vault's
   READ side, which had no suite of its own until this increment made a
   claim about it worth pinning: a row naming ANY of the schema's five
@@ -3601,6 +3633,30 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   LIVE round-trip: one real 16-token completion, latency measured to
   done, because a key that "looks right" but is revoked or out of quota
   must fail at the Test button, not at a visitor's first question.
+
+  **The attempt policy is measured rather than assumed (M8.2)**, and it was
+  wrong for two milestones. The budget was 15 s with no retry — a number
+  picked before this project had ever called a real provider. M7.11 then
+  measured the free tier it is designed around at a TTFT p95 of **27.9 s**,
+  the live suite watched a structured-output call take 29.4 s, and the
+  playground's own BYO step produced a 503 after 11 s. Both failure modes
+  handed a tenant with a perfectly good key the sentence "the provider did
+  not answer within 15s", which reads as "your key is bad". Now: a **25 s**
+  budget, chosen against the ceiling that already existed rather than freely
+  — web/src/lib/realtime waits 30 s for the whole internal call, so anything
+  at or past that converts a provider timeout into a dashboard timeout, an
+  error that names nothing — and **one extra attempt** for the retryable
+  class only (429/408/5xx/transport), sharing that same wall clock so two
+  waits can never become two budgets. A 401 is never retried: a wrong key is
+  just as wrong a second later, which is §3.15.5's distinction applied to a
+  form. An adapter's own contract violation (wrong vector count, a changed
+  dimension) is likewise a fact, not weather. What the budget still does NOT
+  cover is a 27.9 s p95, and the timeout sentence says so — "free tiers are
+  often slow, try again before assuming the key is wrong" — because an
+  unbounded tail is answered by a retry and an honest sentence, not by a
+  bigger constant. Verified against real Gemini through the internal route:
+  two Test calls succeeded at 16.3 s and 19.4 s of provider latency, both of
+  which the old cap would have refused.
   Since M3.6b it is role-aware and symmetric: `buildGenerationProvider`
   (renamed from buildCredentialProvider when it stopped being the only
   one) and `buildEmbeddingProvider` over §2.4.5k–m, with

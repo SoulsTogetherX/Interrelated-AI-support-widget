@@ -229,6 +229,59 @@ export function buildEmbeddingProvider(
   }
 }
 
+/**
+ * How long the Test button may spend on the provider, and why it is not 15
+ * seconds any more (M8.2).
+ *
+ * 15 s was a guess made before this project had ever called a real provider.
+ * M7.11 then MEASURED the free tier the product is designed around and found
+ * a TTFT p95 of 27.9 s — bimodal, most answers under 5 s with a long tail —
+ * and the key-gated live suite has since watched a structured-output call
+ * take 29.4 s and a plain one 503 after 11 s. So the old cap failed a
+ * PERFECTLY GOOD key often enough to matter, and the sentence it produced
+ * ("the provider did not answer within 15s") reads as "your key is bad".
+ *
+ * The ceiling is not ours to choose freely: web/src/lib/realtime waits 30 s
+ * for the whole internal call, so anything at or past that turns a provider
+ * timeout into a dashboard timeout — a worse error, because it names nothing.
+ * 25 s spends the headroom that already existed and leaves the round trip
+ * itself room to answer.
+ *
+ * It still does not cover a 27.9 s p95, and pretending a number could is why
+ * this comment exists rather than a bigger constant: an unbounded tail is
+ * bounded by a RETRY, below, not by waiting longer.
+ */
+const TEST_TIMEOUT_MS = 25_000
+
+/**
+ * One extra attempt, for the failures a second try actually fixes.
+ *
+ * §3.15.5 already decided which failures those are and the answer path uses
+ * it per question; the Test button had none of it, so a transient 503 — which
+ * this machine's free tier produced on the third of three calls — failed the
+ * save outright and told the tenant to doubt their key. Only the retryable
+ * class is re-attempted (429 / 408 / 5xx / transport); a 401 is a wrong key
+ * and will be just as wrong in a second.
+ *
+ * Bounded by the SAME wall clock as the first attempt rather than doubling
+ * it: a person is watching a form, and two 25 s waits is not a Test button,
+ * it is an abandoned tab. So the retry happens only if the failure came back
+ * with time left, which is exactly the case a fast 503 presents.
+ */
+const TEST_ATTEMPTS = 2
+
+/** True for the failures §3.15.5 calls worth retrying. Re-derived here from
+ *  the error rather than imported, because answer/retry.ts's withRetry owns
+ *  sleeping and backoff — neither of which belongs in front of a form. */
+function isTransient(error: unknown): boolean {
+  if (!(error instanceof LLMHttpError)) {
+    // A transport failure (dropped socket, DNS blip) is the original reason
+    // retries exist; an abort is the caller giving up and is never retried.
+    return !(error instanceof Error && error.name === "AbortError")
+  }
+  return error.status === 429 || error.status === 408 || error.status >= 500
+}
+
 /** The Test button's promise: one real, tiny completion. maxTokens 16 keeps
  *  the spend under a fraction of a cent on any provider; temperature 0 for
  *  reproducibility; latency measured to DONE (the whole round-trip is what
@@ -237,34 +290,52 @@ export function buildEmbeddingProvider(
  *  headers by construction (§2.4.5f), and that guarantee has its own test. */
 export async function testGenerationRoundTrip(
   provider: LLMProvider,
-  timeoutMs = 15_000,
+  timeoutMs = TEST_TIMEOUT_MS,
 ): Promise<RoundTrip> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  const startedAt = Date.now()
-  try {
-    for await (const event of provider.stream({
-      messages: [{ role: "user", content: 'Reply with the single word "ok".' }],
-      maxTokens: 16,
-      temperature: 0,
-      signal: controller.signal,
-    })) {
-      if (event.type === "done") {
-        return { ok: true, model: provider.model, latencyMs: Date.now() - startedAt }
+  const deadline = Date.now() + timeoutMs
+  let last: RoundTrip = { ok: false, error: "Could not reach the provider." }
+
+  for (let attempt = 1; attempt <= TEST_ATTEMPTS; attempt++) {
+    const remaining = deadline - Date.now()
+    // A second attempt only happens with real time left to make it in.
+    if (remaining < 2000 && attempt > 1) break
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), remaining)
+    const startedAt = Date.now()
+    try {
+      for await (const event of provider.stream({
+        messages: [{ role: "user", content: 'Reply with the single word "ok".' }],
+        maxTokens: 16,
+        temperature: 0,
+        signal: controller.signal,
+      })) {
+        if (event.type === "done") {
+          return { ok: true, model: provider.model, latencyMs: Date.now() - startedAt }
+        }
       }
+      last = { ok: false, error: "The provider's stream ended without completing." }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        // Out of budget: no retry can help, and the sentence says what the
+        // tenant should conclude — the provider was slow, not that the key
+        // is wrong.
+        return {
+          ok: false,
+          error:
+            `The provider did not answer within ${timeoutMs / 1000}s. ` +
+            "Free tiers are often slow — try again before assuming the key is wrong.",
+        }
+      }
+      last = error instanceof LLMHttpError
+        ? { ok: false, error: `The provider rejected the request: ${error.message}` }
+        : { ok: false, error: "Could not reach the provider." }
+      if (!isTransient(error)) return last
+    } finally {
+      clearTimeout(timer)
     }
-    return { ok: false, error: "The provider's stream ended without completing." }
-  } catch (error) {
-    if (controller.signal.aborted) {
-      return { ok: false, error: `The provider did not answer within ${timeoutMs / 1000}s.` }
-    }
-    if (error instanceof LLMHttpError) {
-      return { ok: false, error: `The provider rejected the request: ${error.message}` }
-    }
-    return { ok: false, error: "Could not reach the provider." }
-  } finally {
-    clearTimeout(timer)
   }
+  return last
 }
 
 /**
@@ -288,48 +359,67 @@ export async function testGenerationRoundTrip(
  */
 export async function testEmbeddingRoundTrip(
   provider: EmbeddingProvider,
-  timeoutMs = 15_000,
+  timeoutMs = TEST_TIMEOUT_MS,
 ): Promise<RoundTrip> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  const startedAt = Date.now()
-  try {
-    // Embedded as a DOCUMENT: it is the ingest path — the one that runs
-    // hundreds of times per crawl — that this credential mostly serves.
-    const vectors = await provider.embed(["Interrelated credential check."], {
-      task: "document",
-      signal: controller.signal,
-    })
-    const latencyMs = Date.now() - startedAt
-    const vector = vectors[0]
-    if (vectors.length !== 1 || vector === undefined || vector.length === 0) {
-      return { ok: false, error: "The provider returned no embedding." }
-    }
-    if (vector.length > PADDED_DIM) {
-      return {
-        ok: false,
-        error:
-          `That model returns ${vector.length} dimensions; this platform stores up to ${PADDED_DIM}. ` +
-          "Choose a smaller embedding model, or one that supports a reduced output dimension.",
+  const deadline = Date.now() + timeoutMs
+  let last: RoundTrip = { ok: false, error: "Could not reach the provider." }
+
+  // Same budget and same retry class as its generation twin — the pairing is
+  // deliberate (one error vocabulary, one branch in the internal API), and an
+  // embedding endpoint has the same transient failures a generation one does.
+  for (let attempt = 1; attempt <= TEST_ATTEMPTS; attempt++) {
+    const remaining = deadline - Date.now()
+    if (remaining < 2000 && attempt > 1) break
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), remaining)
+    const startedAt = Date.now()
+    try {
+      // Embedded as a DOCUMENT: it is the ingest path — the one that runs
+      // hundreds of times per crawl — that this credential mostly serves.
+      const vectors = await provider.embed(["Interrelated credential check."], {
+        task: "document",
+        signal: controller.signal,
+      })
+      const latencyMs = Date.now() - startedAt
+      const vector = vectors[0]
+      if (vectors.length !== 1 || vector === undefined || vector.length === 0) {
+        return { ok: false, error: "The provider returned no embedding." }
       }
+      if (vector.length > PADDED_DIM) {
+        return {
+          ok: false,
+          error:
+            `That model returns ${vector.length} dimensions; this platform stores up to ${PADDED_DIM}. ` +
+            "Choose a smaller embedding model, or one that supports a reduced output dimension.",
+        }
+      }
+      return { ok: true, model: provider.model, latencyMs, dim: vector.length }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return {
+          ok: false,
+          error:
+            `The provider did not answer within ${timeoutMs / 1000}s. ` +
+            "Free tiers are often slow — try again before assuming the key is wrong.",
+        }
+      }
+      if (error instanceof LLMHttpError) {
+        last = { ok: false, error: `The provider rejected the request: ${error.message}` }
+      } else if (error instanceof Error) {
+        // The adapters' own contract violations (wrong count, non-numeric
+        // vectors, a changed dimension) arrive as plain Errors whose messages
+        // are already written for a human and contain no credential material.
+        // They are FACTS about the model, not weather: never retried.
+        return { ok: false, error: `The provider's response was unusable: ${error.message}` }
+      } else {
+        last = { ok: false, error: "Could not reach the provider." }
+      }
+      if (!isTransient(error)) return last
+    } finally {
+      clearTimeout(timer)
     }
-    return { ok: true, model: provider.model, latencyMs, dim: vector.length }
-  } catch (error) {
-    if (controller.signal.aborted) {
-      return { ok: false, error: `The provider did not answer within ${timeoutMs / 1000}s.` }
-    }
-    if (error instanceof LLMHttpError) {
-      return { ok: false, error: `The provider rejected the request: ${error.message}` }
-    }
-    // The adapters' own contract violations (wrong count, non-numeric
-    // vectors, a changed dimension) arrive as plain Errors whose messages
-    // are already written for a human and contain no credential material.
-    if (error instanceof Error) {
-      return { ok: false, error: `The provider's response was unusable: ${error.message}` }
-    }
-    return { ok: false, error: "Could not reach the provider." }
-  } finally {
-    clearTimeout(timer)
   }
+  return last
 }
 //#endregion
