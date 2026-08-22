@@ -25,6 +25,7 @@
 import { timingSafeEqual } from "node:crypto"
 
 import { newId, isId } from "@shared/utils/ids"
+import { planFor } from "@shared/billing/plans"
 
 import express from "express"
 import { sql } from "kysely"
@@ -45,10 +46,64 @@ import { encryptProviderKey, keySuffix } from "@/credentials/vault"
 import { mintHandoffTicket } from "@/handoff/ticket"
 import { closeHandoff } from "@/handoff/escalate"
 
-import type { Transaction } from "kysely"
+import type { Kysely, Transaction } from "kysely"
 import type { Express, Request, Response, NextFunction } from "express"
 import type { Database } from "@/db/schema"
 import type { UrlVet } from "@/credentials/validate"
+//#endregion
+
+//#region Source limit (M8.5)
+/**
+ * The plan's source ceiling, enforced where sources are created (M8.5).
+ * shared/billing/plans.ts had carried the number since M5.3 with a comment
+ * admitting it was "not yet enforced — stating a limit we do not check
+ * would be worse than stating none"; the billing page shows it to every
+ * tenant, so from M5.4 to here the product was in exactly that worse state.
+ *
+ * Enforced HERE rather than in web for the daily cap's reason (§3.18):
+ * realtime owns enforcement, and web is a caller, not a gate. The check
+ * runs inside the create transaction with the ORG ROW LOCKED (`FOR
+ * UPDATE`), because a cap held by count-then-insert races: two concurrent
+ * creates would both count below the limit and both land. Locking the org
+ * row serializes source creation per org — a queue of one row per tenant,
+ * held for the milliseconds a count and two inserts take, on an operation a
+ * tenant performs a handful of times ever. Every source row counts, failed
+ * ones included: they hold a slot a tenant can see and can now delete,
+ * which is why the delete route below lands in the same increment — a cap
+ * on an add-only resource would spend a free tenant's single slot forever
+ * on their first typo.
+ */
+class SourceLimitError extends Error {
+  constructor(readonly used: number, readonly limit: number, readonly planName: string) {
+    super(`source limit reached: ${used}/${limit} on ${planName}`)
+    this.name = "SourceLimitError"
+  }
+}
+
+/** Counts inside the caller's transaction (locking) or bare (the upload
+ *  route's cheap pre-parse check, where the transaction re-checks — the
+ *  same both-halves shape as its 413-before-parse). */
+async function assertSourceCapacity(
+  db: Kysely<Database> | Transaction<Database>,
+  orgId: string,
+): Promise<void> {
+  const org = await db.selectFrom("organizations").select("plan")
+    .where("id", "=", orgId).forUpdate().executeTakeFirstOrThrow()
+  const plan = planFor(org.plan)
+  const counted = await db.selectFrom("sources")
+    .select(({ fn }) => fn.countAll<string>().as("n"))
+    .where("org_id", "=", orgId)
+    .executeTakeFirst()
+  const used = Number(counted?.n ?? 0)
+  if (used >= plan.sources) throw new SourceLimitError(used, plan.sources, plan.name)
+}
+
+/** The refusal a tenant reads. Names the plan, the count, and both ways
+ *  out — a limit without its remedies is a dead end wearing a sentence. */
+function sourceLimitSentence(err: SourceLimitError): string {
+  const noun = err.limit === 1 ? "source" : "sources"
+  return `Your ${err.planName} plan allows ${err.limit} ${noun} and you have ${err.used}. Delete a source or upgrade to connect another.`
+}
 //#endregion
 
 //#region Types
@@ -381,20 +436,32 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
 
       const sourceId = newId("src")
       const jobId = newId("job")
-      await db.transaction().execute(async (trx) => {
-        await trx.insertInto("sources").values({
-          id: sourceId,
-          org_id: res.locals.orgId as string,
-          kind: b.kind as "url" | "sitemap",
-          location: parsed.href,
-          ...(crawlDepth !== undefined ? { crawl_depth: crawlDepth } : {}),
-        }).execute()
-        await trx.insertInto("ingest_jobs").values({
-          id: jobId,
-          org_id: res.locals.orgId as string,
-          source_id: sourceId,
-        }).execute()
-      })
+      try {
+        await db.transaction().execute(async (trx) => {
+          // The plan's ceiling, checked with the org row locked so two
+          // concurrent creates cannot both count below it (M8.5 region
+          // above). Throwing rolls the whole transaction back.
+          await assertSourceCapacity(trx, res.locals.orgId as string)
+          await trx.insertInto("sources").values({
+            id: sourceId,
+            org_id: res.locals.orgId as string,
+            kind: b.kind as "url" | "sitemap",
+            location: parsed.href,
+            ...(crawlDepth !== undefined ? { crawl_depth: crawlDepth } : {}),
+          }).execute()
+          await trx.insertInto("ingest_jobs").values({
+            id: jobId,
+            org_id: res.locals.orgId as string,
+            source_id: sourceId,
+          }).execute()
+        })
+      } catch (err) {
+        if (err instanceof SourceLimitError) {
+          res.status(409).json({ ok: false, error: sourceLimitSentence(err) })
+          return
+        }
+        throw err
+      }
       options.onEnqueue?.()
 
       res.json({ ok: true, sourceId, jobId })
@@ -468,6 +535,22 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         return
       }
 
+      // The plan's source ceiling, checked BEFORE the parse for the
+      // 413-before-parse reason: a PDF parser decompresses, and refusing a
+      // full plan after seconds of CPU would have already done the
+      // expensive thing. This half is advisory (unlocked, so two racing
+      // uploads can both pass it); the transaction below re-checks with the
+      // org row locked, which is the half that cannot be raced.
+      try {
+        await assertSourceCapacity(db, res.locals.orgId as string)
+      } catch (err) {
+        if (err instanceof SourceLimitError) {
+          res.status(409).json({ ok: false, error: sourceLimitSentence(err) })
+          return
+        }
+        throw err
+      }
+
       // The browser's claim about the type, which detection treats as one
       // input among several — magic bytes lead, so a PDF sent as text/plain
       // is still parsed as a PDF (parsers/index.ts).
@@ -514,37 +597,47 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
 
       const sourceId = newId("src")
       const jobId = newId("job")
-      await db.transaction().execute(async (trx) => {
-        await trx.insertInto("sources").values({
-          id: sourceId,
-          org_id: res.locals.orgId as string,
-          kind: "upload",
-          location: filename,
-          // A file has no links to follow. The column defaults to 1, and a
-          // depth on an upload would be a number that means nothing.
-          crawl_depth: 0,
-        }).execute()
-        await trx.insertInto("source_uploads").values({
-          source_id: sourceId,
-          filename,
-          format: detectFormat(resource),
-          byte_size: body.byteLength,
-          title: parsed.title,
-          text: parsed.text,
-          // Spans only — the text is not stored twice (migration 009).
-          blocks: JSON.stringify(parsed.blocks.map((b) => ({
-            kind: b.kind,
-            ...(b.level !== undefined ? { level: b.level } : {}),
-            charStart: b.charStart,
-            charEnd: b.charEnd,
-          }))),
-        }).execute()
-        await trx.insertInto("ingest_jobs").values({
-          id: jobId,
-          org_id: res.locals.orgId as string,
-          source_id: sourceId,
-        }).execute()
-      })
+      try {
+        await db.transaction().execute(async (trx) => {
+          // The authoritative half of the ceiling check above.
+          await assertSourceCapacity(trx, res.locals.orgId as string)
+          await trx.insertInto("sources").values({
+            id: sourceId,
+            org_id: res.locals.orgId as string,
+            kind: "upload",
+            location: filename,
+            // A file has no links to follow. The column defaults to 1, and a
+            // depth on an upload would be a number that means nothing.
+            crawl_depth: 0,
+          }).execute()
+          await trx.insertInto("source_uploads").values({
+            source_id: sourceId,
+            filename,
+            format: detectFormat(resource),
+            byte_size: body.byteLength,
+            title: parsed.title,
+            text: parsed.text,
+            // Spans only — the text is not stored twice (migration 009).
+            blocks: JSON.stringify(parsed.blocks.map((b) => ({
+              kind: b.kind,
+              ...(b.level !== undefined ? { level: b.level } : {}),
+              charStart: b.charStart,
+              charEnd: b.charEnd,
+            }))),
+          }).execute()
+          await trx.insertInto("ingest_jobs").values({
+            id: jobId,
+            org_id: res.locals.orgId as string,
+            source_id: sourceId,
+          }).execute()
+        })
+      } catch (err) {
+        if (err instanceof SourceLimitError) {
+          res.status(409).json({ ok: false, error: sourceLimitSentence(err) })
+          return
+        }
+        throw err
+      }
       options.onEnqueue?.()
 
       res.json({
@@ -622,6 +715,87 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       if (inserted) options.onEnqueue?.()
 
       res.json(inserted ? { ok: true, queued: true, jobId } : { ok: true, queued: false })
+    },
+  )
+
+  /**
+   * Delete a source (M8.5) — the half that makes the plan's source ceiling
+   * honest. Sources had been add-only since M3.6a (M7.5 added Re-crawl, not
+   * removal), which was tolerable while nothing counted them; a cap on an
+   * add-only resource would spend a free tenant's single slot forever on
+   * their first typo'd URL.
+   *
+   * One DELETE takes the whole subtree — documents, chunks, embeddings, the
+   * stored upload extraction, and job history all CASCADE from sources —
+   * so retrieval stops seeing the content the moment this commits. What
+   * deliberately SURVIVES is every transcript: message_citations snapshots
+   * what it cites and carries no chunk FK (§3.3.2), precisely so mutable
+   * pipeline state could be deleted without history rotting. This route is
+   * the first caller to lean on that property outside a test.
+   *
+   * The job-queue interaction is the part that needs care, and the order
+   * inside the transaction is the mechanism. A QUEUED job dies with its
+   * source: deleting it takes the row lock, and the worker's claim is a
+   * `FOR UPDATE SKIP LOCKED` update that skips locked rows, so a job cannot
+   * be claimed mid-delete — the race resolves in Postgres, §3.23's playbook.
+   * A RUNNING job refuses the delete instead (409): cascading it away would
+   * yank the row out from under a worker mid-crawl, whose next progress
+   * UPDATE would quietly write to nothing and whose page inserts would hit
+   * a dead FK. The refusal is checked AFTER the queued-delete so a job that
+   * was claimed a moment earlier is seen as the running job it now is; the
+   * throw rolls the queued-delete back too, so a refused delete changes
+   * nothing at all. Stale "running" rows cannot refuse forever — the
+   * worker's reclaim pass requeues or fails them past the lease window.
+   *
+   * No wake: nothing was enqueued. 404 for a foreign org's source, an
+   * unknown one, and a malformed id alike — the recrawl route's stance.
+   */
+  app.delete(
+    "/internal/orgs/:orgId/sources/:sourceId",
+    requireSecret,
+    requireOrg,
+    async (req: Request, res: Response) => {
+      const raw = req.params.sourceId
+      const sourceId = typeof raw === "string" ? raw : ""
+      if (!isId("src", sourceId)) {
+        res.status(404).end()
+        return
+      }
+
+      class SourceBusyError extends Error {}
+      let found = false
+      try {
+        await db.transaction().execute(async (trx) => {
+          const source = await trx.selectFrom("sources").select("id")
+            .where("id", "=", sourceId)
+            .where("org_id", "=", res.locals.orgId as string)
+            .forUpdate()
+            .executeTakeFirst()
+          if (!source) return
+          found = true
+          await trx.deleteFrom("ingest_jobs")
+            .where("source_id", "=", sourceId)
+            .where("state", "=", "queued")
+            .execute()
+          const running = await trx.selectFrom("ingest_jobs").select("id")
+            .where("source_id", "=", sourceId)
+            .where("state", "=", "running")
+            .executeTakeFirst()
+          if (running) throw new SourceBusyError()
+          await trx.deleteFrom("sources").where("id", "=", sourceId).execute()
+        })
+      } catch (err) {
+        if (err instanceof SourceBusyError) {
+          res.status(409).json({ ok: false, error: "A crawl of this source is running — try again when it finishes." })
+          return
+        }
+        throw err
+      }
+      if (!found) {
+        res.status(404).end()
+        return
+      }
+      res.json({ ok: true })
     },
   )
 

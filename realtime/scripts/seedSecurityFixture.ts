@@ -201,7 +201,13 @@ async function main(): Promise<void> {
     poisoned: InjectionEntry[] = [],
   ): Promise<ProbeOrg> {
     const id = newId("org")
-    await db.insertInto("organizations").values({ id, name }).execute()
+    // Pro, not the default free: since M8.5 the plan's source ceiling is
+    // enforced at the create routes the probe attacks, and free's ceiling is
+    // ONE — an org already holding its seeded corpus source would answer the
+    // probe's malformed-upload case with the cap's 409 where the case is
+    // about the PARSER's 422. The probes measure the trust model, not the
+    // quota, so the fixture buys headroom the way the suites do (§3.8).
+    await db.insertInto("organizations").values({ id, name, plan: "pro" }).execute()
 
     const publishableKey = newPublishableKey()
     const revokedKey = newPublishableKey()

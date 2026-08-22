@@ -11,8 +11,9 @@ import AddSourceForm from "@/components/AddSourceForm"
 import AutoRefresh from "@/components/AutoRefresh"
 import UploadSourceForm from "@/components/UploadSourceForm"
 import { requireOrgMember } from "@/lib/orgs"
-import { recrawlSourceAction } from "@/lib/sources/actions"
+import { deleteSourceAction, recrawlSourceAction } from "@/lib/sources/actions"
 import { hasActiveJob, listSourcesWithProgress } from "@/lib/sources/queries"
+import { planFor } from "@shared/billing/plans"
 import "./page.css"
 
 import type { SourceWithProgress } from "@/lib/sources/queries"
@@ -72,6 +73,12 @@ export default async function SourcesPage({
   const { org } = await requireOrgMember(orgId)
   const sources = await listSourcesWithProgress(org.id)
   const isOwner = org.role === "owner"
+  // The plan's source ceiling (M8.5) — the same number realtime enforces at
+  // both create routes, read from the same catalog, so this page can never
+  // promise room the route will refuse. Every row counts, failed ones
+  // included: they hold a slot, which is what Delete releases.
+  const plan = planFor(org.plan)
+  const atLimit = sources.length >= plan.sources
 
   return (
     <div className="sources">
@@ -86,6 +93,14 @@ export default async function SourcesPage({
         honors the site&apos;s <code>robots.txt</code>, re-crawls skip
         unchanged pages, and every indexed page becomes citable by the
         widget. Pages a crawl left out are listed under it with the reason.
+      </p>
+
+      <p className="sources-quota">
+        {sources.length} of {plan.sources} {plan.sources === 1 ? "source" : "sources"} on
+        the {plan.name} plan
+        {atLimit
+          ? " — the plan is full. Delete a source below or upgrade to connect another."
+          : "."}
       </p>
 
       {isOwner ? (
@@ -141,6 +156,24 @@ export default async function SourcesPage({
                           <input type="hidden" name="sourceId" value={s.id} />
                           <button className="sources-recrawl" type="submit">
                             {s.kind === "upload" ? "Re-index" : "Re-crawl"}
+                          </button>
+                        </form>
+                      ) : null}
+                      {/* Delete frees the source's slot against the plan's
+                          ceiling (M8.5). Hidden while a crawl is RUNNING —
+                          realtime refuses that delete (409) and a button
+                          that always refuses is worse than none; a QUEUED
+                          job dies with its source, so queued rows keep it.
+                          No confirmation step, the house rule: the content
+                          is re-creatable (a crawl by re-adding the URL, an
+                          upload by re-uploading the file), and transcripts
+                          that cited it keep their verdicts by design. */}
+                      {isOwner && s.job?.state !== "running" ? (
+                        <form action={deleteSourceAction}>
+                          <input type="hidden" name="orgId" value={org.id} />
+                          <input type="hidden" name="sourceId" value={s.id} />
+                          <button className="sources-delete" type="submit">
+                            Delete
                           </button>
                         </form>
                       ) : null}

@@ -434,6 +434,43 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M8.5 is done — **the source ceiling is enforced, and sources became
+deletable** (§3.22, §2.4.9, §9.9, §3.8, DATAFLOW §7.9b). The plan catalog
+had advertised a per-tier source limit on the billing page since M5.3 while
+its own comment admitted nothing checked it — "a limit we advertise and do
+not check would be worse than none", which was for two milestones exactly
+the product's state. Both create routes (crawl/sitemap and upload) now
+refuse past the ceiling with a 409 whose sentence names the plan, the
+count, and both ways out; the check runs INSIDE the create transaction with
+the org row LOCKED, because count-then-insert races and five concurrent
+creates would all count zero — a test fires exactly that and one lands. The
+upload route checks twice: an advisory read before the parse (refusing a
+full plan after seconds of PDF decompression would do the expensive thing
+first — the 413-before-parse argument) and the locked check in its
+transaction. Enforcement forced the second half: sources had been add-only
+since M3.6a, and a cap on an add-only resource would spend a free tenant's
+single slot forever on their first typo, so `DELETE
+/internal/orgs/:orgId/sources/:sourceId` now takes the whole subtree
+(documents, chunks, embeddings, upload text, job history — all CASCADE)
+while every transcript keeps its verdicts (§3.3.2's deliberate missing FK,
+leaned on outside a test for the first time). The queue interaction is the
+careful part: a QUEUED job dies with its source — the DELETE holds the row
+lock and the worker's SKIP LOCKED claim cannot take a locked row — while a
+RUNNING one refuses the delete (409), checked after the queued-delete and
+rolled back together so a refusal changes nothing. The sources page says "N
+of M sources on the <plan> plan" from the same catalog realtime enforces,
+and grows an owner-only Delete hidden only while a crawl runs. Two seeded
+orgs whose sources are later touched through the tenant surface moved to
+`pro` — the security fixture's probe orgs (the malformed-upload case is
+about the parser's 422, not the cap's 409) and seed-demo's demo org (the
+playground tour's first sources step is "crawl nodejs.org", which a full
+free org would refuse). Verified with the full ladder against the rebuilt
+prod image — smoke, injection, security 57/57 — plus 456 realtime tests (8
+new) and web's suite and build. One flake recorded rather than shrugged at:
+the wake-driven worker test's 2-second poll ceiling went red once on an
+idle machine and green on every re-run; the ceiling is 10 s now, binding
+only when something is really wrong since the loop exits on success.
+
 M8.4 is done — **the answer path has a deadline** (§3.15.6, §3.18, §3.8,
 §2.6, DATAFLOW §5.2, §14). M8.3 found the gap and deliberately did not fix
 it in a measurement commit: nothing bounded a provider that accepts the
@@ -1170,9 +1207,13 @@ catch the typo the compiler catches first.
 Deliberately three tiers with ONE axis that bites (answers per day): a
 portfolio product with five tiers and eleven feature flags is inventing a
 business, and the engineering worth showing is enforcing one quota
-correctly before the model call rather than modelling many. `sources` is
-stated and not yet enforced, and the file says so — a limit we advertise
-and do not check would be worse than none.
+correctly before the model call rather than modelling many. `sources` spent
+two milestones stated and not enforced — the file's own comment called that
+"worse than none", and the billing page was showing the number the whole
+time — until M8.5 closed it: both create routes now check it with the org
+row locked (§3.22), and sources became deletable in the same increment,
+because a cap on an add-only resource would trap a free tenant's single
+slot forever.
 
 #### §2.4.8 `shared/pricing/models.ts`
 The per-provider price list — the one thing M5's cost metric was blocked
@@ -2541,7 +2582,26 @@ force-exits.
   with a sentence, no secret 401, and no wake fired by any of them. The
   suite parks the jobs it queues, because the wake-driven worker test after
   it runs one job per tick and would otherwise spend its wake on a crawl of
-  `recrawl.example`.
+  `recrawl.example`. The M8.5 block covers the source ceiling and delete,
+  each case in its own org deleted in a `finally` (the migrate suite's
+  convention — a leftover queued job would eat the worker test's wake): the
+  free plan's single slot refused at the second source with a sentence
+  naming both ways out and nothing landed or woken; an upload held to the
+  same ceiling with nothing stored; an upgrade opening the next slot (the
+  limit is the PLAN's, read live); five CONCURRENT creates on a free org
+  admitting exactly one — the org-row lock, not luck; delete freeing the
+  slot without a wake; delete taking the whole subtree while the transcript
+  KEEPS its verdict on the deleted chunk (§3.3.2's missing FK, exercised
+  through a route for the first time); a RUNNING crawl refusing the delete
+  while a QUEUED one dies with its source; and foreign, fabricated,
+  malformed, and secretless deletes refused as elsewhere. The suite's shared
+  org moved to `pro` in the same change (free's ceiling is one and this
+  suite creates sources freely, because the ceiling is not what it is
+  about), and the worker test's poll ceiling widened from 2 s to 10 s: the
+  loop exits the moment the job fails, so the cap only binds when something
+  is wrong, and the tight one converted an ordinary machine stall into a red
+  run — observed once, green on every re-run, recorded rather than shrugged
+  at.
 - `routes/__tests__/demo.test.ts` — keyless and DB-free (the demo surface
   is static config → static responses). The configured page carries the
   snippet with same-origin data-api; the unconfigured page is honest
@@ -3987,6 +4047,49 @@ the ingest pipeline because that is what it does.
 `enqueueReindex` gained the same ON CONFLICT clause, so a click landing
 between its read and its insert can no longer turn a unique violation into
 a rolled-back credential save.
+
+Since M8.5 both create routes enforce **the plan's source ceiling** —
+shared/billing/plans.ts had advertised the number on the billing page since
+M5.3 with a comment admitting nothing checked it, the state its own text
+called "worse than none". The check runs INSIDE the create transaction with
+the org row locked (`FOR UPDATE`): a cap held by count-then-insert races,
+and two concurrent creates would both count below the limit and both land —
+locking the org row serializes source creation per org, held for the
+milliseconds a count and two inserts take on an operation a tenant performs
+a handful of times ever, and a test fires five concurrent creates at a free
+org to prove exactly one lands. The refusal is a 409 whose sentence names
+the plan, the count, and both ways out (delete or upgrade). The upload route
+checks TWICE — an advisory unlocked read before the parse (a PDF parser
+decompresses, and refusing a full plan after seconds of CPU would have done
+the expensive thing — the 413-before-parse argument) and the authoritative
+locked check in its transaction. Every source row counts, failed ones
+included: they hold a slot the tenant can see and, now, release.
+
+Which is why the same increment made sources DELETABLE — `DELETE
+/internal/orgs/:orgId/sources/:sourceId` — because a cap on an add-only
+resource would spend a free tenant's single slot forever on their first
+typo'd URL. One DELETE takes the whole subtree (documents, chunks,
+embeddings, the stored upload extraction, and job history all CASCADE from
+sources) while every transcript SURVIVES: message_citations snapshots what
+it cites and carries no chunk FK (§3.3.2) — this route is the first caller
+to lean on that property outside a test, and the suite pins both directions.
+The queue interaction is the careful part: a QUEUED job dies with its source
+(the DELETE takes the row lock, and the worker's `FOR UPDATE SKIP LOCKED`
+claim cannot take a locked row, so a job cannot be claimed mid-delete — the
+race resolves in Postgres, §3.23's playbook), while a RUNNING one refuses
+the delete with a 409 (cascading it away would yank the row out from under a
+live crawl), checked AFTER the queued-delete so a job claimed a moment
+earlier is seen as the running job it now is, with the throw rolling the
+queued-delete back so a refused delete changes nothing. Stale running rows
+cannot refuse forever — the worker's reclaim pass clears them past the lease
+window. No wake: nothing was enqueued. Direct inserts (seeds, fixtures, the
+eval harness) bypass the cap by construction — it gates the TENANT surface —
+but two seeded orgs whose sources ARE later touched through that surface now
+carry `pro`: the security fixture's probe orgs (free's ceiling is one, and
+the probe's malformed-upload case would otherwise meet the cap's 409 where
+the case is about the parser's 422) and seed-demo's Widget Demo Org (the
+playground tour's first sources step is "crawl nodejs.org", which on a free
+org already holding the demo corpus would refuse at the first click).
 
 Since M3.6b the credential route serves both ROLES through that same
 one-path rule: the role picks which builder and which round-trip runs,
@@ -5616,6 +5719,23 @@ sat side by side. The check found one wart and fixed it: a re-indexing upload
 said "crawling — 1/1 pages", which is the product describing itself doing the
 one thing it promises not to do with a file, so `jobLabel` now says
 "indexing…" and "not indexed" for uploads.
+
+**M8.5 — the ceiling, said where sources are added, and Delete.** The page
+now opens with "N of M sources on the <plan> plan", computed from the same
+catalog realtime enforces (`planFor(org.plan).sources`), so the page can
+never promise room the route will refuse; at the ceiling the sentence adds
+both ways out. Beside Re-crawl, an owner-only **Delete** — a plain form
+action, Re-crawl's shape: `deleteSourceAction` re-checks the ladder and
+calls lib/realtime's `deleteSource`, and the re-rendered list IS the message
+(the row gone, a slot freed). Hidden while a crawl is RUNNING, because
+realtime refuses that delete (409) and a button that always refuses is worse
+than none; a QUEUED row keeps it, since a queued job dies with its source.
+No confirmation step, the house rule (§9.12's close, §9.17's rotate): the
+content is re-creatable — a crawl by re-adding the URL, an upload by
+re-uploading the file — and transcripts that cited it keep their verdicts by
+design. The cap's 409 sentence surfaces through the add and upload forms'
+existing error states; both refusals name delete-or-upgrade, and the delete
+button is on the same page.
 
 **Verified live** against the dev servers and the compose database, with
 two REAL sites rather than fixtures: `https://nodejs.org/en` connected at

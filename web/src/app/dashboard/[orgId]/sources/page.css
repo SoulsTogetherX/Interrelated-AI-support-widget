@@ -130,6 +130,31 @@
   background: var(--accent-soft);
 }
 
+/* "N of M sources on the Free plan" — the ceiling realtime enforces, said
+   where sources are added rather than discovered as a refusal (M8.5). */
+.sources-quota {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+/* Delete frees a slot against the plan's ceiling. The overview's revoke
+   palette: quietly present, unmistakably not the primary action. */
+.sources-delete {
+  font: inherit;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  background: none;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+}
+
+.sources-delete:hover {
+  background: #fef2f2;
+}
+
 /* "N pages skipped — why": collapsed by default, since the count is the
    headline and the reasons are for the tenant who wants them. */
 .sources-skipped {

@@ -200,7 +200,12 @@ this project exists to prevent — so the number that would expose it is shown
 beside the number it would flatter.
 
 **Billing** shows the plan tiers. Without Stripe configured it is read-only,
-and quotas still work: they come from the plan column, not from Stripe.
+and quotas still work: they come from the plan column, not from Stripe. Both
+ceilings are real — answers per day before every model call, and sources at
+the moment you connect one (the demo org is seeded on the Pro tier so the
+tour above never bumps into the source limit; an org you create yourself
+starts on Free, where the ceiling is one source and the sources page says
+so).
 
 ### 8. The public demo page
 

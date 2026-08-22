@@ -12,7 +12,7 @@ import { revalidatePath } from "next/cache"
 
 import { currentUser } from "@/lib/auth/requireUser"
 import { getOrgForMember } from "@/lib/orgs"
-import { createSource, recrawlSource, uploadSource } from "@/lib/realtime"
+import { createSource, deleteSource, recrawlSource, uploadSource } from "@/lib/realtime"
 import { isId } from "@shared/utils/ids"
 //#endregion
 
@@ -149,6 +149,34 @@ export async function recrawlSourceAction(formData: FormData): Promise<void> {
     return
   }
   await recrawlSource(orgId, sourceId)
+  revalidatePath(`/dashboard/${orgId}/sources`)
+}
+
+/**
+ * Delete a source (M8.5) — a plain form action for Re-crawl's reason: the
+ * re-rendered list IS the message, the row disappearing along with a slot
+ * against the plan's ceiling. The one refusal realtime can answer (a crawl
+ * of the source is RUNNING, 409) also needs nothing said here: the row
+ * stays, visibly in its crawling state, and the delete works the moment the
+ * crawl finishes. Owner-only, re-checked because a Server Action is
+ * reachable as a direct POST; realtime re-establishes that the source
+ * belongs to the org regardless.
+ */
+export async function deleteSourceAction(formData: FormData): Promise<void> {
+  const orgId = typeof formData.get("orgId") === "string" ? (formData.get("orgId") as string) : ""
+  const sourceId = typeof formData.get("sourceId") === "string" ? (formData.get("sourceId") as string) : ""
+  if (!isId("src", sourceId)) {
+    return
+  }
+  const user = await currentUser()
+  if (!user) {
+    return
+  }
+  const org = await getOrgForMember(orgId, user.id)
+  if (!org || org.role !== "owner") {
+    return
+  }
+  await deleteSource(orgId, sourceId)
   revalidatePath(`/dashboard/${orgId}/sources`)
 }
 //#endregion

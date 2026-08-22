@@ -46,10 +46,14 @@ interface Plan {
    * exactly the ones a quota must still bound.
    */
   dailyAnswers: number
-  /** Sources (crawl targets) the org may connect. Not yet enforced — the
-   *  number is shown on the billing page and the enforcement lands with the
-   *  surface that would need it; stating a limit we do not check would be
-   *  worse than stating none. */
+  /** Sources (crawl targets and uploads) the org may connect. Enforced
+   *  since M8.5 where sources are created — realtime's internal API, with
+   *  the org row locked so concurrent creates cannot both count under it
+   *  (§3.22) — after two milestones in the state this comment used to
+   *  admit to ("not yet enforced"), which was the worse one: the billing
+   *  page showed every tenant a number nothing checked. Every source row
+   *  counts, failed ones included; they hold a slot the tenant can see and
+   *  delete. */
   sources: number
   /** One line for the plan card, in the product's own voice. */
   blurb: string

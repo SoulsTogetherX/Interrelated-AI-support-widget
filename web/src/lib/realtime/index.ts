@@ -302,4 +302,23 @@ export async function recrawlSource(
   }
   return { ok: true, value: { queued: result.value.queued === true } }
 }
+
+/**
+ * Delete a source (M8.5) — the half that makes the plan's source ceiling
+ * honest. Through realtime rather than a direct DELETE from web because the
+ * job-queue interaction lives there: a queued job dies with its source, a
+ * running one refuses the delete (409, surfaced as the sentence realtime
+ * wrote), and only that process can make those moves race-free against its
+ * own worker.
+ */
+export async function deleteSource(
+  orgId: string,
+  sourceId: string,
+): Promise<InternalResult<Record<string, never>>> {
+  const result = await call(`/internal/orgs/${orgId}/sources/${sourceId}`, { method: "DELETE" })
+  if (!result.ok) {
+    return result
+  }
+  return { ok: true, value: {} }
+}
 //#endregion

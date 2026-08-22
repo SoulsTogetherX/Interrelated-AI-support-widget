@@ -1034,7 +1034,14 @@ AddSourceForm submit
                                        the same seam as credential base
                                        URLs; safeFetch re-vets every hop
                                        at crawl time anyway
-      → ONE transaction: INSERT sources (pending)
+      → ONE transaction: SELECT organizations … FOR UPDATE   (M8.5 — the
+                           plan's source ceiling, checked with the org row
+                           locked so two concurrent creates cannot both
+                           count under it; at the ceiling the transaction
+                           rolls back → 409 naming the plan, the count,
+                           and delete-or-upgrade)
+                         COUNT sources for the org
+                         INSERT sources (pending)
                          INSERT ingest_jobs (queued)
       → onEnqueue()                    server.ts wired this to
         → worker.wake()                realtime/src/ingest/worker.ts —
@@ -1114,7 +1121,14 @@ UploadSourceForm submit  (file input; >10 MB refused in the browser
           the tenant still has the file in front of them
         · parsed but empty → 422 (a source that reads "ready" and answers
           nothing is the state a tenant cannot debug)
+        · BEFORE the parse, an advisory ceiling read (M8.5): refusing a
+          full plan after seconds of PDF decompression would do the
+          expensive thing first — the 413-before-parse argument. The
+          transaction below re-checks with the lock; this half just fails
+          sooner
       → ONE transaction:
+          SELECT organizations … FOR UPDATE + COUNT sources   (M8.5 — the
+                                 authoritative ceiling check; over → 409)
           INSERT sources        (kind='upload', location=filename, depth 0)
           INSERT source_uploads (filename, format DETECTED, byte_size,
                                  title, text, blocks AS SPANS — the text is
@@ -1123,6 +1137,43 @@ UploadSourceForm submit  (file input; >10 MB refused in the browser
       → onEnqueue() → worker.wake() → §3.2, which reads the row back
       → {sourceId, filename, format, title, charCount}
     → revalidatePath(sources page)
+
+### §7.9b Deleting a source (M8.5)
+
+The half that makes the ceiling above honest: sources were add-only from
+M3.6a to here, and a cap on an add-only resource would spend a free
+tenant's single slot forever on their first typo'd URL.
+
+```
+Delete button (owner; hidden while a crawl is RUNNING — that delete would
+be refused, and a button that always refuses is worse than none)
+  → deleteSourceAction                 web/src/lib/sources/actions.ts
+    → isId("src") → currentUser → getOrgForMember → OWNER
+    → deleteSource                     web/src/lib/realtime/index.ts
+        DELETE …/internal/orgs/<org>/sources/<src>
+      → requireSecret → requireOrg     realtime/src/routes/internal.ts
+      → ONE transaction:
+          SELECT sources … FOR UPDATE  (this org's, else 404 — foreign,
+                                        fabricated, and malformed collapse)
+          DELETE ingest_jobs WHERE source_id AND state='queued'
+            · takes the row locks — the worker's FOR UPDATE SKIP LOCKED
+              claim cannot take a locked row, so a job cannot be claimed
+              mid-delete; the race resolves in Postgres (§3.23's playbook)
+          EXISTS ingest_jobs state='running'?
+            · yes → THROW → the whole transaction rolls back (the queued
+              rows come back too — a refused delete changes nothing)
+              → 409 "a crawl of this source is running"
+          DELETE sources               → CASCADE takes documents, chunks,
+                                         chunk_embeddings, source_uploads,
+                                         and job history
+      → no wake: nothing was enqueued
+    → revalidatePath(sources page)     the row is gone, a slot is free
+
+what survives, deliberately: every transcript. message_citations snapshots
+url/heading/quote and carries NO chunk FK (§3.3.2) — the dashboard still
+shows each claim's verdict against content that no longer exists, which is
+exactly why the FK was left out.
+```
     → "handbook.pdf read — 4,210 characters of text. Indexing starts now."
        (the character count is the only honest answer to "did that work?"
         about a file the service deliberately did not keep)

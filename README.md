@@ -176,12 +176,15 @@ nothing until the server confirms the handoff exists, so a conversation an
 agent closed while the visitor was away leaves the page exactly as if it had
 never happened.
 
-**Quotas and billing** (§3.26, §9.15) — plan ceilings are enforced before
-the model call against a per-org, per-day counter written in the same
-transaction as the answers it counts. Stripe test-mode Checkout out, a
-hand-verified signed webhook back, and an event ledger keyed by Stripe's own
-event id so a redelivery applies exactly once. Entitlement stays a column on
-the organization: a billing outage can never reach the answer path.
+**Quotas and billing** (§3.26, §9.15, §3.22) — plan ceilings are enforced
+before the model call against a per-org, per-day counter written in the same
+transaction as the answers it counts, and the per-tier source limit is
+enforced where sources are created, with the org row locked so concurrent
+creates cannot race past it (sources are deletable, so a full plan is a
+state a tenant can leave). Stripe test-mode Checkout out, a hand-verified
+signed webhook back, and an event ledger keyed by Stripe's own event id so a
+redelivery applies exactly once. Entitlement stays a column on the
+organization: a billing outage can never reach the answer path.
 
 ---
 

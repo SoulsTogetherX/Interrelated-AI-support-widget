@@ -35,7 +35,11 @@ describe.skipIf(!hasDb)("internal sources API + wake-driven worker", () => {
   beforeAll(async () => {
     await migrateToLatest(db)
     orgId = newId("org")
-    await db.insertInto("organizations").values({ id: orgId, name: "Sources Test Org" }).execute()
+    // Pro, not the default free: since M8.5 the plan's source ceiling is
+    // enforced at both create routes, this suite creates sources freely
+    // because that is not what it is about, and free's ceiling is ONE. The
+    // ceiling has its own block below, with its own orgs at their own tiers.
+    await db.insertInto("organizations").values({ id: orgId, name: "Sources Test Org", plan: "pro" }).execute()
 
     enqueueCalls = 0
     const app = createApp({
@@ -345,6 +349,277 @@ describe.skipIf(!hasDb)("internal sources API + wake-driven worker", () => {
   })
   //#endregion
 
+  //#region The source ceiling, and delete (M8.5)
+  // The plan catalog had advertised a per-tier source limit on the billing
+  // page since M5.3 with nothing checking it — the state its own comment
+  // called "worse than none". These cases pin the enforcement at both
+  // create routes, the concurrency guarantee (org row locked), and the
+  // delete route that makes a cap on a formerly add-only resource honest.
+  //
+  // Every case makes its OWN org and deletes it in a `finally` — the
+  // migrate suite's convention (§3.8) — because a leftover QUEUED job would
+  // be claimed by the worker test below, whose woken tick runs exactly one
+  // job (it bit that suite once already).
+
+  /** DELETE with the secret, the upload()/post() sibling. */
+  function del(path: string): Promise<Response> {
+    return fetch(`${base}${path}`, {
+      method: "DELETE",
+      headers: { "x-internal-secret": SECRET },
+    })
+  }
+
+  async function makeOrg(plan: "free" | "starter" | "pro"): Promise<string> {
+    const id = newId("org")
+    await db.insertInto("organizations").values({ id, name: `Cap ${id.slice(-6)}`, plan }).execute()
+    return id
+  }
+
+  it("enforces the free plan's single slot at the second source, naming both ways out", async () => {
+    const org = await makeOrg("free")
+    try {
+      const first = await post(`/internal/orgs/${org}/sources`, { kind: "url", location: "https://cap-one.example/" })
+      expect(first.status).toBe(200)
+
+      const wakesBefore = enqueueCalls
+      const second = await post(`/internal/orgs/${org}/sources`, { kind: "url", location: "https://cap-two.example/" })
+      expect(second.status).toBe(409)
+      const body = (await second.json()) as { error: string }
+      expect(body.error).toContain("Free plan allows 1 source")
+      expect(body.error).toContain("Delete a source or upgrade")
+      // Nothing landed and nothing woke: the refusal is a rollback, not a
+      // half-created source.
+      expect(enqueueCalls).toBe(wakesBefore)
+      const rows = await db.selectFrom("sources").select("id").where("org_id", "=", org).execute()
+      expect(rows).toHaveLength(1)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
+  it("holds an upload to the same ceiling, before the parse and with nothing stored", async () => {
+    const org = await makeOrg("free")
+    try {
+      // The slot spent directly (a seeded source counts like any other —
+      // the cap is a count of rows, not of route calls).
+      await db.insertInto("sources").values({
+        id: newId("src"), org_id: org, kind: "url", location: "https://cap-full.example/",
+      }).execute()
+
+      const wakesBefore = enqueueCalls
+      const res = await fetch(`${base}/internal/orgs/${org}/sources/upload`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-upload-filename": "notes.md",
+          "x-upload-content-type": "text/markdown",
+          "x-internal-secret": SECRET,
+        },
+        body: new Uint8Array(Buffer.from("# Notes\n\nA paragraph of real text.\n")),
+      })
+      expect(res.status).toBe(409)
+      const body = (await res.json()) as { error: string }
+      expect(body.error).toContain("Free plan allows 1 source")
+      expect(enqueueCalls).toBe(wakesBefore)
+      const uploads = await db.selectFrom("source_uploads")
+        .innerJoin("sources", "sources.id", "source_uploads.source_id")
+        .select("source_uploads.source_id")
+        .where("sources.org_id", "=", org)
+        .execute()
+      expect(uploads).toHaveLength(0)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
+  it("opens the next slot on an upgrade — the limit is the PLAN's, read live", async () => {
+    const org = await makeOrg("free")
+    try {
+      await db.insertInto("sources").values({
+        id: newId("src"), org_id: org, kind: "url", location: "https://cap-full.example/",
+      }).execute()
+      const refused = await post(`/internal/orgs/${org}/sources`, { kind: "url", location: "https://cap-more.example/" })
+      expect(refused.status).toBe(409)
+
+      await db.updateTable("organizations").set({ plan: "starter" }).where("id", "=", org).execute()
+      const allowed = await post(`/internal/orgs/${org}/sources`, { kind: "url", location: "https://cap-more.example/" })
+      expect(allowed.status).toBe(200)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
+  it("admits exactly ONE of five concurrent creates on a free plan — the lock, not luck", async () => {
+    // The reason the check runs with the org row locked: count-then-insert
+    // races, and five concurrent requests would otherwise all count zero
+    // and all land. This is the org-level sibling of the recrawl route's
+    // click-storm case.
+    const org = await makeOrg("free")
+    try {
+      const results = await Promise.all(
+        [1, 2, 3, 4, 5].map((i) =>
+          post(`/internal/orgs/${org}/sources`, { kind: "url", location: `https://race-${i}.example/` }),
+        ),
+      )
+      const statuses = results.map((r) => r.status).sort()
+      expect(statuses).toEqual([200, 409, 409, 409, 409])
+      const rows = await db.selectFrom("sources").select("id").where("org_id", "=", org).execute()
+      expect(rows).toHaveLength(1)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
+  it("deleting a source frees its slot, without waking the worker", async () => {
+    const org = await makeOrg("free")
+    try {
+      const first = await post(`/internal/orgs/${org}/sources`, { kind: "url", location: "https://cap-cycle.example/" })
+      const { sourceId } = (await first.json()) as { sourceId: string }
+
+      const wakesBefore = enqueueCalls
+      const removed = await del(`/internal/orgs/${org}/sources/${sourceId}`)
+      expect(removed.status).toBe(200)
+      expect((await removed.json()) as object).toEqual({ ok: true })
+      expect(enqueueCalls).toBe(wakesBefore) // nothing was enqueued
+
+      const again = await post(`/internal/orgs/${org}/sources`, { kind: "url", location: "https://cap-cycle-2.example/" })
+      expect(again.status).toBe(200)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
+  it("delete takes the whole subtree and spares the transcript", async () => {
+    // The §3.3.2 property — citations snapshot what they cite, no chunk FK —
+    // exercised through a route for the first time: pipeline state dies,
+    // history survives.
+    const org = await makeOrg("pro")
+    try {
+      const sourceId = newId("src")
+      await db.insertInto("sources").values({
+        id: sourceId, org_id: org, kind: "upload", location: "manual.md",
+      }).execute()
+      await db.insertInto("source_uploads").values({
+        source_id: sourceId, filename: "manual.md", format: "markdown",
+        byte_size: 24, title: "Manual", text: "# Manual\n\nSome text.",
+        blocks: JSON.stringify([{ kind: "paragraph", charStart: 10, charEnd: 20 }]),
+      }).execute()
+      const documentId = newId("doc")
+      await db.insertInto("documents").values({
+        id: documentId, org_id: org, source_id: sourceId,
+        url: "manual.md", title: "Manual", content_hash: "a".repeat(64),
+      }).execute()
+      const chunkId = newId("chk")
+      await db.insertInto("chunks").values({
+        id: chunkId, org_id: org, document_id: documentId, ord: 0,
+        heading_path: null, text: "Some text.", token_count: 3, char_start: null, char_end: null,
+      }).execute()
+      await db.insertInto("chunk_embeddings").values({
+        chunk_id: chunkId, org_id: org, model: "mock-384", dim: 384,
+        embedding: `[${Array.from({ length: 1024 }, () => 0).join(",")}]`,
+      }).execute()
+      const jobId = newId("job")
+      await db.insertInto("ingest_jobs").values({
+        id: jobId, org_id: org, source_id: sourceId, state: "done",
+      }).execute()
+      // A transcript that cited the chunk.
+      const conversationId = newId("con")
+      await db.insertInto("conversations").values({
+        id: conversationId, org_id: org, visitor_id: "vis-cap",
+      }).execute()
+      const messageId = newId("msg")
+      await db.insertInto("messages").values({
+        id: messageId, conversation_id: conversationId, org_id: org,
+        role: "assistant", content: "Some text.", model: "mock-llm",
+        refused: false, schema_violations: 0,
+      }).execute()
+      await db.insertInto("message_citations").values({
+        message_id: messageId, ord: 0, chunk_id: chunkId,
+        claim_text: "Some text.", quote: "Some text.", verdict: "verified",
+        span_start: 0, span_end: 10, url: "manual.md", heading_path: null,
+      }).execute()
+
+      const removed = await del(`/internal/orgs/${org}/sources/${sourceId}`)
+      expect(removed.status).toBe(200)
+
+      // The pipeline subtree is gone…
+      expect(await db.selectFrom("sources").select("id").where("id", "=", sourceId).executeTakeFirst()).toBeUndefined()
+      expect(await db.selectFrom("documents").select("id").where("id", "=", documentId).executeTakeFirst()).toBeUndefined()
+      expect(await db.selectFrom("chunks").select("id").where("id", "=", chunkId).executeTakeFirst()).toBeUndefined()
+      expect(await db.selectFrom("chunk_embeddings").select("chunk_id").where("chunk_id", "=", chunkId).executeTakeFirst()).toBeUndefined()
+      expect(await db.selectFrom("source_uploads").select("source_id").where("source_id", "=", sourceId).executeTakeFirst()).toBeUndefined()
+      expect(await db.selectFrom("ingest_jobs").select("id").where("id", "=", jobId).executeTakeFirst()).toBeUndefined()
+      // …and the transcript's verdict is not: the citation still names the
+      // chunk that no longer exists, which is exactly what the missing FK
+      // was for.
+      const citation = await db.selectFrom("message_citations")
+        .select(["chunk_id", "verdict"]).where("message_id", "=", messageId).executeTakeFirstOrThrow()
+      expect(citation).toMatchObject({ chunk_id: chunkId, verdict: "verified" })
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
+  it("refuses to delete under a RUNNING crawl, and takes a QUEUED one with it", async () => {
+    const org = await makeOrg("pro")
+    try {
+      // Running: the worker holds this job, and cascading it away would
+      // yank the row out from under a live crawl.
+      const busyId = newId("src")
+      await db.insertInto("sources").values({
+        id: busyId, org_id: org, kind: "url", location: "https://busy.example/",
+      }).execute()
+      await db.insertInto("ingest_jobs").values({
+        id: newId("job"), org_id: org, source_id: busyId,
+        state: "running", locked_by: "worker-under-test", locked_at: new Date(), attempts: 1,
+      }).execute()
+      const refused = await del(`/internal/orgs/${org}/sources/${busyId}`)
+      expect(refused.status).toBe(409)
+      expect(((await refused.json()) as { error: string }).error).toContain("running")
+      expect(await db.selectFrom("sources").select("id").where("id", "=", busyId).executeTakeFirst()).toBeDefined()
+
+      // Queued: nobody holds it — the delete takes the row lock, and the
+      // worker's SKIP LOCKED claim cannot take a locked row, so the job
+      // dies with its source instead of being claimed mid-delete.
+      const idleId = newId("src")
+      await db.insertInto("sources").values({
+        id: idleId, org_id: org, kind: "url", location: "https://idle.example/",
+      }).execute()
+      const queuedJob = newId("job")
+      await db.insertInto("ingest_jobs").values({
+        id: queuedJob, org_id: org, source_id: idleId,
+      }).execute()
+      const removed = await del(`/internal/orgs/${org}/sources/${idleId}`)
+      expect(removed.status).toBe(200)
+      expect(await db.selectFrom("ingest_jobs").select("id").where("id", "=", queuedJob).executeTakeFirst()).toBeUndefined()
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", org).execute()
+    }
+  })
+
+  it("delete answers 404 for a foreign source, a fabricated id, and a non-id alike", async () => {
+    const stranger = await makeOrg("free")
+    try {
+      const theirs = newId("src")
+      await db.insertInto("sources").values({
+        id: theirs, org_id: stranger, kind: "url", location: "https://theirs.example/",
+      }).execute()
+
+      // Another org's source under MY org's path: indistinguishable from
+      // not existing — the recrawl route's stance.
+      expect((await del(`/internal/orgs/${orgId}/sources/${theirs}`)).status).toBe(404)
+      expect(await db.selectFrom("sources").select("id").where("id", "=", theirs).executeTakeFirst()).toBeDefined()
+      expect((await del(`/internal/orgs/${orgId}/sources/${newId("src")}`)).status).toBe(404)
+      expect((await del(`/internal/orgs/${orgId}/sources/not-an-id`)).status).toBe(404)
+      // And without the secret: the uniform empty 401.
+      const bare = await fetch(`${base}/internal/orgs/${orgId}/sources/${theirs}`, { method: "DELETE" })
+      expect(bare.status).toBe(401)
+    } finally {
+      await db.deleteFrom("organizations").where("id", "=", stranger).execute()
+    }
+  })
+  //#endregion
+
   it("a WOKEN wake-driven worker runs the job with no poll timer", async () => {
     // pollMs 0: after the start tick the worker is fully idle — no timer
     // exists to find this job. Only wake() can, which is the production
@@ -369,7 +644,14 @@ describe.skipIf(!hasDb)("internal sources API + wake-driven worker", () => {
 
     worker.wake()
     let state = "queued"
-    for (let i = 0; i < 40 && state !== "failed"; i++) {
+    // 10 s ceiling, not the 2 s this used to allow: the loop exits the
+    // moment the job fails, so the cap only ever binds when something is
+    // WRONG, and a tight one converts an ordinary machine stall into a red
+    // run — observed once (M8.5): state still "queued" at 2 s on an
+    // otherwise idle box, green on every re-run. A wake is remembered
+    // mid-tick by design, so the generous ceiling costs nothing but honesty
+    // about how slow a loaded runner can be.
+    for (let i = 0; i < 200 && state !== "failed"; i++) {
       await new Promise((r) => setTimeout(r, 50))
       const row = await db
         .selectFrom("ingest_jobs").select("state").where("id", "=", jobId).executeTakeFirstOrThrow()

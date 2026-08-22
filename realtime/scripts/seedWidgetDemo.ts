@@ -108,9 +108,16 @@ async function main(): Promise<void> {
   let org = await db.selectFrom("organizations").select(["id"]).where("name", "=", ORG_NAME).executeTakeFirst()
   if (!org) {
     org = { id: newId("org") }
-    await db.insertInto("organizations").values({ id: org.id, name: ORG_NAME }).execute()
+    await db.insertInto("organizations").values({ id: org.id, name: ORG_NAME, plan: "pro" }).execute()
     console.log(`created ${ORG_NAME} (${org.id})`)
   }
+  // Pro, asserted on every seed rather than only at creation, because the
+  // demo org predates the plan being enforced anywhere: since M8.5 the
+  // source ceiling is checked at the create routes, free's ceiling is ONE,
+  // and this seed already spends a slot on the demo corpus — the
+  // playground's guided tour then says "crawl nodejs.org", which on a free
+  // demo org would answer 409 at its first step.
+  await db.updateTable("organizations").set({ plan: "pro" }).where("id", "=", org.id).execute()
 
   // ── Publishable key ──────────────────────────────────────────────────────
   const key = await db.selectFrom("api_keys").select(["org_id"])
