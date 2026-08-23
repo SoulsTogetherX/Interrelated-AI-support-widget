@@ -54,3 +54,60 @@ services:
       # with Node's bundled CA store.
       - key: POSTGRES_SSL
         value: "true"
+      # Ingest worker ON since M3.6, in WAKE-DRIVEN mode: INGEST_POLL_MS=0
+      # means no timer at all — one tick at boot (catches jobs stranded by
+      # a deploy), then work happens exactly when the dashboard's enqueue
+      # wakes the worker through the internal API. Neon sleeps between
+      # ingests, which is the point: any repeating poll would hold its
+      # compute awake against the ~100 CU-hour monthly budget.
+      - key: INGEST_WORKER
+        value: "1"
+      - key: INGEST_POLL_MS
+        value: "0"
+      # ── Widget surface (M2.5) ──
+      # Session-token HMAC secret — set in the Render dashboard (any 32+
+      # char random string) so widget sessions survive deploys; unset would
+      # mean ephemeral and every deploy would silently log visitors out.
+      - key: WIDGET_TOKEN_SECRET
+        sync: false
+      # The FALLBACK generation provider for orgs without a BYO credential
+      # of their own (since M3.5 a tenant's encrypted credential outranks
+      # this per answer). "mock" serves context-quoting grounded answers —
+      # honest for a stack whose demo org has no key yet.
+      #
+      # RUNBOOK — flipping the deployed demo to a real provider:
+      #   1. set LLM_PROVIDER to "groq" or "gemini" below
+      #   2. paste the matching key into GROQ_API_KEY / GEMINI_API_KEY in
+      #      the Render dashboard (declared sync:false below, so Render
+      #      prompts for them; both stay empty until then and the mock
+      #      keeps serving)
+      #   3. seed the demo org against Neon:
+      #      npm run seed-demo -- --corpus fastify --origin <render url>
+      #   4. set DEMO_PUBLISHABLE_KEY to the pk that prints
+      # Until then /demo serves honest setup instructions rather than a
+      # broken widget.
+      - key: LLM_PROVIDER
+        value: "mock"
+      # Same variable names the CLI, the local fallback, and the key-gated
+      # live test suite read (.env.example documents all three uses) — one
+      # name per provider everywhere, so nothing has to be kept in sync.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DEMO_PUBLISHABLE_KEY
+        sync: false
+      # ── Internal API (M3.4) — the dashboard's server-to-server surface ──
+      # ALL-OR-NOTHING PAIR, enforced at boot (server.ts): the secret alone
+      # would accept tenant keys it cannot encrypt. Leave BOTH empty in the
+      # Render dashboard until the Vercel dashboard is deployed, then set:
+      #   INTERNAL_API_SECRET   — 32+ char random string, IDENTICAL value in
+      #                           the Vercel project's env
+      #   CREDENTIAL_MASTER_KEY — 32 bytes base64
+      #     node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+      # While unset the /internal/* routes simply do not exist (404) — the
+      # smoke probe checks exactly that posture on an unconfigured stack.
+      - key: INTERNAL_API_SECRET
+        sync: false
+      - key: CREDENTIAL_MASTER_KEY
+        sync: false

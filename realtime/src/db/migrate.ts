@@ -3,7 +3,15 @@ import { Migrator } from "kysely"
 import type { Kysely, Migration, MigrationProvider, MigrationResultSet } from "kysely"
 
 import * as migration001 from "@/db/migrations/001_initial_schema"
-import * as migration002 from "@/db/migrations/002_content_pipeline"
+import * as migration002 from "@/db/migrations/002_handoff"
+import * as migration003 from "@/db/migrations/003_answer_tokens"
+import * as migration004 from "@/db/migrations/004_usage_daily"
+import * as migration005 from "@/db/migrations/005_billing"
+import * as migration006 from "@/db/migrations/006_origin_daily"
+import * as migration007 from "@/db/migrations/007_secret_keys"
+import * as migration008 from "@/db/migrations/008_skipped_pages"
+import * as migration009 from "@/db/migrations/009_source_uploads"
+import * as migration010 from "@/db/migrations/010_schema_violations"
 //#endregion
 
 //#region Type Defs
@@ -25,9 +33,22 @@ class ExplicitMigrationProvider implements MigrationProvider {
 //#region Constants
 // Keys sort lexicographically to determine execution order — keep the
 // NNN_ prefix zero-padded. Add new migrations at the bottom, never reorder.
+//
+// 001 is a FLATTENED baseline: the five migrations that built the schema
+// through M3 were collapsed into it (001_initial_schema explains the trade
+// and the one-time reset an already-migrated database needs). That was a
+// one-off; from 002 onward this list only ever grows.
 const MIGRATIONS: Record<string, Migration> = {
   "001_initial_schema": migration001,
-  "002_content_pipeline": migration002,
+  "002_handoff": migration002,
+  "003_answer_tokens": migration003,
+  "004_usage_daily": migration004,
+  "005_billing": migration005,
+  "006_origin_daily": migration006,
+  "007_secret_keys": migration007,
+  "008_skipped_pages": migration008,
+  "009_source_uploads": migration009,
+  "010_schema_violations": migration010,
 }
 //#endregion
 

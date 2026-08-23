@@ -57,6 +57,132 @@ await check("GET /api/definitely-not-a-route returns 404", async () => {
   if (res.status !== 404) throw new Error(`status ${res.status}`)
 })
 
+// ── Widget surface is mounted AND closed (M2.5) ─────────────────────────────
+// No seeded org exists in a fresh stack, so what a probe can verify is the
+// security posture: the session route answers (mounted) and refuses a
+// request with no Origin (closed). A 404 here means the widget routes fell
+// off the app; a 200 would mean the origin gate fell off the route.
+await check("POST /v1/widget/session without Origin returns 403", async () => {
+  const res = await fetch(`${base}/v1/widget/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ publishableKey: "pk_smoke_probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 403) throw new Error(`status ${res.status}`)
+})
+
+await check("POST /v1/widget/chat without a session returns 401", async () => {
+  const res = await fetch(`${base}/v1/widget/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://smoke.example" },
+    body: JSON.stringify({ question: "probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 401) throw new Error(`status ${res.status}`)
+})
+
+// The handoff socket (M4.2). fetch cannot speak WebSocket, so this sends the
+// handshake by hand — which is the point: it proves the upgrade handler is
+// attached to the SHIPPED server AND that it refuses an unticketed client
+// before any WebSocket exists. A 101 here would mean the upgrade
+// authenticates after the handshake, which is the bug the design avoids.
+await check("WebSocket upgrade without a ticket is refused, not accepted", async () => {
+  const { request } = await import(base.startsWith("https") ? "node:https" : "node:http")
+  const status = await new Promise((resolve, reject) => {
+    const req = request(`${base}/v1/handoff`, {
+      headers: {
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": "AAAAAAAAAAAAAAAAAAAAAA==",
+      },
+      timeout: 10_000,
+    })
+    req.on("response", (res) => { res.resume(); resolve(res.statusCode) })
+    req.on("upgrade", (_res, socket) => { socket.destroy(); resolve(101) })
+    req.on("timeout", () => { req.destroy(); reject(new Error("timed out")) })
+    req.on("error", reject)
+    req.end()
+  })
+  if (status !== 401) throw new Error(`status ${status}`)
+})
+
+// Same posture check for the second token-authenticated route (M4.1): a 404
+// would mean it fell off the app, a 200 that its auth did.
+await check("POST /v1/widget/escalate without a session returns 401", async () => {
+  const res = await fetch(`${base}/v1/widget/escalate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://smoke.example" },
+    body: JSON.stringify({ conversationId: "con_probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 401) throw new Error(`status ${res.status}`)
+})
+
+// The secret-key mint (M7.3, layer 6): mounted (not 404) and closed (401
+// without a bearer) — and it must never speak CORS, since a page that could
+// use a secret key is the one thing this route exists to make impossible.
+await check("POST /v1/sessions without a secret key returns 401 and no CORS", async () => {
+  const res = await fetch(`${base}/v1/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://smoke.example" },
+    body: JSON.stringify({ origin: "https://smoke.example", visitorId: "probe" }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 401) throw new Error(`status ${res.status}`)
+  if (res.headers.get("access-control-allow-origin") !== null) throw new Error("CORS header on the secret-key route")
+})
+
+// ── Demo surface (M2.7) ─────────────────────────────────────────────────────
+// /demo must answer 200 in BOTH states (configured → the widget page;
+// unconfigured → setup instructions) — a recruiter must never see a 500.
+// /widget.js proves the bundle actually shipped inside the image.
+await check("GET /demo returns 200 html", async () => {
+  const res = await get("/demo")
+  if (res.status !== 200) throw new Error(`status ${res.status}`)
+  const body = await res.text()
+  if (!body.includes("Interrelated")) throw new Error("unexpected body")
+})
+
+await check("GET /widget.js serves the bundle", async () => {
+  const res = await get("/widget.js")
+  if (res.status !== 200) throw new Error(`status ${res.status}`)
+  const type = res.headers.get("content-type") ?? ""
+  if (!type.includes("javascript")) throw new Error(`content-type ${type}`)
+})
+
+// The M3.4 internal API must be CLOSED from the outside in every state:
+// unconfigured stacks (the e2e compose) don't mount it at all → 404;
+// configured deployments (Render with INTERNAL_API_SECRET set) reject a
+// secretless request → 401. Anything else means the admin surface leaks.
+await check("internal credential API is closed to outsiders", async () => {
+  const res = await get("/internal/orgs/org_probe/credentials")
+  if (res.status !== 404 && res.status !== 401) {
+    throw new Error(`status ${res.status} — internal surface reachable without a secret`)
+  }
+})
+
+// The upload route (M7.6b) is on that same surface and gets its own line,
+// because it is the one internal route that accepts megabytes: a
+// misconfiguration that left it open would let a stranger spend the
+// service's memory and its PDF parser, not merely read a status.
+await check("internal upload route is closed to outsiders", async () => {
+  const res = await fetch(`${base}/internal/orgs/org_probe/sources/upload`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-upload-filename": "smoke.md",
+      "x-upload-content-type": "text/markdown",
+    },
+    body: "# Smoke\n\nProbe.\n",
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (res.status !== 404 && res.status !== 401) {
+    throw new Error(`status ${res.status} — upload surface reachable without a secret`)
+  }
+})
+
 if (failures > 0) {
   console.error(`\n${failures} smoke check(s) failed`)
   process.exit(1)

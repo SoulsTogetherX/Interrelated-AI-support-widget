@@ -1,0 +1,208 @@
+/* Org overview. */
+
+.orghome {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.orghome-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.orghome-name {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.orghome-meta {
+  margin: 0.25rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+.orghome-neworg {
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.orghome-switcher {
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.orghome-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+.orghome-cardtitle {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.orghome-pk {
+  display: block;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+
+.orghome-cardnote {
+  margin: 0.75rem 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+/* Layer 4's flag (M7.2): refused loads in the trailing week. Warning
+   palette, same as the install page's notices — it is information the
+   tenant should read, not an error. */
+.orghome-flag {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+/* Key rotation (M7.1): the retiring list under the current key. */
+.orghome-subtitle {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.orghome-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.orghome-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: var(--paper-soft);
+}
+
+/* min-width: 0 lets the key value truncate instead of pushing the button
+   out of the row on a phone — the same automatic-minimum trap §9.16 fixed
+   in the shell header. */
+.orghome-keymain {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.orghome-keyvalue {
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orghome-keymeta {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.orghome-revoke {
+  font: inherit;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  background: none;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.orghome-revoke:hover {
+  background: #fef2f2;
+}
+
+/* The secret key card (M7.3). A lead note sits ABOVE the key rather than
+   below it, because what the key is for has to be read before "Generate"
+   makes sense; the current key line is suffix-only by construction. */
+.orghome-cardnote--lead {
+  margin: 0 0 0.75rem;
+}
+
+.orghome-secret {
+  margin: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* Revoke on the CURRENT secret key: a row of its own under the form, the
+   button first so the sentence beside it reads as its consequence. */
+.orghome-revokecurrent {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.orghome-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+}
+
+.orghome-usage {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.orghome-usage strong {
+  font-size: 1.25rem;
+}
+
+/* A meter rather than a bare div: the quota is a measurement within a known
+   range, which is exactly what role="meter" describes, and a screen reader
+   then reads "37 of 200" without the numbers being duplicated in a label. */
+.orghome-meter {
+  margin-top: 0.5rem;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.orghome-meterfill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  /* No transition: this is a server-rendered snapshot, and animating a
+     number that only changes on reload would suggest it is live. */
+}

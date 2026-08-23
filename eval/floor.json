@@ -1,0 +1,4 @@
+{
+  "_comment": "The CI gate: npm run eval fails the build if hybrid recall@5 on the golden set drops below this. Baseline measured 2026-08-10 was 0.750 (see RESULTS.md); the floor sits 5 points under it to absorb cross-machine ONNX and HNSW-construction noise while still catching real regressions (a broken filter, fusion, or chunker change lands well below this). Raise the floor when the baseline durably improves — a floor nobody raises decays into a formality.",
+  "hybridRecallAt5": 0.70
+}

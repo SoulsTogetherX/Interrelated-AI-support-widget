@@ -18,11 +18,14 @@
     "types": ["node"],
     "paths": {
       "@/*": ["./src/*"],
-      "@shared/*": ["../shared/*"]
+      "@shared/*": ["../shared/*"],
+      "@providers/*": ["../providers/*"],
+      "@eval/*": ["../eval/*"],
+      "@loadtest/*": ["../loadtest/*"]
     }
   },
   // vitest.config.ts is deliberately NOT typechecked here: it runs as ESM
   // (import.meta) under vitest's own esbuild pipeline, which this CommonJS
   // tsconfig would reject. Vitest validates it at startup instead.
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts"]
 }

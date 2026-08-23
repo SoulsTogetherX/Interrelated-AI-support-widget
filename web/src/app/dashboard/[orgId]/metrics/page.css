@@ -1,0 +1,65 @@
+/* Class names prefixed "metrics-" — App Router CSS imports are global, so
+   the prefix IS the scoping mechanism (§9.2). */
+
+.metrics { max-width: 900px }
+
+.metrics-title { font-size: 22px; margin-bottom: 6px }
+
+.metrics-lede {
+  color: var(--ink-muted);
+  font-size: 14px;
+  margin-bottom: 26px;
+}
+
+.metrics-section { margin-bottom: 30px }
+.metrics-section h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.metrics-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.metrics-stat-label { font-size: 12px; color: var(--ink-muted); font-weight: 600 }
+/* Tabular figures so a column of percentages lines up on its decimal
+   point — a metrics page that jitters as numbers change reads as unstable. */
+.metrics-stat-value { font-size: 26px; font-variant-numeric: tabular-nums }
+.metrics-stat-hint { font-size: 12px; color: var(--ink-muted); line-height: 1.4 }
+
+.metrics-note {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+.metrics-empty { color: var(--ink-muted); font-size: 14px }
+
+.metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.metrics-table th,
+.metrics-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.metrics-table th { font-size: 12px; color: var(--ink-muted) }
+.metrics-table td { font-variant-numeric: tabular-nums }
+.metrics-table code { font-size: 13px }

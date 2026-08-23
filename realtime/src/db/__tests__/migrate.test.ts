@@ -1,9 +1,11 @@
 //#region Imports
+import { randomBytes } from "node:crypto"
 import { sql } from "kysely"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import pool, { db } from "@/db/pool"
 import { MIGRATIONS, migrateToLatest } from "@/db/migrate"
+import { MAX_RECORDED_SKIPPED_PAGES } from "@/db/schema"
 import { newId } from "@shared/utils/ids"
 //#endregion
 
@@ -44,9 +46,9 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
   })
 
   it("installs the pgvector extension", async () => {
-    // The reason the extension lives in migration 001: this assertion failing
-    // means the Postgres image is wrong, and we want to learn that here, not
-    // at first ingest in M1.
+    // The reason the extension is created before any table needs it: this
+    // assertion failing means the Postgres image is wrong, and we want to
+    // learn that at deploy time, not at first ingest.
     const { rows } = await sql<{ extname: string }>`
       SELECT extname FROM pg_extension WHERE extname = 'vector'
     `.execute(db)
@@ -69,6 +71,13 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
   })
 
   describe("constraints reject invalid rows", () => {
+    /** A crawl source of `orgId` with nothing queued for it yet. */
+    async function freshSource(orgId: string): Promise<string> {
+      const id = newId("src")
+      await db.insertInto("sources").values({ id, org_id: orgId, kind: "url", location: `https://${id}.example/` }).execute()
+      return id
+    }
+
     it("allows exactly one owner per organization", async () => {
       const orgId = newId("org")
       await db.insertInto("organizations").values({ id: orgId, name: "Constraint Co" }).execute()
@@ -110,8 +119,221 @@ describe.skipIf(!DB_CONFIGURED)("migrateToLatest", () => {
           kind: "public",
           public_id: "pk_test_mismatch",
           secret_hash: "a".repeat(64),
+          secret_suffix: null,
         }).execute(),
       ).rejects.toThrow(/check/i)
+    })
+
+    it("pairs the secret suffix with the kind exactly, and keys a secret's hash uniquely (007)", async () => {
+      const orgId = newId("org")
+      const otherOrg = newId("org")
+      await db.insertInto("organizations").values([
+        { id: orgId, name: "Secret Key Co" }, { id: otherOrg, name: "Other Secret Co" },
+      ]).execute()
+      // Fresh hashes rather than fixed strings: the hash index is GLOBAL, so
+      // a literal reused by any other suite against the same database would
+      // collide and fail this test for the wrong reason.
+      const hashA = randomBytes(32).toString("hex")
+      const hashB = randomBytes(32).toString("hex")
+      const secretRow = (hash: string, suffix: string | null) => ({
+        id: newId("key"), org_id: orgId, kind: "secret" as const,
+        public_id: null, secret_hash: hash, secret_suffix: suffix,
+      })
+      try {
+        // A secret key without its display suffix, or with one of the wrong
+        // length, and a public key CARRYING one: each is the pairing CHECK
+        // refusing a row that would mean the dashboard and the schema disagree
+        // about what a secret key looks like.
+        await expect(db.insertInto("api_keys").values(secretRow(hashA, null)).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("api_keys").values(secretRow(hashA, "abcde")).execute()).rejects.toThrow(/check/i)
+        await expect(
+          db.insertInto("api_keys").values({
+            id: newId("key"), org_id: orgId, kind: "public",
+            public_id: `pk_test_with_suffix_${hashA.slice(0, 8)}`, secret_hash: null, secret_suffix: "k3p9",
+          }).execute(),
+        ).rejects.toThrow(/check/i)
+        // The well-formed row is accepted …
+        await db.insertInto("api_keys").values(secretRow(hashA, "k3p9")).execute()
+        // … a second CURRENT secret for the same org is refused (the index that
+        // makes two simultaneous "Generate" clicks yield one key) …
+        await expect(
+          db.insertInto("api_keys").values(secretRow(hashB, "m2q4")).execute(),
+        ).rejects.toThrow(/api_keys_one_current_secret_per_org/)
+        // … while the same HASH is refused even under another org — a secret
+        // value exists once, ever.
+        await expect(
+          db.insertInto("api_keys").values({ ...secretRow(hashA, "k3p9"), org_id: otherOrg }).execute(),
+        ).rejects.toThrow(/api_keys_secret_hash/)
+      } finally {
+        await db.deleteFrom("organizations").where("id", "in", [orgId, otherOrg]).execute()
+      }
+    })
+
+    it("bounds a job's skipped-page record by shape and by size (008)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Skipped Co" }).execute()
+      // Each row on its own source: every insert here is a queued job, and
+      // the same migration allows one live job per source (next case).
+      const insertJob = async (extra: Record<string, unknown>) =>
+        db.insertInto("ingest_jobs")
+          .values({ id: newId("job"), org_id: orgId, source_id: await freshSource(orgId), ...extra } as never)
+          .execute()
+
+      // A job that knows nothing of the columns reads as "nothing skipped".
+      const plainId = newId("job")
+      await db.insertInto("ingest_jobs").values({ id: plainId, org_id: orgId, source_id: await freshSource(orgId) }).execute()
+      const plain = await db.selectFrom("ingest_jobs").selectAll().where("id", "=", plainId).executeTakeFirstOrThrow()
+      expect(plain.skipped_count).toBe(0)
+      expect(plain.skipped_pages).toEqual([])
+
+      // Exactly the cap is fine; one past it is refused; so is a non-array
+      // and a negative count — a second writer that forgot the rules fails
+      // loudly instead of growing the row.
+      const page = (i: number) => ({ url: `https://skipped.example/p${i}`, reason: "HTTP 404" })
+      const atCap = Array.from({ length: MAX_RECORDED_SKIPPED_PAGES }, (_, i) => page(i))
+      try {
+        await insertJob({ skipped_count: 500, skipped_pages: JSON.stringify(atCap) })
+        await expect(insertJob({ skipped_count: 51, skipped_pages: JSON.stringify([...atCap, page(50)]) })).rejects.toThrow(/check/i)
+        await expect(insertJob({ skipped_pages: JSON.stringify({ url: "x" }) })).rejects.toThrow(/check/i)
+        await expect(insertJob({ skipped_count: -1 })).rejects.toThrow(/check/i)
+      } finally {
+        // The rows that inserted are QUEUED jobs; a later suite's worker
+        // would claim and crawl them. Cascade them away with the org.
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
+    it("allows at most one LIVE job per source (008)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "One Job Co" }).execute()
+      try {
+        const sourceId = await freshSource(orgId)
+        const jobFor = (state: "queued" | "running" | "done" | "failed") =>
+          db.insertInto("ingest_jobs").values({
+            id: newId("job"), org_id: orgId, source_id: sourceId, state,
+            ...(state === "running" ? { locked_by: "w", locked_at: new Date() } : {}),
+          }).execute()
+        // History accumulates freely…
+        await jobFor("done")
+        await jobFor("failed")
+        // …one live job is fine…
+        await jobFor("queued")
+        // …a second live one (queued or running) is not.
+        await expect(jobFor("queued")).rejects.toThrow(/unique|duplicate/i)
+        await expect(jobFor("running")).rejects.toThrow(/unique|duplicate/i)
+        // Another source of the same org is unaffected.
+        await db.insertInto("ingest_jobs").values({ id: newId("job"), org_id: orgId, source_id: await freshSource(orgId) }).execute()
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
+    it("pairs a message's schema-violation count with its model, exactly (010)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Violations Co" }).execute()
+      try {
+        const conversationId = newId("con")
+        await db.insertInto("conversations")
+          .values({ id: conversationId, org_id: orgId, visitor_id: "vis_probe" }).execute()
+        const message = (extra: Record<string, unknown>) => ({
+          id: newId("msg"), conversation_id: conversationId, org_id: orgId,
+          role: "assistant" as const, content: "x", ...extra,
+        })
+
+        // A model ran: 0 (held the contract) and 1 (needed the retry) are
+        // both legal, and so is any count above them — the cap is prompt.ts's
+        // decision, not the schema's.
+        await db.insertInto("messages").values(message({ model: "m", schema_violations: 0 })).execute()
+        await db.insertInto("messages").values(message({ model: "m", schema_violations: 1 })).execute()
+        // No model ran: NULL, which is what a gate refusal and a visitor turn
+        // both are.
+        await db.insertInto("messages").values(message({ model: null, schema_violations: null, refused: true })).execute()
+
+        // The two halves of the pairing, each refused from its own side. A
+        // model with no count would be an answer whose contract nobody
+        // measured; a count with no model would claim a model that never ran
+        // broke something.
+        await expect(
+          db.insertInto("messages").values(message({ model: "m", schema_violations: null })).execute(),
+        ).rejects.toThrow(/messages_schema_violations_pairs_with_model/)
+        await expect(
+          db.insertInto("messages").values(message({ model: null, schema_violations: 0 })).execute(),
+        ).rejects.toThrow(/messages_schema_violations_pairs_with_model/)
+        // And a negative count is a writer that has gone wrong.
+        await expect(
+          db.insertInto("messages").values(message({ model: "m", schema_violations: -1 })).execute(),
+        ).rejects.toThrow(/messages_schema_violations_nonneg/)
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
+    it("counts a day's schema failures, and refuses a negative one (010)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Failures Co" }).execute()
+      try {
+        // A row that predates the column reads as zero failures, which is the
+        // honest answer: none were recorded.
+        await db.insertInto("usage_daily").values({ org_id: orgId, day: "2026-08-19" }).execute()
+        const row = await db.selectFrom("usage_daily").select("schema_failures")
+          .where("org_id", "=", orgId).executeTakeFirstOrThrow()
+        expect(Number(row.schema_failures)).toBe(0)
+        await expect(
+          db.updateTable("usage_daily").set({ schema_failures: -1 })
+            .where("org_id", "=", orgId).execute(),
+        ).rejects.toThrow(/usage_daily_schema_failures_nonneg/)
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
+    })
+
+    it("holds one upload's extraction per source, and refuses the empty ones (009)", async () => {
+      const orgId = newId("org")
+      await db.insertInto("organizations").values({ id: orgId, name: "Upload Co" }).execute()
+      try {
+        const sourceId = newId("src")
+        await db.insertInto("sources")
+          .values({ id: sourceId, org_id: orgId, kind: "upload", location: "handbook.pdf" }).execute()
+        const row = (extra: Record<string, unknown>) => ({
+          source_id: sourceId, filename: "handbook.pdf", format: "pdf" as const,
+          byte_size: 181_000, title: "Handbook", text: "Refunds are issued within 14 days.",
+          blocks: JSON.stringify([{ kind: "paragraph", charStart: 0, charEnd: 34 }]),
+          ...extra,
+        })
+
+        // The states that would mean an upload row exists for a file nothing
+        // could be read from: no text, no bytes, a filename that is not one,
+        // a format no parser answers to, and blocks that are not a list.
+        await expect(db.insertInto("source_uploads").values(row({ text: "" })).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("source_uploads").values(row({ byte_size: 0 })).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("source_uploads").values(row({ filename: "" })).execute()).rejects.toThrow(/check/i)
+        await expect(db.insertInto("source_uploads").values(row({ format: "docx" }) as never).execute()).rejects.toThrow(/check/i)
+        await expect(
+          db.insertInto("source_uploads").values(row({ blocks: JSON.stringify({ kind: "paragraph" }) })).execute(),
+        ).rejects.toThrow(/check/i)
+
+        // The well-formed row is accepted, and jsonb comes back as a VALUE —
+        // the property the worker depends on to slice its blocks back out
+        // without parsing a string.
+        await db.insertInto("source_uploads").values(row({})).execute()
+        const stored = await db.selectFrom("source_uploads").selectAll()
+          .where("source_id", "=", sourceId).executeTakeFirstOrThrow()
+        expect(stored.blocks).toEqual([{ kind: "paragraph", charStart: 0, charEnd: 34 }])
+        expect(stored.text.slice(0, 7)).toBe("Refunds")
+
+        // One file per source: a second upload for the same source is a
+        // primary-key violation, not a silent second extraction.
+        await expect(db.insertInto("source_uploads").values(row({ filename: "other.pdf" })).execute())
+          .rejects.toThrow(/unique|duplicate/i)
+
+        // And the row goes when its source does.
+        await db.deleteFrom("sources").where("id", "=", sourceId).execute()
+        const after = await db.selectFrom("source_uploads").select("source_id")
+          .where("source_id", "=", sourceId).executeTakeFirst()
+        expect(after).toBeUndefined()
+      } finally {
+        await db.deleteFrom("organizations").where("id", "=", orgId).execute()
+      }
     })
 
     it("rejects origins with paths or trailing slashes", async () => {

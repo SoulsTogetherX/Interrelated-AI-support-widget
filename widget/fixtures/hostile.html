@@ -1,0 +1,43 @@
+<!doctype html>
+<!-- Fixture host #3: the hostile page — `* { all: unset }` plus a strict
+     CSP. What this page tests, and why each directive is what it is:
+
+     - `* { all: unset }` nukes every element's styling in the light DOM.
+       The widget survives because :host { all: initial } severs inherited
+       properties at the shadow boundary — if the bubble renders as an
+       unstyled inline blob, that armor broke.
+     - script-src 'self': the bundle loads same-origin from the fixture
+       server (this is also the production posture — jsDelivr would be an
+       explicit allowlist entry).
+     - connect-src http://localhost:3000 ws://localhost:3000: the ONE
+       directive customers must add for the widget to talk to the API — and
+       the API host appears TWICE in it, because the human handoff rides a
+       WebSocket to the same host and CSP's scheme matching only ever goes
+       http→https, never http→ws (CSP3 §6.7.2.6): a connect-src naming only
+       the http(s) origin lets chat work and silently blocks the socket.
+       Found live in M7.4, when a rejoin on this page sat at "Connecting…"
+       with the console reporting the ws: URL as a CSP violation, so the
+       Install page now prints both. If chat AND a handoff work here, the
+       documented CSP requirements are provably sufficient.
+     - style-src 'unsafe-inline' exists for the PAGE's own reset (a strict
+       'none' would block the hostile reset itself); the widget must not
+       need it — its styles ride adoptedStyleSheets, which style-src does
+       not govern. Breaking the widget by removing this line would mean
+       the <style> fallback got promoted to primary. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; connect-src http://localhost:3000 ws://localhost:3000; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>Fixture: hostile host</title>
+  <style>* { all: unset }</style>
+</head>
+<body>
+  <div>Everything on this page is deliberately unstyled and locked down.</div>
+  <div>The widget bubble should still look exactly like it does on the friendly fixtures.</div>
+  <script src="/dist/widget.js" async
+          data-key="pk_local_demo_widget_fixture_key0"
+          data-api="http://localhost:3000"
+          data-title="Hostile Host Support"></script>
+</body>
+</html>

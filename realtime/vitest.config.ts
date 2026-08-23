@@ -19,6 +19,7 @@ export default defineConfig({
       // and does not read tsconfig aliases on its own.
       "@": fileURLToPath(new URL("./src", import.meta.url)),
       "@shared": fileURLToPath(new URL("../shared", import.meta.url)),
+      "@providers": fileURLToPath(new URL("../providers", import.meta.url)),
     },
   },
 })

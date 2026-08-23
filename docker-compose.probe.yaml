@@ -1,0 +1,51 @@
+# The probe harness half of the e2e job (M6) — layered OVER the prod stack:
+#
+#   docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml up --build --wait
+#   docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml run --rm seed
+#   node scripts/security-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
+#
+# The security and injection probes need a tenant to attack — orgs, keys, an
+# allowlisted origin, known content — and none of that can be created through
+# the public surface, by design. This file adds ONE one-shot service that seeds
+# it from inside the compose network and writes the fixture the probes read.
+#
+# Why a service and not a host-side script: the prod stack deliberately does
+# not publish Postgres, and the probes deliberately need no npm install. A seed
+# running as a container reaches `database:5432` without either concession,
+# and the realtime image under test is untouched — it is still exactly the
+# artifact that ships. Why the DEV stage of the same Dockerfile: it already
+# holds realtime's deps, src, shared/ and providers/ (compose dev bind-mounts
+# over them); the seed script and eval/ ride in as read-only mounts the same
+# way. Building it costs one cached layer set on top of the deps stage the
+# prod build shares.
+#
+# `profiles: [probe]` keeps `up` from starting it: it is a command, not a
+# service, and `run --rm seed` targets it explicitly regardless of profile.
+
+services:
+  seed:
+    profiles: ["probe"]
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+      target: dev
+    environment:
+      POSTGRES_HOST: database
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Same value the realtime service holds (docker-compose.prod.yaml passes
+      # it through), so the seed can encrypt the credential canary the
+      # read-back probe greps for. Empty → no canary, and the probe says so.
+      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:-}
+    volumes:
+      - ./realtime/scripts:/app/realtime/scripts:ro
+      - ./eval:/app/eval:ro
+      - ./.probe:/out
+    # realtime healthy ⇒ it has migrated (it migrates before it listens), so
+    # the tables the seed writes exist.
+    depends_on:
+      realtime:
+        condition: service_healthy
+    command: ["npm", "run", "seed-security", "--", "--out", "/out/security-fixture.json"]

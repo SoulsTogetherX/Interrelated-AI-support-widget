@@ -1,0 +1,126 @@
+/* PlanCards. */
+
+/* 13rem, not 15: the dashboard's content column is 720px wide, and at a
+   15rem minimum the third tier wrapped to its own row — a pricing table
+   reads as a COMPARISON, and 2 + 1 is not one. Measured in a browser, not
+   guessed. It still collapses to two columns and then one as the viewport
+   narrows. */
+.plancards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1rem;
+}
+
+/* Each card IS a form (one per plan, so a pending state belongs to the
+   button that was pressed), which needs the flex layout a div would get. */
+.plancard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.plancard-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.plancard-name {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.plancard-price {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+
+.plancard-per {
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--ink-muted);
+}
+
+.plancard-limits {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.9375rem;
+}
+
+.plancard-blurb {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  flex: 1;
+}
+
+.plancard-buy {
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.plancard-buy:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.plancard-badge {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.plancard-note {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.plancard-error {
+  margin: 0;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+}
+
+.plancards-manage {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.plancards-portal {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.plancards-portal:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.plancards-managenote {
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}

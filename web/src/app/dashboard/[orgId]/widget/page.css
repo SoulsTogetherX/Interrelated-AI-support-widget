@@ -1,0 +1,207 @@
+/* Install page. */
+
+.install {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.install-title {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.install-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.install-cardtitle {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.install-note {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.install-warning {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+}
+
+.install-empty {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #b45309;
+}
+
+.install-origins {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.install-origin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: var(--paper-soft);
+  font-size: 0.875rem;
+}
+
+/* §9.16's automatic-minimum trap, found here in M7.2's live check once the
+   allowlist held a 31-character origin at 375px: the code kept its full
+   intrinsic width and pushed Remove 10px past the viewport. min-width: 0
+   lets the origin give ground and the ellipsis spends it; the form keeps
+   its size so the button never wraps. */
+.install-origin > code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install-origin > form {
+  flex-shrink: 0;
+}
+
+.install-remove {
+  font: inherit;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  background: none;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+}
+
+.install-snippet {
+  margin: 0;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.install-back {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* Traffic by origin (M7.2, layer 4). Four columns, and the origin cell may
+   wrap, so the table fits a phone's content column; the wrapper's
+   overflow-x is a backstop for a pathological origin, not the plan. Verified
+   at 375px that the page itself never scrolls sideways (§9.18). */
+.install-subtitle {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.install-tablewrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.install-traffic {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.install-traffic th,
+.install-traffic td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* The one cell allowed to wrap. break-all rather than break-word: an
+   origin has no spaces, so word-breaking would never fire, and a 60-char
+   subdomain must fold instead of forcing the table wide. */
+.install-origincell {
+  white-space: normal !important;
+  word-break: break-all;
+  min-width: 9rem;
+}
+
+.install-lastseen {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  margin-top: 0.125rem;
+}
+
+.install-traffic thead th {
+  background: var(--paper-soft);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.install-traffic tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.install-num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A refused, un-allowlisted origin is the row this table exists for. */
+.install-refused td {
+  background: #fffbeb;
+}
+
+.install-allow {
+  font: inherit;
+  font-size: 0.8125rem;
+  color: #166534;
+  background: none;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  cursor: pointer;
+}
+
+.install-allow:hover {
+  background: #f0fdf4;
+}
+
+/* Visually hidden column header, still read out. */
+.install-srlabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

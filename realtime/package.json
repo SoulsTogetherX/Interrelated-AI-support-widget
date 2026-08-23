@@ -1,23 +1,38 @@
 {
   "name": "interrelated-realtime",
   "private": true,
-  "description": "The data plane: widget chat (SSE), retrieval, ingest worker, and (from M4) the human-handoff WebSocket. CommonJS on purpose — the production artifact is a single esbuild bundle run by plain `node`, and CJS keeps that boring and debuggable.",
+  "description": "The data plane: widget chat (SSE), retrieval, ingest worker, and (from M4) the human-handoff WebSocket. CommonJS on purpose \u2014 the production artifact is a single esbuild bundle run by plain `node`, and CJS keeps that boring and debuggable.",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "esbuild src/server.ts --bundle --platform=node --target=node22 --format=cjs --packages=external --sourcemap --outfile=dist/server.js",
+    "enqueue": "tsx scripts/enqueueSource.ts",
+    "search": "tsx scripts/searchDev.ts",
+    "ask": "tsx scripts/askDev.ts",
+    "seed-demo": "tsx scripts/seedWidgetDemo.ts",
+    "seed-security": "tsx scripts/seedSecurityFixture.ts",
+    "eval": "tsx scripts/runEval.ts",
+    "loadtest": "tsx scripts/runLoadtest.ts",
+    "build": "esbuild src/server.ts --bundle --platform=node --target=node22 --format=cjs --packages=external --alias:@shared=../shared --alias:@providers=../providers --sourcemap --outfile=dist/server.js",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "tenant-scan": "tsx scripts/runTenantScan.ts",
+    "compare": "tsx scripts/runProviderComparison.ts",
+    "ingest-bench": "tsx scripts/runIngestBench.ts"
   },
   "dependencies": {
     "express": "^5.2.1",
+    "htmlparser2": "^12.0.0",
     "kysely": "^0.28.7",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "undici": "^8.10.0",
+    "unpdf": "^1.8.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^24.10.1",
     "@types/pg": "^8.15.4",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.25.0",
     "tsx": "^4.19.0",
     "typescript": "^5.9.3",

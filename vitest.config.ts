@@ -10,7 +10,20 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   test: {
-    include: ["shared/**/*.test.ts"],
+    // shared/, providers/, eval/, AND loadtest/ — alias-joined source
+    // folders with no package.json of their own, so the root runner owns
+    // their tests. (loadtest's socket scenario needs a running service and
+    // is not a unit test; what IS unit-tested here is the histogram whose
+    // percentiles end up in the README.)
+    include: [
+      "shared/**/*.test.ts",
+      "providers/**/*.test.ts",
+      "eval/**/*.test.ts",
+      "loadtest/**/*.test.ts",
+      // The playground orchestrator's pure core (scripts/ is otherwise
+      // zero-dependency .mjs probes with no runner of their own).
+      "scripts/**/*.test.mjs",
+    ],
     environment: "node",
   },
 })

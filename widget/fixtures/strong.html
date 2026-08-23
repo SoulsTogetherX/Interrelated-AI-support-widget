@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- Fixture host #4: the STRONG MODE page (trust-model layer 6, M7.3). What
+     this page tests is what is NOT on it: no data-key. The widget fetches
+     its session from /api/support-session on this same origin, which
+     scripts/serve.mjs answers the way a customer's own backend would — one
+     POST to realtime's /v1/sessions with the SECRET key from the server's
+     environment, for a user that server has "signed in". View source: there
+     is nothing here worth copying. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fixture: strong-mode host (server-minted sessions)</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+    main { max-width: 44rem; margin: 0 auto; padding: 4rem 1.5rem; }
+    h1 { font-size: 2rem; margin: 0; }
+    .card { margin-top: 2rem; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; }
+    code { background: #f1f5f9; padding: 0 0.25rem; border-radius: 4px; }
+    ol { padding-left: 1.25rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Acme — signed-in app</h1>
+    <p>
+      A pretend logged-in application page. The support bubble here was
+      opened with a session <strong>minted by this site's server</strong>,
+      not by a publishable key on the page — view source and find none.
+    </p>
+    <div class="card">
+      <h2>Try it</h2>
+      <ol>
+        <li>On the dashboard: create an org, allowlist <code>http://localhost:4400</code>, generate a <em>secret</em> key on the overview.</li>
+        <li>Run the fixture server with it: <code>INTERRELATED_SECRET_KEY=sk_live_… npm run fixtures</code></li>
+        <li>Open the bubble: the widget calls <code>GET /api/support-session</code> here, this server calls
+            <code>POST /v1/sessions</code> there with the secret key, and the token comes back for
+            <code>user_42</code> — who the dashboard's transcript will name as
+            <em>identified by your server</em>.</li>
+        <li>Without the key exported, the endpoint answers 503 and the widget says it could not start —
+            what a customer sees with an unconfigured server.</li>
+      </ol>
+    </div>
+  </main>
+  <script src="/dist/widget.js" async
+          data-session-url="/api/support-session"
+          data-api="http://localhost:3000"
+          data-title="Acme Support"></script>
+</body>
+</html>

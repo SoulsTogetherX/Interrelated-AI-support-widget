@@ -1,0 +1,31 @@
+/* Org-section nav. */
+
+.orgnav-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.orgnav {
+  display: flex;
+  /* Wraps since M5.4 added the eighth link: eight items in a row are wider
+     than a phone, and the nav was pushing the whole dashboard into
+     horizontal scroll — measured at 375px, where the document was 568px
+     wide. Wrapping costs a second line on narrow screens and nothing at
+     all on a desktop. */
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
+  gap: 1rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.625rem;
+  font-size: 0.9375rem;
+}
+
+.orgnav-link {
+  text-decoration: none;
+  color: var(--ink-muted);
+}
+
+.orgnav-link:hover {
+  color: var(--accent);
+}

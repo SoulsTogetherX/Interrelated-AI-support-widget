@@ -36,6 +36,23 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       BACKEND_PORT: "3000"
+      # Worker on: this stack's Postgres is local to the compose network, so
+      # the poll loop costs nothing — and CI's e2e job should boot the same
+      # code paths production will eventually run.
+      INGEST_WORKER: "1"
+      # Widget surface: the mock LLM answers from retrieved context, so the
+      # e2e job exercises the REAL chat route keylessly. Ephemeral token
+      # secret — nothing in this stack outlives the stack.
+      LLM_PROVIDER: mock
+      # The dashboard's server-to-server surface (M3.4), passed through
+      # from .env with empty defaults: EMPTY is "unconfigured" to server.ts
+      # (the /internal/* routes do not mount), so a local prod boot with no
+      # values behaves exactly as before. CI's e2e job generates a throwaway
+      # pair so the security probe can attack the internal API — the SSRF
+      # vet on tenant URLs and the credential read-back denial are only
+      # reachable through a configured surface (M6.2).
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-}
+      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY:-}
     ports:
       - "${BACKEND_PORT:-3000}:3000"
     depends_on:

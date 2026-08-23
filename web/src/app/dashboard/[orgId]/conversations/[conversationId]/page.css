@@ -1,0 +1,118 @@
+/* Transcript. */
+
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.transcript-title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.transcript-status {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-muted);
+}
+
+.transcript-messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.transcript-message {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.875rem 1.125rem;
+}
+
+.transcript-message-visitor {
+  border-left: 3px solid var(--ink-muted);
+}
+
+.transcript-message-assistant {
+  border-left: 3px solid var(--accent);
+}
+
+.transcript-message-agent {
+  border-left: 3px solid #166534;
+}
+
+.transcript-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.transcript-role {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.transcript-refused {
+  color: #b45309;
+}
+
+.transcript-content {
+  margin: 0;
+  font-size: 0.9375rem;
+  white-space: pre-wrap;
+}
+
+.transcript-citations {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.transcript-citation {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  background: var(--paper-soft);
+}
+
+.transcript-citation-verified {
+  border-left: 3px solid #166534;
+}
+
+.transcript-citation-quote_not_found,
+.transcript-citation-unknown_chunk {
+  border-left: 3px solid #b91c1c;
+  background: #fef2f2;
+}
+
+.transcript-verdict {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--ink-muted);
+}
+
+.transcript-claim {
+  display: block;
+}
+
+.transcript-quote {
+  margin: 0.375rem 0 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--line);
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,7 @@
+/* /dashboard onboarding state — centers the create-org card. */
+
+.dashboard-onboarding {
+  display: flex;
+  justify-content: center;
+  padding-top: 3rem;
+}

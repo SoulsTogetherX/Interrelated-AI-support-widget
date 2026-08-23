@@ -1,11 +1,23 @@
-# CI — two jobs, same shape as OnlineWhiteboard's:
+# CI — three jobs, same shape as OnlineWhiteboard's:
 #
 #   verify  fast feedback: per-package typecheck + unit/integration tests,
 #           with a real pgvector Postgres as a service container so the
 #           DB-gated suites actually run (they self-skip without a password).
 #   e2e     the real thing: build the PROD images, boot the prod compose
-#           stack, and drive it from outside with the zero-dependency smoke
-#           probe. What gets probed is byte-for-byte what gets deployed.
+#           stack, seed it with a tenant to attack (docker-compose.probe.yaml's
+#           one-shot service — the image under test is untouched), and drive
+#           it from outside with the zero-dependency probes: smoke (is the
+#           surface mounted and closed), injection (does a poisoned page in
+#           the retrieved context ever reach the visitor uncited, cite an
+#           attacker's URL, or leak the system prompt), and security (does
+#           every layer of the trust model hold against the requests it
+#           exists to stop). What gets probed is byte-for-byte what gets
+#           deployed, and a layer that gives is a red merge.
+#   eval    the retrieval-quality gate: golden set scored against an
+#           ephemeral pgvector container with the LOCAL embedding model
+#           (bge-small via fastembed — no API key), failing the build if
+#           hybrid recall@5 drops below the committed floor (eval/floor.json).
+#           Quality regressions become merge blockers, not vibes.
 #
 # No API keys anywhere: the whole pipeline runs keyless by design (mock/local
 # providers from M1 on). Fork PRs get full CI.
@@ -58,13 +70,24 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             realtime/package-lock.json
+            widget/package-lock.json
+            web/package-lock.json
 
-      # ── root: shared/ tests + typecheck ──────────────────────────────────
+      # ── root: shared/ + providers/ + eval/ + loadtest/ tests + typechecks ─
       - name: root deps
         run: npm ci
       - name: shared typecheck
         run: npm run typecheck:shared
-      - name: shared tests
+      - name: providers typecheck
+        run: npm run typecheck:providers
+      - name: eval typecheck
+        run: npm run typecheck:eval
+      # The load harness is typechecked and its percentile code unit-tested
+      # here, but the RUN is not a CI job: latency on a shared runner
+      # measures the runner (loadtest/RESULTS.md says so at length).
+      - name: loadtest typecheck
+        run: npm run typecheck:loadtest
+      - name: root tests
         run: npm test
 
       # ── realtime ─────────────────────────────────────────────────────────
@@ -84,6 +107,107 @@ jobs:
           POSTGRES_DB: interrelated
         run: npm test
 
+      # ── widget ───────────────────────────────────────────────────────────
+      - name: widget deps
+        working-directory: widget
+        run: npm ci
+      - name: widget typecheck
+        working-directory: widget
+        run: npm run typecheck
+      - name: widget tests
+        working-directory: widget
+        run: npm test
+      - name: widget build
+        working-directory: widget
+        run: npm run build
+      # The 15 KB gzipped budget from the plan — a size regression (a
+      # dependency creeping in, a framework-shaped rewrite) fails the merge.
+      - name: widget size budget
+        run: node scripts/widget-size.mjs
+
+      # ── web (dashboard) ──────────────────────────────────────────────────
+      - name: web deps
+        working-directory: web
+        run: npm ci
+      - name: web typecheck
+        working-directory: web
+        run: npm run typecheck
+      # ORDER MATTERS: web's DB-gated auth suite assumes a migrated schema,
+      # and web never migrates (realtime owns that) — the realtime test step
+      # above already migrated this job's service container. Moving the web
+      # block before realtime's would fail these tests with a missing-table
+      # error that names this dependency.
+      - name: web tests
+        working-directory: web
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        run: npm test
+      # `next build` is the real gate: it runs Next's own TypeScript pass over
+      # the GENERATED route types (which `tsc --noEmit` cannot see on a fresh
+      # checkout — web/tsconfig.json explains) and proves the production
+      # artifact actually builds. Vercel deploys are this same command.
+      - name: web build
+        working-directory: web
+        run: npm run build
+
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify
+    services:
+      database:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U interrelated -d interrelated"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            realtime/package-lock.json
+
+      # fastembed's ONNX model (~30 MB) is immutable for a given model name —
+      # a static cache key means exactly one download ever, per runner image.
+      - name: cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: local_cache
+          key: fastembed-bge-small-en-v1.5
+
+      - name: root deps (fastembed lives here)
+        run: npm ci
+      - name: realtime deps
+        working-directory: realtime
+        run: npm ci
+
+      - name: run retrieval eval
+        working-directory: realtime
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: interrelated
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interrelated
+        run: npm run eval
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -93,22 +217,57 @@ jobs:
 
       - name: create throwaway .env
         # Secrets here are generated per-run and never real: the e2e stack is
-        # hermetic, exists for minutes, and is destroyed below.
+        # hermetic, exists for minutes, and is destroyed below. The internal
+        # API pair (M6.2) is set so the surface MOUNTS and the security probe
+        # can attack it — the SSRF vet on tenant URLs and the credential
+        # read-back denial only exist behind a configured secret. Empty in a
+        # local prod boot means unconfigured, exactly as before.
         run: |
           cp .env.example .env
           sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
           sed -i "s/^POSTGRES_PORT=.*/POSTGRES_PORT=5432/" .env
+          echo "INTERNAL_API_SECRET=$(openssl rand -hex 32)" >> .env
+          echo "CREDENTIAL_MASTER_KEY=$(openssl rand -base64 32)" >> .env
 
+      # Both files everywhere below: the probe override adds only the
+      # one-shot seed service (profile-gated, so `up` never starts it), and
+      # naming it on `down` is what lets `-v` reach the network it joined.
       - name: boot prod stack
-        run: docker compose -f docker-compose.prod.yaml up --build --wait --wait-timeout 180 -d
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml up --build --wait --wait-timeout 180 -d
+
+      # The tenant the security probe attacks: two orgs, keys (one revoked),
+      # allowlisted origins, known content, written to .probe/ as a fixture.
+      # Runs INSIDE the compose network against the unpublished database, so
+      # neither the prod image nor the network posture changes for the sake
+      # of the harness.
+      - name: seed probe fixture
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml run --rm seed
 
       - name: smoke probe
         run: node scripts/smoke-test.mjs http://localhost:3000
 
+      # Poisoned pages in the retrieved context (eval/injection.jsonl, seeded
+      # into org A): asserts the containment properties — no uncited text, no
+      # attacker URL cited, no system prompt in anything the visitor sees —
+      # and reports the relay rate, which under the keyless mock measures the
+      # pipeline rather than a model and is expected to be 0.
+      - name: injection probe
+        run: node scripts/injection-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
+
+      # LAST among the probes: its final section drains the mint and chat
+      # token buckets on purpose, and anything after it would wait a minute
+      # for them to refill. The internal secret is the throwaway one from
+      # .env — handing it to the probe is what enables the SSRF and
+      # read-back checks; against a real deployment it must never be given.
+      - name: security probe
+        run: |
+          export INTERNAL_API_SECRET="$(grep '^INTERNAL_API_SECRET=' .env | cut -d= -f2-)"
+          node scripts/security-probe.mjs http://localhost:3000 --fixture .probe/security-fixture.json
+
       - name: dump logs on failure
         if: failure()
-        run: docker compose -f docker-compose.prod.yaml logs --no-color
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml logs --no-color
 
       - name: teardown
         if: always()
-        run: docker compose -f docker-compose.prod.yaml down -v
+        run: docker compose -f docker-compose.prod.yaml -f docker-compose.probe.yaml down -v

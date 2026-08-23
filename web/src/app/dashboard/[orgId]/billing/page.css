@@ -1,0 +1,62 @@
+/* Class names prefixed "billing-" — App Router CSS imports are global, so
+   the prefix IS the scoping mechanism (§9.2). */
+
+.billing { max-width: 900px }
+
+.billing-title { font-size: 22px; margin-bottom: 6px }
+
+.billing-lede {
+  color: var(--ink-muted);
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.billing-banner {
+  margin: 0 0 20px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.billing-banner code {
+  font-size: 12px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.billing-card {
+  margin-top: 24px;
+  padding: 16px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.billing-cardtitle {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+.billing-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 12px;
+}
+
+.billing-facts div { display: flex; flex-direction: column; gap: 3px }
+.billing-facts dt { font-size: 12px; color: var(--ink-muted); font-weight: 600 }
+.billing-facts dd { margin: 0; font-size: 14px }
+
+.billing-cardnote {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.billing-card > .billing-cardnote:first-of-type { margin-top: 0 }

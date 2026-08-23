@@ -1,0 +1,23 @@
+{
+  // providers/ follows the same no-package-json pattern as shared/ (see
+  // CLAUDE.md): consumers compile it through the @providers/* alias, so this
+  // config is typecheck-only and as strict as shared's. Implementations that
+  // need real dependencies (fastembed) load them with a dynamic import — the
+  // dependency is declared by whichever package actually runs that code,
+  // keeping this folder importable everywhere without an install.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true
+  },
+  "include": ["./**/*.ts"]
+}

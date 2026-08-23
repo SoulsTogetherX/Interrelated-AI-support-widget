@@ -1,0 +1,63 @@
+{
+  // Next.js dialect, strict like every other package. The Next-mandated
+  // options are exactly that — mandated: `next build` REWRITES this file when
+  // they drift ("jsx: react-jsx" — Next 16 uses the React automatic runtime;
+  // "moduleResolution: bundler"; "allowJs"; "incremental"; the "next"
+  // language-service plugin), so fighting its formatting or choices is churn.
+  // The strictness extras (noUnused*, noFallthroughCasesInSwitch, strict) are
+  // ours and Next preserves them. "noEmit" because next build owns emitting;
+  // `tsc --noEmit` is the fast standalone gate.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "incremental": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "@shared/*": [
+        "../shared/*"
+      ]
+    },
+    "allowJs": true
+  },
+  // next-env.d.ts and the .next/ globs are all GENERATED (and gitignored):
+  // since Next 16, next-env.d.ts imports type files inside .next/, so it can
+  // only exist after a `next build`/`next dev`. On a fresh clone every one of
+  // these include entries matches nothing — legal for tsc — and `tsc
+  // --noEmit` still typechecks src/ fully; the generated route types are
+  // additionally checked by `next build`'s own TypeScript pass, which is why
+  // CI runs the build and not only the typecheck.
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "scripts/**/*.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

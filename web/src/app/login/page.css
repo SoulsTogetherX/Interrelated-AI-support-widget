@@ -1,0 +1,11 @@
+/* Shared by /login and /signup (signup/page.css does not exist on purpose —
+ * signup imports this file): one full-height centering shell around the
+ * AuthForm card. */
+
+.authpage {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}

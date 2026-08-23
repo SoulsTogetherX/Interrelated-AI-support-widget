@@ -1,0 +1,43 @@
+/* Global baseline — deliberately small. No component library, no utility
+ * framework (anti-tutorial rule: plain CSS per component); components ship
+ * their own styles.css with classes prefixed by component name, the same
+ * convention as OnlineWhiteboard. This file owns only the resets and the
+ * palette variables everything else reads. */
+
+:root {
+  /* Same accent family as the widget's default (--ir-accent), so the
+   * dashboard and the embedded bubble read as one product. */
+  --accent: #4f46e5;
+  --accent-soft: #eef2ff;
+  --ink: #1a1d27;
+  --ink-muted: #6b7280;
+  --paper: #ffffff;
+  --paper-soft: #f7f8fa;
+  --line: #e5e7eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  color: var(--ink);
+  background: var(--paper-soft);
+  line-height: 1.5;
+}
+
+a {
+  color: var(--accent);
+}

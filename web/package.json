@@ -1,0 +1,30 @@
+{
+  "name": "interrelated-web",
+  "private": true,
+  "description": "The control-plane dashboard: Next.js App Router on Vercel. Short request/response surfaces only - auth, org onboarding, provider setup, conversation/document lists. Long-lived streams and sockets live in realtime/ by design (Vercel functions cannot hold them open, and the split confines the newer framework to a CRUD surface where a bug is a bad page). On Next 16, not the plan's 15: Next 15's dependency chain carries high-severity npm advisories (postcss, sharp) whose fix is only in 16, and the App Router architecture the plan actually names is unchanged.",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "seed-playground": "tsx --tsconfig tsconfig.json scripts/seedPlayground.ts"
+  },
+  "dependencies": {
+    "kysely": "^0.28.17",
+    "next": "^16.3.0",
+    "pg": "^8.23.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/pg": "^8.21.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "4.23.12",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
