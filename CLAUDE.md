@@ -455,8 +455,13 @@ delay, and the delay was reverted. Diagnosed from the run's PUBLIC
 annotations (log text requires sign-in and this box has no `gh`), after a
 fresh CI-identical pgvector container ruled the long-lived dev database
 out. Ladder: typecheck + 456 tests green against that fresh container.
-The e2e and eval jobs have still never run on GitHub's runners — verify
-failed before them — so the push carrying this fix is their first chance.
+The e2e and eval jobs had still never run on GitHub's runners — verify
+failed before them — so the push carrying this fix was their first
+chance, and it was taken: the re-run on `94793cf` completed GREEN across
+all three jobs. The e2e gate's first execution on GitHub's own hardware
+built the prod image, booted the stack, seeded the probe fixture, and
+held against the smoke, injection, and security probes — closing the one
+verification M6.4 recorded as impossible from a local machine.
 
 M8.7 is done — **ingest throughput, measured** (§3.31, §3.3.1, §3.10.5,
 eval/RESULTS.md, §9.9). The last metric in the plan's latency list with no
