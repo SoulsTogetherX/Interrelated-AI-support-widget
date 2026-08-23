@@ -504,8 +504,24 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     await visitor.closed()
     await agent.closed()
 
-    // And the room is empty afterwards, not holding two dead entries.
-    expect(handoff.endRoom(conversationId)).toBe(0)
+    // And the room drains afterwards, not holding two dead entries. DRAINS,
+    // not "is empty the instant the clients saw their close": entries are
+    // reaped in the SERVER's per-socket close handler, and nothing orders
+    // that event against the CLIENT-side closes awaited above — the two
+    // ends of a close handshake finish independently. Asserting the very
+    // next tick was a race this suite could never lose on a fast dev box,
+    // and lost on its FIRST run on a shared CI runner (M8.8: the push that
+    // finally ran this suite on GitHub's machines). So: poll rather than
+    // sleep-and-hope, bounded loudly — the suite's own idiom. Re-calling
+    // endRoom while sockets still drain is side-effect-free: send() guards
+    // readyState, so a closing socket is skipped, not errored into.
+    let remaining = -1
+    for (let i = 0; i < 200; i++) {
+      remaining = handoff.endRoom(conversationId)
+      if (remaining === 0) break
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(remaining).toBe(0)
   })
 
   it("leaves other conversations alone", async () => {

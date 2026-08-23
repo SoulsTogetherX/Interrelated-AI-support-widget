@@ -435,6 +435,29 @@ claim-granular protocol was not already going to withhold until verification
 (§2.4.4c). Cost per 1k answers remains unclaimed, because the new default
 model is deliberately unpriced.
 
+M8.8 is done — **the first CI run on GitHub's runners, and the race it
+found** (§3.8, §5.1). Pushing 56 commits of M7/M8 work (the remote had not
+moved since before M7.1) gave the verify job its first run on shared
+hardware, and it went red on one assertion no local machine had ever lost:
+the M4.6 endRoom case asserted the room EMPTY immediately after the
+clients saw their own closes — but entries are reaped in the SERVER's
+per-socket close handler, and nothing orders that against the CLIENT side
+of the handshake; the two ends finish independently. On a dev box the
+server always won that race; on a loaded runner it lost, and the second
+`endRoom` still counted 2. The product is untouched — reap-on-close plus
+the heartbeat is the designed cleanup, and `send` guards readyState so a
+polled `endRoom` cannot error into a closing socket — the TEST was
+asserting an instant nobody promised, and now polls the drain, bounded
+loudly, the suite's own idiom. Proven able to fail before committing: a
+temporary 30 ms delay in the close handler reproduced CI's `expected 2 to
+be +0` byte-identically, the polled version stayed green under the same
+delay, and the delay was reverted. Diagnosed from the run's PUBLIC
+annotations (log text requires sign-in and this box has no `gh`), after a
+fresh CI-identical pgvector container ruled the long-lived dev database
+out. Ladder: typecheck + 456 tests green against that fresh container.
+The e2e and eval jobs have still never run on GitHub's runners — verify
+failed before them — so the push carrying this fix is their first chance.
+
 M8.7 is done — **ingest throughput, measured** (§3.31, §3.3.1, §3.10.5,
 eval/RESULTS.md, §9.9). The last metric in the plan's latency list with no
 producer at all — retrieval latency and TTFT have had committed producers
@@ -2562,8 +2585,11 @@ force-exits.
   helper, which asserts backlog and flushed ids are disjoint. M4.6 adds
   closing: `endRoom` sends `closed` to every member and THEN hangs up
   (both, in that order — the frame is what spares a client a pointless
-  reconnect), leaves the room empty rather than holding dead entries, and
-  touches no other conversation.
+  reconnect), DRAINS the room rather than holding dead entries — polled
+  and bounded since M8.8, because entries are reaped in the server's
+  close handler, which nothing orders against the client-side closes the
+  test awaits; asserting the very next instant was a race the suite lost
+  on its first shared-runner run — and touches no other conversation.
 - `credentials/__tests__/vault.test.ts` — keyless. Round-trip, AAD swap,
   tamper/garbage rejection, and the NO-dev-fallback stance (missing or
   short CREDENTIAL_MASTER_KEY throws — pinned because email crypto makes
