@@ -38,6 +38,18 @@
       ],
       "@shared/*": [
         "../shared/*"
+      ],
+      // shared/ has no package.json by design (CLAUDE.md 2.4), so its
+      // TYPE-ONLY `import type { ColumnType } from "kysely"` resolves by
+      // walking up from shared/ — which finds the ROOT node_modules
+      // locally and in CI, and finds NOTHING on Vercel, where only web/ is
+      // installed. web/ declares kysely itself, so this mapping points the
+      // bare specifier at that copy for every file the program includes,
+      // wherever it sits. Without it `next build` fails on Vercel with
+      // "Cannot find module 'kysely'" from ../shared/db/schema.ts while
+      // every local and CI typecheck passes.
+      "kysely": [
+        "./node_modules/kysely"
       ]
     },
     "allowJs": true
