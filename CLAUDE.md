@@ -3121,7 +3121,24 @@ resumes **the batch that failed**, so each attempt is cheaper than the last
 rather than re-spending the page's earlier items; and the WAITING BUDGET
 keeps it honest — a page that cannot embed inside five minutes of waiting
 fails loudly with the provider's own error rather than holding the queue's
-single worker forever. The policy deliberately differs from the answer
+single worker forever.
+
+**What a retry cannot fix, measured the expensive way (M9).** Gemini's
+free tier meters embeddings at
+`EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier` = **1,000
+per DAY**, and **a REFUSED batch still bills its items** — the arithmetic
+that proves it is a day in which 27 embeddings were successfully stored
+and the 1,000-item bucket was nevertheless exhausted, the balance spent
+entirely by 429'd attempts. So on this provider a retry storm is
+self-defeating: every attempt to absorb the limit brings the daily wall
+closer. Two consequences the product lives by. Retrying is still right for
+a TRANSIENT refusal (that is what the policy above is for) but the bound
+that matters is the daily one, which no backoff can outwait. And bulk
+embedding must **pace itself UNDER the limit rather than discover it** —
+which is what `scripts/embedExistingChunks.ts` does at ~80 items/minute
+against the tier's ~100, spending exactly one item per chunk. The same
+fact explains a limit §7.9 records from the other side: the batch endpoint
+meters per ITEM, so batching buys round-trips, never quota. The policy deliberately differs from the answer
 path's (3 attempts / 8 seconds): §3.15.5's is set by how long a visitor
 watches a chat bubble, and nobody is watching an ingest — the same
 division of labor §3.14 made for the eval harness against this identical
