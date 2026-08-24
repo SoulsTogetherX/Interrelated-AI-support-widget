@@ -112,3 +112,8 @@ void main().catch((error: unknown) => {
   console.error(error)
   process.exit(1)
 })
+
+// Every import here is dynamic (the env-before-pool rule), so without this
+// the file is a global SCRIPT rather than a module and its `main` collides
+// with every sibling that does the same.
+export {}

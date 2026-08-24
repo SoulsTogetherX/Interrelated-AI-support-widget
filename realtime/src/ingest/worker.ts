@@ -6,6 +6,7 @@ import type { Kysely } from "kysely"
 
 import { MAX_RECORDED_SKIPPED_PAGES } from "@/db/schema"
 import type { Database, SkippedPage } from "@/db/schema"
+import { withRetry } from "@/answer/retry"
 import { crawl, CrawlError } from "@/ingest/crawler"
 import type { CrawlEvent, CrawlSource } from "@/ingest/crawler"
 import { chunkBlocks } from "@shared/chunking/chunker"
@@ -94,6 +95,24 @@ const DEFAULT_MAX_ATTEMPTS = 3
 const DEFAULT_EMBED_BATCH = 32
 /** Chunk insert batching keeps parameter counts far from pg's 65535 cap. */
 const INSERT_BATCH = 100
+/**
+ * §3.10.5a — the PATIENT retry policy for embed calls, and why it is not
+ * the answer path's.
+ *
+ * §3.15.5 sets the interactive policy from a product judgment: three
+ * attempts inside 8 seconds, because that is how long someone watches a
+ * chat bubble. Ingest is BACKGROUND work with nobody watching, and its
+ * failure mode is the opposite — abandoning a run that a 30-second wait
+ * would have finished. So this mirrors the eval harness's policy (§3.14),
+ * which was written against the same measured problem from the other side
+ * of the same provider: 8 attempts inside a 5-minute waiting budget, with
+ * a ceiling high enough to sit out a per-minute quota window.
+ *
+ * The budget is what keeps it honest: a page that cannot embed inside five
+ * minutes of waiting fails loudly, with the provider's own error, rather
+ * than holding the queue's single worker forever.
+ */
+const INGEST_EMBED_RETRY = { maxAttempts: 8, budgetMs: 300_000, baseDelayMs: 2_000, maxDelayMs: 60_000 }
 //#endregion
 
 //#region Worker
@@ -464,7 +483,29 @@ class IngestWorker {
     for (let i = 0; i < embedTexts.length; i += this.#embedBatchSize) {
       // task "document" — the asymmetric-model half that matters here; the
       // query path passes "query" (providers/embedding/types.ts).
-      const batch = await embedder.embed(embedTexts.slice(i, i + this.#embedBatchSize), { task: "document" })
+      //
+      // Retried PATIENTLY, and the policy is the whole point (§3.10.5a).
+      // A hosted free tier meters embeddings per ITEM per minute, and one
+      // page can hold more chunks than that minute allows — so without a
+      // retry the batch that crosses the line throws, the page fails, the
+      // JOB fails, and the next attempt re-embeds that same page from its
+      // first chunk and dies at the same place. That is not a slow ingest,
+      // it is a page that can never be ingested at all; it was measured on
+      // the deployed demo (three rounds, byte-identical failure, zero
+      // progress) before this existed. Resuming from the batch that failed
+      // is what makes each attempt cheaper than the last.
+      const batch = await withRetry(
+        () => embedder.embed(embedTexts.slice(i, i + this.#embedBatchSize), { task: "document" }),
+        {
+          onRetry: ({ attempt, delayMs, error }) => {
+            const why = error instanceof Error ? error.message.slice(0, 100) : String(error)
+            console.warn(
+              `[ingest] embed retry ${attempt} in ${Math.round(delayMs / 1000)}s (${url}) — ${why}`,
+            )
+          },
+        },
+        INGEST_EMBED_RETRY,
+      )
       for (const vector of batch) vectors.push(toPgvector(padVector(vector)))
     }
 

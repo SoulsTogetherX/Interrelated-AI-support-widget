@@ -3096,6 +3096,37 @@ is making progress — the property that keeps "a second worker is a deploy,
 not a rewrite" true. A page robots.txt now closes is soft-deleted with the
 other absent pages, by the same rule: the site said not to keep it.
 
+#### §3.10.5a Surviving a metered embedding provider (M9)
+The worker's embed calls are wrapped in §3.15.5's `withRetry` under a
+PATIENT policy — 8 attempts inside a 5-minute waiting budget, 2s base,
+60s ceiling — and the reason is a defect the deployed demo made
+unmissable rather than a precaution.
+
+A hosted free tier meters embeddings **per ITEM per minute** (§7.9 records
+Gemini's batch endpoint metering per item, not per request), and one
+documentation page can hold more chunks than that minute allows. Until
+M9 the loop had no retry at all, so the batch that crossed the line threw,
+the page failed, and the whole JOB failed — and because the recrawl
+short-circuit works at PAGE granularity, the next attempt re-embedded that
+same page from its first chunk and died at the same place. Not a slow
+ingest: **a page that could never be ingested at all.** It was measured on
+the live deployment as three consecutive rounds of byte-identical failure
+with zero forward progress, while the identical call from the same machine
+with the same vault-resolved credential succeeded on demand — which is what
+proved the fault was the loop rather than the key, the quota, or the
+adapter.
+
+Two properties make the fix work where a naive one would not. The retry
+resumes **the batch that failed**, so each attempt is cheaper than the last
+rather than re-spending the page's earlier items; and the WAITING BUDGET
+keeps it honest — a page that cannot embed inside five minutes of waiting
+fails loudly with the provider's own error rather than holding the queue's
+single worker forever. The policy deliberately differs from the answer
+path's (3 attempts / 8 seconds): §3.15.5's is set by how long a visitor
+watches a chat bubble, and nobody is watching an ingest — the same
+division of labor §3.14 made for the eval harness against this identical
+provider behavior, from the other side.
+
 #### §3.10.6 `src/ingest/robots.ts`
 The Robots Exclusion Protocol (RFC 9309), parsed and applied — hand-written
 for RRF's reason (§2.4.3): the whole protocol is a few pages of RFC and the

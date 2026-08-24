@@ -15,6 +15,7 @@ import { IngestWorker } from "@/ingest/worker"
 import { newId } from "@shared/utils/ids"
 import { MockEmbeddingProvider } from "@providers/embedding/mock"
 import type { EmbeddingProvider } from "@providers/embedding/types"
+import { LLMHttpError } from "@providers/llm/http"
 //#endregion
 
 //#region Test Setup
@@ -516,6 +517,49 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
       .where("org_id", "=", org6).execute()
     expect(embeddings).toHaveLength(chunks.length)
   })
+
+  it("survives a rate-limited embedding provider mid-page, resuming from the failed batch", async () => {
+    // The M9 defect, from the deployed demo: a hosted free tier meters
+    // embeddings per ITEM per minute, and one page can hold more chunks
+    // than a minute allows. Without a retry the batch that crosses the
+    // line throws, the page fails, the JOB fails — and the next attempt
+    // re-embeds that page from its FIRST chunk and dies at the same
+    // place, forever. Measured on the live deployment as three rounds of
+    // byte-identical failure with zero progress, so this pins the fix.
+    //
+    // The provider refuses ONCE with a real 429, then behaves. The
+    // injected sleep keeps the patient policy's 2s first delay from
+    // costing the suite two seconds.
+    const org8 = await makeOrg("Rate Limited Co")
+    let refusals = 0
+    const flakyEmbedder: EmbeddingProvider = {
+      model: mockEmbedder.model,
+      dim: mockEmbedder.dim,
+      embed: (texts) => {
+        if (refusals === 0) {
+          refusals++
+          return Promise.reject(new LLMHttpError({ provider: "gemini", status: 429, detail: "quota" }))
+        }
+        return mockEmbedder.embed(texts)
+      },
+    }
+
+    const { sourceId, jobId } = await enqueue(org8, { location: `${base}/docs/a.html`, crawl_depth: 0 })
+    const worker = makeWorker({ embedder: flakyEmbedder, embedBatchSize: 1 })
+    expect(await worker.tick()).toBe(true)
+
+    // The job COMPLETED despite the refusal, and the page's chunks are all
+    // stored — the retry resumed the failed batch rather than restarting
+    // the page or failing the crawl.
+    expect((await job(jobId)).state).toBe("done")
+    expect((await source(sourceId)).status).toBe("ready")
+    expect(refusals).toBe(1)
+    const docs = await liveDocs(sourceId)
+    expect(docs).toHaveLength(1)
+    const embeddings = await db.selectFrom("chunk_embeddings").select("chunk_id")
+      .where("org_id", "=", org8).execute()
+    expect(embeddings.length).toBeGreaterThan(0)
+  }, 30_000)
 
   it("fails an upload source whose extraction is missing, rather than emptying it", async () => {
     // The route writes source and extraction in ONE transaction, so a row
