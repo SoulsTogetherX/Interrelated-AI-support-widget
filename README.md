@@ -20,6 +20,12 @@ uncited channel in the protocol at all.
 Everything runs for $0 — free tiers only, no paid API required — and CI runs
 the whole pipeline with no API keys.
 
+**[Try the live demo →](https://interrelated-realtime-rtue.onrender.com/demo)**
+— the widget over a real Fastify documentation corpus, answering from a real
+model with verified citations. It runs on free tiers, so a first request
+after a quiet spell can pay a container wake (see the cold numbers below),
+and the demo org is capped at 18 answers a day.
+
 ---
 
 ## Measured
@@ -32,6 +38,7 @@ data, and most of them are CI gates.
 | Retrieval, hybrid dense + lexical with RRF | **recall@5 75.0%, recall@10 83.8%, MRR@10 52.6, nDCG@10 59.7** on an 80-question hand-written golden set over 31 Fastify docs pages | `npm run eval` — [eval/RESULTS.md](eval/RESULTS.md); CI fails below recall@5 = 70 |
 | Dense-only, for the delta hybrid buys | recall@5 72.5%, recall@10 81.3% | same run |
 | Retrieval latency (hybrid, warm, local model) | p50 70 ms · p95 107 ms | same run |
+| Answer latency on the DEPLOYED stack (warm) | **TTFT p50 1.65 s · p95 1.88 s** end to end from a cold HTTP client — session mint (p50 88 ms) plus retrieval, generation, verification and streaming — on `gemini-3.5-flash-lite` over the free tier, 0 schema violations and every claim verified | `scripts/measure-ttft.mjs` against the live service |
 | Ingest throughput, and where the time goes | The pipeline itself (fetch → parse → chunk → store, HNSW maintenance included) sustains **144 chunks/s**; with a real embedder in the loop, **embedding is ~98% of the wall** (215 s vs 4.6 s for 31 pages / 661 chunks, local model on CPU); an unchanged re-crawl short-circuits to **1.0 s** with zero texts embedded | `npm run ingest-bench` — loopback corpus through the real worker; production adds network, politeness pacing, and the embedding provider's rate limits |
 | What multi-tenant iterative scans are worth | **52.5 points of recall.** With `hnsw.iterative_scan` off, 15 of 16 tenants sharing one index get fewer than the *k* rows they asked for (47.5% recall) while every query still returns 200; with it on, every tenant gets exactly *k* at every measured size, at no measurable latency cost | `npm run tenant-scan` — [eval/RESULTS.md](eval/RESULTS.md); the plan verified per sweep point, so a row that left the index is reported unmeasured rather than as a finding |
 | Refusal threshold | **0.34** cosine distance for bge-small — 0% false refusals on the golden set, 100% correct refusals on off-topic questions, derived from an 80 + 40 question sweep, not picked by feel | [eval/RESULTS.md §threshold](eval/RESULTS.md) |
@@ -266,6 +273,29 @@ every CI run.
   in-memory; a second realtime instance would need them — and the socket
   rooms — in Redis. "A second ingest worker is a deploy, not a rewrite" is
   true; a second *socket* instance is not yet.
+- **The keepalive reduces cold starts; it does not eliminate them.** Render's
+  free tier spins a service down after ~15 minutes idle, and the mitigation is
+  a GitHub Actions cron pinging the DB-free health route every 10 minutes.
+  Measured, that cron does not run every 10 minutes: six consecutive runs
+  landed 24, 45, 54, 35 and 33 minutes apart, because scheduled workflows on
+  the free tier are best-effort and get delayed under load. Several of those
+  gaps exceed the spin-down window, and a health request during one took
+  **12.3 s** against ~0.25 s warm. So the first request after a quiet spell
+  can still pay a container wake. Removing this needs a paid instance or a
+  third-party uptime pinger — a dependency this project deliberately does not
+  add. Note also that only the widget's bubble-open handshake warms the
+  DATABASE: the health route never touches Postgres by design, so Neon's wake
+  is paid by the first real visitor.
+- **Free-tier model latency is bimodal, and the model choice is the fix.**
+  The deployed demo generates with `gemini-3.5-flash-lite` rather than
+  `gemini-3.6-flash`, and that is a measurement rather than a preference: on
+  the same corpus, same prompt, minutes apart, 3.6-flash returned TTFT of
+  34.7, 40.9, 36.3 and 2.4 seconds and then hit the answer deadline at 60 s,
+  while the lite model returned 1.9, 1.4, 1.7 and 1.8 s with every claim
+  verified. Free-tier capacity is contended and varies by model and by hour;
+  the deadline (below) is what keeps the bad tail bounded, and picking a
+  lighter model is what keeps it rare. Each model carries its own daily
+  quota, so switching is also how a spent bucket is worked around.
 - **Free-tier arithmetic.** Neon's 0.5 GB holds roughly 78k chunks at
   `halfvec(1024)`; Render's one always-on service is kept warm by a cron that
   deliberately never touches the database. Free provider tiers move without
@@ -333,9 +363,13 @@ free Groq or Gemini key in `.env` lights up the real providers, the CLI's
 `--llm` flag, and a key-gated live test suite — the same variable for all
 three, nothing to keep in sync.
 
-The production stack CI probes is `docker-compose.prod.yaml`; the deployed
-demo is `render.yaml` (Render, one free web service) plus the Vercel runbook
-in CLAUDE.md §9.1, and both need only free-tier keys.
+The production stack CI probes is `docker-compose.prod.yaml`. The deployed
+system is live: the data plane on Render from `render.yaml`
+([demo](https://interrelated-realtime-rtue.onrender.com/demo)), the dashboard
+on Vercel per the runbook in CLAUDE.md §9.1, and Postgres on Neon — three
+free tiers, one Gemini key, no paid service anywhere.
+`node scripts/smoke-test.mjs <url>` probes any of it from outside with no
+install.
 
 ## Repository
 
