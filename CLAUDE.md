@@ -7,6 +7,11 @@ It is updated as part of every step's definition of done — if a file exists
 and is not described here, that is a documentation bug.
 
 Companion documents:
+- `docs/` — the GUIDED documentation (M9): six teaching-oriented files —
+  purpose, architecture, logic flows, usage/operations, and a glossary —
+  written top-down in plain language for a reader who has not lived in this
+  codebase. This file is the reference those docs point INTO (they cite
+  sections by number); they are the reading path, this is the depth.
 - `README.md` — the public face: what it is, the measured numbers, how it
   works, the trust model, known limitations. Cites this file by section and
   claims no number that a committed script does not produce.
