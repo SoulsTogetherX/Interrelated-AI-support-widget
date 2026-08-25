@@ -20,6 +20,11 @@ uncited channel in the protocol at all.
 Everything runs for $0 — free tiers only, no paid API required — and CI runs
 the whole pipeline with no API keys.
 
+**New to the codebase? [docs/](docs/README.md) is the guided tour** — what
+it is, how every subsystem works, the step-by-step logic flows, how to run
+and operate it, and a glossary. This README is the summary; that folder is
+the explanation.
+
 **[Try the live demo →](https://interrelated-realtime-rtue.onrender.com/demo)**
 — the widget over a real Fastify documentation corpus, answering from a real
 model with verified citations. It runs on free tiers, so a first request
