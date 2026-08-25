@@ -15,9 +15,33 @@ Companion documents:
   (milestones, metrics, risks). This file describes what IS; the plan
   describes what WILL BE.
 
-**Current milestone: M8 — the same mandate continued — underway. Every
-milestone the plan SCHEDULED (M0–M6) is complete, and M7 — what the plan
-states but never scheduled — is complete through M7.12.** M7
+**Current milestone: M9 — ship, bank, stop — underway, and the product is
+LIVE.** Every milestone the plan SCHEDULED (M0–M6) is complete, M7 — what
+the plan states but never scheduled — is complete through M7.12, and M8
+through M8.8.
+
+M9 deployed the whole system on free tiers: the data plane on Render
+(`render.yaml`, migrations 001–010 applied at boot, 12/12 smoke checks
+green from outside), the dashboard on Vercel, Postgres on Neon, and one
+Gemini key. **A visitor question on the deployed demo runs the entire
+thesis** — Gemini embedding → hybrid retrieval → groundedness gate →
+Gemini generation → span verification → streamed claims deep-linking into
+fastify.dev — with every verdict recorded: 15 of 15 citations verified, 0
+schema violations, warm TTFT **p50 1.65 s / p95 1.88 s** (§6.6's
+`scripts/measure-ttft.mjs`, the committed producer for the last metric in
+the plan's latency list). Four things the deployment TAUGHT, each now in
+the README because each contradicts something previously assumed: the
+ingest worker had no embed retry, so one 429 mid-page made a large page
+permanently un-ingestable (§3.10.5a, fixed); a REFUSED embedding batch
+still bills the daily quota, so retry storms are self-defeating and bulk
+embedding must pace UNDER the limit rather than discover it; the keepalive
+cron runs 24–54 minutes apart rather than every 10, so cold starts still
+happen (12.3 s measured); and free-tier model latency is bimodal enough
+that the model choice IS the fix — `gemini-3.6-flash` returned 34.7/40.9/
+36.3/2.4 s and then hit the 60 s deadline where `gemini-3.5-flash-lite`
+returned 1.9/1.4/1.7/1.8 s on identical inputs minutes apart.
+
+M7
 began as the plan's own trust-model section (layers 4–6, which no milestone
 ever named), taken in order of size, and finished that at M7.3; since then
 it has worked through the rest of what the plan's prose commits to and its
@@ -4729,6 +4753,31 @@ worked.
 `PLAYGROUND.md` is the guided tour and states plainly what is real (retrieval,
 verification, the trust model, every metric) versus what is a mock until a key
 is connected (the model).
+
+### §6.6 `scripts/measure-ttft.mjs` — answer latency on a DEPLOYED stack (M9)
+The committed producer for the last metric in the plan's latency list, and
+the one that cannot be produced anywhere but a real deployment: Render's
+container wake and Neon's autosuspend ARE the cold number. Zero
+dependencies, Node 22 stdlib only, base URL as a positional argument — the
+sibling probes' standard, so it runs against any deployment with no install.
+
+Three decisions make the number honest rather than flattering:
+
+- **The mint is reported APART from the answer.** `POST /v1/widget/session`
+  is where a cold container's wake lands, so folding it into TTFT would
+  publish a wake as though it were model latency. It is also the handshake
+  that warms Neon while a visitor types (§2.5's free-tier design), which is
+  precisely why the chat leg after it is not paying for the database waking.
+- **TTFT counts to the first CONTENT event** (claim or refusal), never the
+  first byte. The route flushes headers BEFORE retrieval on purpose (§3.18),
+  so a first-byte measurement would time the flush and report a number no
+  visitor experiences.
+- **Runs are spaced.** A tight loop would measure the per-visitor token
+  bucket (§3.17.2) rather than the answer path.
+
+What it measured on the live stack, warm: **TTFT p50 1.65 s, p95 1.88 s**,
+mint p50 88 ms. Each run spends one answer against the org's daily cap,
+which is why n is small and stated rather than averaged away.
 
 ### §6.3 `scripts/security-probe.mjs` (M6.1)
 The trust model attacked from the outside, the way a script on the internet
