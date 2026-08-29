@@ -17,7 +17,7 @@
 import { sql } from "kysely"
 
 import { planFor } from "@shared/billing/plans"
-import type { Plan, PlanId } from "@shared/billing/plans"
+import type { Plan } from "@shared/billing/plans"
 
 import { db } from "@/lib/db"
 //#endregion
@@ -55,13 +55,15 @@ export interface UsageDay {
 export async function getTodayUsage(orgId: string): Promise<TodayUsage | null> {
   const row = await db
     .selectFrom("organizations")
-    .leftJoin("usage_daily", (join) => join
-      .onRef("usage_daily.org_id", "=", "organizations.id")
-      // The day boundary is the DATABASE's idea of today in UTC, matching
-      // what realtime writes (realtime/src/usage/daily.ts). Computing it in
-      // this process instead would put a Vercel instance's clock in charge
-      // of a boundary Postgres already owns.
-      .on("usage_daily.day", "=", sql<string>`(NOW() AT TIME ZONE 'UTC')::date`))
+    .leftJoin("usage_daily", (join) =>
+      join
+        .onRef("usage_daily.org_id", "=", "organizations.id")
+        // The day boundary is the DATABASE's idea of today in UTC, matching
+        // what realtime writes (realtime/src/usage/daily.ts). Computing it in
+        // this process instead would put a Vercel instance's clock in charge
+        // of a boundary Postgres already owns.
+        .on("usage_daily.day", "=", sql<string>`(NOW() AT TIME ZONE 'UTC')::date`),
+    )
     .select([
       "organizations.plan as plan",
       "usage_daily.answers as answers",
@@ -74,7 +76,7 @@ export async function getTodayUsage(orgId: string): Promise<TodayUsage | null> {
     .executeTakeFirst()
   if (!row) return null
 
-  const plan = planFor(row.plan as PlanId)
+  const plan = planFor(row.plan)
   const answers = Number(row.answers ?? 0)
   return {
     plan,
@@ -97,7 +99,11 @@ export async function listRecentUsage(orgId: string, days = 14): Promise<UsageDa
     .selectFrom("usage_daily")
     .select(["day", "answers", "refusals", "escalations"])
     .where("org_id", "=", orgId)
-    .where("day", ">=", sql<string>`((NOW() AT TIME ZONE 'UTC')::date - make_interval(days => ${days}))`)
+    .where(
+      "day",
+      ">=",
+      sql<string>`((NOW() AT TIME ZONE 'UTC')::date - make_interval(days => ${days}))`,
+    )
     .orderBy("day", "desc")
     .execute()
 

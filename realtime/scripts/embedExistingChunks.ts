@@ -74,7 +74,9 @@ async function main(): Promise<void> {
       .orderBy("chunks.id")
       .execute()
 
-    console.log(`${pending.length} chunks to embed, ${BATCH} per call, ~${PAUSE_MS / 1000}s between calls`)
+    console.log(
+      `${pending.length} chunks to embed, ${BATCH} per call, ~${PAUSE_MS / 1000}s between calls`,
+    )
     if (pending.length === 0) {
       console.log("nothing to do — the corpus is already embedded under this model")
       return
@@ -106,7 +108,7 @@ async function main(): Promise<void> {
             org_id: orgId,
             model: embedder.model,
             dim: embedder.dim,
-            embedding: toPgvector(padVector(vectors[j] as number[])),
+            embedding: toPgvector(padVector(vectors[j])),
           })),
         )
         .onConflict((oc) => oc.columns(["chunk_id", "model"]).doNothing())

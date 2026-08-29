@@ -63,7 +63,10 @@ function buildAnswerMessages(options: {
   const context = options.retrieved.map(formatChunk).join("\n\n")
   return [
     { role: "system", content: system },
-    { role: "user", content: `<context>\n${context}\n</context>\n\nVisitor question:\n${options.question}` },
+    {
+      role: "user",
+      content: `<context>\n${context}\n</context>\n\nVisitor question:\n${options.question}`,
+    },
   ]
 }
 

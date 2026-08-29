@@ -95,9 +95,10 @@ export async function submitProviderAction(
   // An embedding round-trip reports the dimension it measured; a generation
   // one has none. Both are what the provider ACTUALLY answered, not what
   // was typed into the form.
-  const what = result.value.dim !== null
-    ? `${result.value.model} (${result.value.dim}-d) answered in ${result.value.latencyMs}ms`
-    : `${result.value.model} answered in ${result.value.latencyMs}ms`
+  const what =
+    result.value.dim !== null
+      ? `${result.value.model} (${result.value.dim}-d) answered in ${result.value.latencyMs}ms`
+      : `${result.value.model} answered in ${result.value.latencyMs}ms`
 
   if (save) {
     // The status card is RSC-rendered from the database; a save changes it.

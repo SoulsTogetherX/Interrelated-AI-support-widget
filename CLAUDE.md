@@ -7,6 +7,7 @@ It is updated as part of every step's definition of done — if a file exists
 and is not described here, that is a documentation bug.
 
 Companion documents:
+
 - `docs/` — the GUIDED documentation (M9): six teaching-oriented files —
   purpose, architecture, logic flows, usage/operations, and a glossary —
   written top-down in plain language for a reader who has not lived in this
@@ -1074,11 +1075,13 @@ since built it — §8.1's bookmark and §8.1c's rejoin, DATAFLOW §8.5.
 ## §1 Project rules
 
 ### §1.1 Git
+
 Exactly two branches: `main` and `dev`. All commits land on `dev`, only when
 Xavier asks for them; `main` advances only by a merge he requests. No
 force-push, no history rewriting.
 
 ### §1.2 Build discipline
+
 Additive increments on a green tree. Nothing proceeds on a red build; every
 new behavior lands with a test that would fail without it. A step that can't
 finish cleanly is reverted, not parked.
@@ -1095,6 +1098,7 @@ injection probes against that same stack, exactly as CI's e2e job does
 override, then `injection-probe.mjs`, then `security-probe.mjs` last.
 
 ### §1.3 House style
+
 2-space indent, no semicolons, double quotes, `//#region` folding markers,
 PascalCase component directories (later, in web/), camelCase modules,
 comments that explain WHY (including rejected alternatives), and hand-written
@@ -1105,28 +1109,32 @@ DB types kept in lockstep with raw-SQL migrations (§3.1).
 ## §2 Repo root
 
 ### §2.1 `package.json` + `vitest.config.ts` (root)
+
 The root is a tooling package only: it owns the test runner and typecheck
 scripts for the package-less source folders — `shared/` (§2.4),
 `providers/` (§2.4.5), and `eval/` (§7) — and nothing else. Application
-packages own their dependencies individually — this repo is a *flat* layout
+packages own their dependencies individually — this repo is a _flat_ layout
 joined by TypeScript path aliases, **not** an npm workspace. Rejected
 alternative: Turborepo/pnpm workspaces — a new failure surface with zero
 benefit at this scale, and the flat shape matches the proven OnlineWhiteboard
 structure.
 
 ### §2.2 `.gitattributes`
+
 Forces LF endings everywhere. Load-bearing, not boilerplate: a CRLF ending
 inside `.env` once corrupted a Postgres password inside a Linux container on
 a sibling project (the password became `value\r`). Docker bind mounts do not
 normalize line endings; the repo does.
 
 ### §2.3 `.gitignore` / `.dockerignore`
+
 Standard, with two deliberate entries: `PHASE_NOTES.md` (private working
 notes never reach the public repo) and — in `.dockerignore` — `.env`,
 because the realtime image builds with the repo root as context, and secrets
 in a build context can end up in image layers, which leak.
 
 ### §2.4 `shared/`
+
 Cross-package code with **no package.json and no build step**. Consumers
 import it through the `@shared/*` path alias; whatever compiles the consumer
 (tsx in dev, esbuild for the bundle, Next/Vite later) compiles shared/ along
@@ -1136,6 +1144,7 @@ also why shared/ must stay **dependency-free**: it can't declare
 dependencies, so it must not need any.
 
 #### §2.4.0 `shared/chunking/chunker.ts`
+
 The heading-aware chunker — the policy layer between parsers and embedding.
 Input is a parsed document: ordered blocks (`heading` / `paragraph` /
 `code`) honoring the parser contract `block.text === source.slice(charStart,
@@ -1146,7 +1155,7 @@ and the chunker is tested with hand-built blocks instead of fixture files.
 Key behaviors, each pinned by a test: headings close the running chunk (a
 chunk never straddles a section boundary — a hit mixing two sections cites
 both wrongly); the heading trail is a stack where a sibling heading evicts
-its predecessor *and* that predecessor's children; pieces pack to
+its predecessor _and_ that predecessor's children; pieces pack to
 `targetTokens` (default 400 — the eval harness ablates 400 vs 800); an
 oversized paragraph splits at sentence bounds, code at line bounds, and a
 single indivisible run hard-cuts rather than exceed `maxTokens`. Character
@@ -1156,12 +1165,14 @@ budgeting, chosen so shared/ stays dependency-free (a real tokenizer is a
 model-specific dependency for a number where ±10% changes nothing).
 
 #### §2.4.2 `shared/utils/vectors.ts`
+
 `PADDED_DIM` (1024 — the constant the schema's `halfvec(1024)` mirrors),
 `padVector` (zero-padding, with the norm/dot-preservation argument in the
-comment and *executed* as a property test), and `toPgvector`/`fromPgvector`
+comment and _executed_ as a property test), and `toPgvector`/`fromPgvector`
 — the ONE place pgvector's text format is written or parsed.
 
 #### §2.4.1 `shared/utils/ids.ts`
+
 Entity id generation: `<prefix>_<32 chars Crockford base32>`, 160 bits of
 entropy. Prefixed ids (`org_…`, `usr_…`) make logs and foreign keys
 self-describing — in a multi-tenant system, a mixed-up id is a cross-tenant
@@ -1188,6 +1199,7 @@ sessions.id's argument), and `secretKeySuffix` (the last four characters,
 the only plaintext fragment the dashboard keeps).
 
 #### §2.4.10 `shared/utils/visitorIds.ts`
+
 The rule that keeps two kinds of visitor apart in one column (M7.3).
 ANONYMOUS visitors are `vis_<32 hex>`, minted by the browser route with the
 publishable key — generated by the server, stored by the widget, handed back
@@ -1212,6 +1224,7 @@ near misses (31 hex characters, uppercase hex, `vis-`) that must read as
 identified so a browser presenting them is refused.
 
 #### §2.4.3 `shared/retrieval/rrf.ts`
+
 Reciprocal Rank Fusion — how the two retrieval arms become one ranking.
 Hand-written (~20 lines) because retrieval is this project's technical
 content; the anti-tutorial rules exist precisely so this isn't a framework
@@ -1238,6 +1251,7 @@ shared/ because both sides of the wire touch it: realtime verifies and
 strips, the widget renders the surviving claims and their citations.
 
 ##### §2.4.4a `shared/grounding/claims.ts`
+
 The answer contract: `Claim` (`text` + `chunkId` + `quote`), flat and
 one-citation-per-claim on purpose — a claim needing two sources is two
 claims, because multi-citation claims make the strip decision ambiguous
@@ -1246,6 +1260,7 @@ stripped" a single deterministic rule. There is deliberately NO uncited
 claim shape: prose the model cannot ground is prose the visitor never sees.
 `MAX_CLAIMS` (32) bounds what a looping model can make the verifier pay
 for. Three exports beyond the types:
+
 - `ANSWER_JSON_SCHEMA` — the same contract as a JSON Schema, handed to
   providers with native structured output (`LLMRequest.responseSchema`).
   The validator stays the source of truth (native enforcement ranges from
@@ -1264,6 +1279,7 @@ for. Three exports beyond the types:
   structural check — fallbacks rescue formatting noise, never shape errors.
 
 ##### §2.4.4b `shared/grounding/verify.ts`
+
 The deterministic citation check. `findQuote` locates a quote in a chunk
 tolerating ONLY whitespace differences (same stance as eval/resolve.ts's
 anchor matching, same reason: stored text hard-wraps at the source's whim)
@@ -1286,6 +1302,7 @@ quote), regex metacharacters as literals, and first-occurrence
 determinism.
 
 ##### §2.4.4c `shared/grounding/events.ts`
+
 The answer-stream wire protocol (`AnswerEvent`): meta → claim×N | refusal
 → done. Claim-granular BY DESIGN: a claim is the smallest unit that can be
 verified, so it is the smallest unit that may reach a visitor — raw model
@@ -1297,6 +1314,7 @@ protocol is claim-granular rather than delta-granular. The M2.5 SSE route
 serializes these verbatim; the widget consumes them.
 
 #### §2.4.7 `shared/handoff/protocol.ts`
+
 The handoff socket's wire protocol (M4.2) — the human half of the
 conversation, where §2.4.4c's AnswerEvent is the bot's. In shared/ for the
 same reason: three packages speak it (realtime produces and consumes, the
@@ -1332,13 +1350,13 @@ silence legible, and each is shaped by what it is NOT:
   Bounded by `HANDOFF_HISTORY_LIMIT` (50): an upgrade must not become an
   unbounded transcript download, and the dashboard already has the full
   record over HTTP (§9.10).
-M4.6 added the frame that ends it. **`closed`** is terminal — the server
-sends it and hangs up — and it exists even though hanging up ALONE would
-eventually produce the same conclusion (the reconnect's ticket mint 404s).
-The difference is ambiguity: a closed socket looks exactly like a dropped
-one, so without the frame a client must spend a reconnect and a mint to
-distinguish "your agent finished" from "your wifi blinked", and shows the
-wrong thing meanwhile. One frame removes the ambiguity before it exists.
+  M4.6 added the frame that ends it. **`closed`** is terminal — the server
+  sends it and hangs up — and it exists even though hanging up ALONE would
+  eventually produce the same conclusion (the reconnect's ticket mint 404s).
+  The difference is ambiguity: a closed socket looks exactly like a dropped
+  one, so without the frame a client must spend a reconnect and a mint to
+  distinguish "your agent finished" from "your wifi blinked", and shows the
+  wrong thing meanwhile. One frame removes the ambiguity before it exists.
 
 - **`typing`** is never persisted, never replayed, and never echoed to its
   sender — the transcript is the record of what was SAID, not of what
@@ -1353,6 +1371,7 @@ wrong thing meanwhile. One frame removes the ambiguity before it exists.
   heartbeat solves for presence, solved here without a timer per socket.
 
 #### §2.4.9 `shared/billing/plans.ts`
+
 The plan catalog (M5.3) — what each tier is called, costs, and allows. One
 table read by three surfaces that must agree: realtime enforces the answer
 ceiling before every model call (§3.18), the dashboard shows a tenant where
@@ -1380,6 +1399,7 @@ because a cap on an add-only resource would trap a free tenant's single
 slot forever.
 
 #### §2.4.8 `shared/pricing/models.ts`
+
 The per-provider price list — the one thing M5's cost metric was blocked
 on. Token COUNTS are a measurement the pipeline stores; token PRICES are
 published third-party facts with a date on them, which is why they live in
@@ -1414,6 +1434,7 @@ paying rather than the what-would-this-cost-at-scale figure it is
 everywhere else.
 
 #### §2.4.6 `shared/db/schema.ts`
+
 The hand-written Kysely types for every table — MOVED here from
 realtime/src/db/ in M3.2, when the dashboard started querying the same
 database and the table shapes became a cross-package contract like the
@@ -1435,15 +1456,17 @@ once where both packages can read it (the worker stops recording there; the
 dashboard says "and N more").
 
 ### §2.4.5 `providers/`
+
 The model-provider abstraction — the BYO-provider feature's foundation.
 Same no-package-json pattern as shared/ (consumers compile it through the
 `@providers/*` alias; the root runner owns its tests), with one extra rule:
 **implementations that need real dependencies load them with a dynamic
 import**, and the dependency is declared by whichever package actually runs
-that code. That is what lets every consumer import the *files* freely while
+that code. That is what lets every consumer import the _files_ freely while
 only the eval/CI path pays for onnxruntime.
 
 #### §2.4.5a `embedding/types.ts`
+
 `EmbeddingProvider`: `model` (the value stored in `chunk_embeddings.model`
 and the predicate of that model's partial HNSW index), `dim` (native
 dimension, pre-padding), and batch-first `embed(texts, options?)` —
@@ -1463,6 +1486,7 @@ time and then persisted (§3.3.3) so every later construction can DECLARE
 it and assert against it.
 
 #### §2.4.5b `embedding/mock.ts`
+
 Deterministic fake embeddings (`mock-384`): FNV-1a hash seeds an xorshift32
 PRNG per text → unit vectors, identical forever on every machine, with no
 imports at all. Exists so plumbing tests (storage, padding, tenant
@@ -1471,6 +1495,7 @@ semantic similarity — using it in a quality eval is a bug, and the eval
 harness will refuse it by name.
 
 #### §2.4.5c `embedding/local.ts`
+
 Real local embeddings (`bge-small-en-v1.5`, 384-d) via fastembed/ONNX — the
 keyless implementation the eval harness and CI use. Dynamic-imported (see
 §2.4.5); ~30 MB model cached under the gitignored `local_cache/` on first
@@ -1481,6 +1506,7 @@ semantic property everything depends on: related texts closer than
 unrelated ones.
 
 #### §2.4.5d `llm/types.ts`
+
 `LLMProvider`, the generation-side sibling of §2.4.5a: `model` (the key of
 the provider-comparison table) and `stream(request)` yielding deltas then
 EXACTLY ONE terminal `done` event. Streaming-first because TTFT is the
@@ -1500,6 +1526,7 @@ never zero). Implementations throw on transport failure; retry/backoff
 belongs to the caller, same division of labor as embed().
 
 #### §2.4.5e `llm/mock.ts`
+
 Scripted deterministic LLM for tests and CI, with one deliberate
 difference from the embedding mock: embeddings can be DERIVED from input
 (hash → vector), but a mock completion faking the answer pipeline must be
@@ -1527,6 +1554,7 @@ before the call — the askDev CLI (§3.16) uses it to derive grounded
 claims from the prompt it receives, keeping the full loop keyless.
 
 #### §2.4.5f `llm/http.ts`
+
 Shared plumbing for the HTTP providers, zero imports (fetch/streams are
 Node 22 globals — providers/ keeps its no-package-json rule without even
 a dynamic import). `LLMHttpError` carries status + retryAfterMs so the
@@ -1542,6 +1570,7 @@ only shape these APIs emit; event/id/retry handling would be dead code);
 `ndjsonObjects` is Ollama's framing.
 
 #### §2.4.5g `llm/openaiCompatible.ts` + `llm/groq.ts`
+
 The generic OpenAI-compatible chat adapter — one implementation covering
 Groq, OpenRouter, Together, vLLM, LM Studio, and Ollama's compat
 endpoint: exactly the one-adapter-for-N-providers trade the plan calls
@@ -1558,6 +1587,7 @@ quirk has an obvious home, with an instanceof test pinning that no
 duplicate stream loop exists.
 
 #### §2.4.5h `llm/gemini.ts`
+
 Native, not compat, for one load-bearing reason:
 `generationConfig.responseJsonSchema` takes our standard JSON Schema
 VERBATIM and enforces it server-side — the strongest structured-output
@@ -1586,6 +1616,7 @@ moved to `gemini-3.6-flash` in the same pass: 2.5 Flash is 404 for keys
 created now, though the /models listing still lists it.
 
 #### §2.4.5i `llm/ollama.ts`
+
 The self-hosted path, speaking native /api/chat (NDJSON) rather than
 Ollama's compat endpoint because the native `format` field takes a FULL
 JSON Schema and constrains generation server-side — the reason a small
@@ -1599,6 +1630,7 @@ enters the system. A down-server test pins that connection failure
 throws rather than hangs.
 
 #### §2.4.5j `embedding/http.ts`
+
 Shared plumbing for the remote embedding adapters (M3.6b), and only one
 verb: `postJson` — embedding APIs answer in one shot, so there is no
 streaming twin of §2.4.5f's postStream. It is implemented ON postStream
@@ -1622,6 +1654,7 @@ starts answering 1536 where it answered 768 stops the ingest loudly
 instead of quietly filling one org's index with a second vector space.
 
 #### §2.4.5k `embedding/gemini.ts`
+
 The hosted embedding default — the only provider in the plan's table
 offering real embeddings on a free tier without a card. Two decisions
 carry the file. **outputDimensionality, always**: `gemini-embedding-001`
@@ -1640,6 +1673,7 @@ by a test), and the model name is repeated on every sub-request because
 batchEmbedContents requires it there as a full resource name.
 
 #### §2.4.5l `embedding/openaiCompatible.ts`
+
 The generic `POST /embeddings` adapter — the same one-implementation-
 covers-N-providers trade as §2.4.5g, reaching Together, OpenRouter, vLLM,
 LM Studio, text-embedding-inference, and Ollama's compat endpoint. Results
@@ -1655,6 +1689,7 @@ embeddings API has no field for it; models wanting an asymmetric prefix
 expect it in the text, which is the tenant's choice of model to make).
 
 #### §2.4.5m `embedding/ollama.ts`
+
 The self-hosted, zero-cost path, speaking native `/api/embed` — chosen
 over the older `/api/embeddings` because it is the BATCH endpoint, and
 this interface is batch-first precisely because per-request cost is what
@@ -1664,6 +1699,7 @@ realtime boundary before the adapter is ever constructed — the seam
 §2.4.5i promised, now with a second caller.
 
 #### §2.4.5n `llm/anthropic.ts`
+
 The last row of the plan's provider table (M7.8), and the only one it marks
 "paid; supported, never required". Native rather than a preset of the compat
 adapter (§2.4.5g), for Gemini's reason: **its structured-output mechanism is
@@ -1733,6 +1769,7 @@ is a tenant who already pays Anthropic, and the fifth row of a table this
 project can now fill in.
 
 ### §2.5 `render.yaml`
+
 The Render deployment as code (a "Blueprint"): one free-tier Docker web
 service building `realtime/Dockerfile` with the repo root as context,
 health-checked on the DB-free `/api/health`, deploying the `dev` branch on
@@ -1760,6 +1797,7 @@ BOTH empty until the Vercel dashboard deploys — while unset the
 half-configured state at boot.
 
 ### §2.6 `.env.example`
+
 The single documented registry of every environment variable the system
 reads. Rule: a module reading an env var not documented here is a bug in the
 module. Note the `POSTGRES_PORT` comment — on machines with a native
@@ -1791,6 +1829,7 @@ with ZERO dependencies of its own, against pdf-parse's 21 MB and its two
 so a stack that never meets a PDF never pays for it.
 
 ### §3.1 `src/db/schema.ts`
+
 Since M3.2 a thin re-export of `shared/db/schema.ts` (§2.4.6), which is
 where the hand-written Kysely types live now that web/ queries the same
 tables — every realtime-internal `@/db/schema` import reads unchanged.
@@ -1804,6 +1843,7 @@ runtime constraint violation; `created_at` insert type includes
 `undefined` because the DB default owns it.
 
 ### §3.2 `src/db/pool.ts`
+
 One process-wide `pg.Pool` wrapped in one Kysely instance. Config read from
 env at point of use (house style — `.env.example` is the registry, §2.5).
 `connectionTimeoutMillis: 3000` bounds both `/api/ready` under a dead DB and
@@ -1813,6 +1853,7 @@ queue client-side makes backpressure visible. The raw pool is exported for
 shutdown/teardown only; **all queries go through the typed `db`**.
 
 ### §3.3 `src/db/migrations/001_initial_schema.ts` — the whole schema
+
 Raw SQL DDL via Kysely's `sql` tag (the builder is for application queries;
 DDL should read as the SQL it is). Typed `Kysely<unknown>` so migrations
 stay frozen while `schema.ts` evolves.
@@ -1843,31 +1884,32 @@ resolve).
 it, so a Postgres without pgvector fails at deploy time rather than at first
 ingest weeks later.
 
-| Table | Purpose | Notable constraint |
-|---|---|---|
-| `organizations` | tenants | `plan` CHECK; `char_length(id) = 36` |
-| `users` | dashboard logins | email stored encrypted + blind index (columns predate the code because retrofitting encryption is a data migration) |
-| `org_members` | user↔org + role | **partial unique index: one owner per org** |
-| `sessions` | dashboard sessions | id IS sha256(cookie token) — a DB leak can't be replayed as logins |
-| `api_keys` | widget pk/sk credentials | one CHECK makes kind/column mismatches unrepresentable; uniqueness among live keys only (`WHERE revoked_at IS NULL`) so rotation revokes instead of deletes. Since M7.1 `revoked_at` may sit in the FUTURE — that is the grace window (§9.17): both session routes accept a key while `revoked_at IS NULL OR revoked_at > NOW()`, on Postgres's clock. Since M7.3 (007, §3.3.9) secret rows also carry `secret_suffix`, their hash is unique across every row, and an org has at most one CURRENT secret key |
-| `allowed_origins` | widget origin allowlist | regex CHECK rejects paths/trailing slashes — a stored `https://a.com/` would silently never match a browser `Origin` header |
+| Table             | Purpose                  | Notable constraint                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `organizations`   | tenants                  | `plan` CHECK; `char_length(id) = 36`                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `users`           | dashboard logins         | email stored encrypted + blind index (columns predate the code because retrofitting encryption is a data migration)                                                                                                                                                                                                                                                                                                                                                                                          |
+| `org_members`     | user↔org + role          | **partial unique index: one owner per org**                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `sessions`        | dashboard sessions       | id IS sha256(cookie token) — a DB leak can't be replayed as logins                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `api_keys`        | widget pk/sk credentials | one CHECK makes kind/column mismatches unrepresentable; uniqueness among live keys only (`WHERE revoked_at IS NULL`) so rotation revokes instead of deletes. Since M7.1 `revoked_at` may sit in the FUTURE — that is the grace window (§9.17): both session routes accept a key while `revoked_at IS NULL OR revoked_at > NOW()`, on Postgres's clock. Since M7.3 (007, §3.3.9) secret rows also carry `secret_suffix`, their hash is unique across every row, and an org has at most one CURRENT secret key |
+| `allowed_origins` | widget origin allowlist  | regex CHECK rejects paths/trailing slashes — a stored `https://a.com/` would silently never match a browser `Origin` header                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ### §3.3.1 The content pipeline tables
+
 What the ingest worker reads and writes, and what retrieval queries.
 
-| Table | Purpose | Notable decision |
-|---|---|---|
-| `sources` | crawl targets / uploads per org | status lifecycle CHECK; crawl_depth capped at 3 |
-| `documents` | one fetched page / uploaded file | `content_hash` (sha256 of normalized text) short-circuits recrawls — identical hash skips re-chunk + re-embed, protecting embedding quota; soft delete + **partial** unique `(source_id, url) WHERE deleted_at IS NULL` so re-added pages don't collide with tombstones |
-| `chunks` | the retrieval unit | `heading_path` travels with every chunk (citations show where a claim lives); `char_start/char_end` deep-link into the source; `tsv` is a **GENERATED** column so the lexical index can never drift from the text; unique `(document_id, ord)` makes a buggy re-chunk loud |
-| `chunk_embeddings` | one embedding per (chunk, model) | the three big decisions — see below |
-| `ingest_jobs` | Postgres-backed work queue | `FOR UPDATE SKIP LOCKED` consumer shape; partial index over queued rows only; CHECK `(state='running') = (locked_by IS NOT NULL)` makes an unowned running job unrepresentable. Since 008 (§3.3.10): `skipped_count` + `skipped_pages` (what the crawl left out and why, the list capped by CHECK), and at most one LIVE job per source |
+| Table              | Purpose                          | Notable decision                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sources`          | crawl targets / uploads per org  | status lifecycle CHECK; crawl_depth capped at 3                                                                                                                                                                                                                                                                                         |
+| `documents`        | one fetched page / uploaded file | `content_hash` (sha256 of normalized text) short-circuits recrawls — identical hash skips re-chunk + re-embed, protecting embedding quota; soft delete + **partial** unique `(source_id, url) WHERE deleted_at IS NULL` so re-added pages don't collide with tombstones                                                                 |
+| `chunks`           | the retrieval unit               | `heading_path` travels with every chunk (citations show where a claim lives); `char_start/char_end` deep-link into the source; `tsv` is a **GENERATED** column so the lexical index can never drift from the text; unique `(document_id, ord)` makes a buggy re-chunk loud                                                              |
+| `chunk_embeddings` | one embedding per (chunk, model) | the three big decisions — see below                                                                                                                                                                                                                                                                                                     |
+| `ingest_jobs`      | Postgres-backed work queue       | `FOR UPDATE SKIP LOCKED` consumer shape; partial index over queued rows only; CHECK `(state='running') = (locked_by IS NOT NULL)` makes an unowned running job unrepresentable. Since 008 (§3.3.10): `skipped_count` + `skipped_pages` (what the crawl left out and why, the list capped by CHECK), and at most one LIVE job per source |
 
 The three load-bearing decisions on `chunk_embeddings`:
 
 1. **`halfvec(1024)`**, not `vector(1024)`: 2 bytes/dim halves row and index
    size — ~78k chunks instead of ~39k inside Neon's 0.5 GB free tier. fp16
-   recall cost is negligible and will be *measured* by the eval harness.
+   recall cost is negligible and will be _measured_ by the eval harness.
 2. **Partial HNSW index per model** (`WHERE model = '…'`), never IVFFlat:
    different models' vectors live in different spaces, so one shared index
    wastes traversal on foreign rows; and IVFFlat degrades silently under
@@ -1895,14 +1937,15 @@ to run and secure, when the queue's real throughput ceiling is embedding-API
 rate limits, not Postgres.
 
 ### §3.3.2 The chat tables
+
 Chat persistence: what the answer pipeline (§3.15.3) writes and the
 dashboard (§9.10) reads.
 
-| Table | Purpose | Notable decision |
-|---|---|---|
-| `conversations` | one widget chat thread | `status` carries `'escalated'` from day one (M4 adds the mechanism; the M2 widget must already render the state, and enum growth is a migration); `(org_id, last_message_at DESC)` index IS the dashboard's conversation list |
-| `messages` | one turn | `org_id` denormalized (M5's pre-flight usage cap counts answers per org per day — the hot path can't afford a join); three role CHECKs pin model/refused/score/latency to the assistant role, making mismatches unrepresentable (the api_keys pattern); `ttft_ms`/`total_ms` instrumented from day one, `input_tokens`/`output_tokens` added by 003 (§3.3.5) |
-| `message_citations` | one verdict per claim | see below — the snapshot decision |
+| Table               | Purpose                | Notable decision                                                                                                                                                                                                                                                                                                                                             |
+| ------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `conversations`     | one widget chat thread | `status` carries `'escalated'` from day one (M4 adds the mechanism; the M2 widget must already render the state, and enum growth is a migration); `(org_id, last_message_at DESC)` index IS the dashboard's conversation list                                                                                                                                |
+| `messages`          | one turn               | `org_id` denormalized (M5's pre-flight usage cap counts answers per org per day — the hot path can't afford a join); three role CHECKs pin model/refused/score/latency to the assistant role, making mismatches unrepresentable (the api_keys pattern); `ttft_ms`/`total_ms` instrumented from day one, `input_tokens`/`output_tokens` added by 003 (§3.3.5) |
+| `message_citations` | one verdict per claim  | see below — the snapshot decision                                                                                                                                                                                                                                                                                                                            |
 
 The load-bearing decision: **`message_citations` snapshots what it cites
 instead of referencing it.** `chunk_id` has deliberately NO foreign key,
@@ -1922,6 +1965,7 @@ fallback), never raw model output. Composite `(message_id, ord)` key, like
 chunk_embeddings — nothing references a citation row individually.
 
 ### §3.3.3 The BYO-provider credential table
+
 `org_provider_credentials`, one row per (org, role), the key as AES-GCM
 ciphertext (vault §3.21, AAD = row id) with `key_suffix` the only
 plaintext fragment. Deliberate deviation from the plan's partial-unique
@@ -1947,6 +1991,7 @@ api_keys style: `role = 'embedding'` ⇔ `dim IS NOT NULL`, with the 1..1024
 range mirroring `chunk_embeddings.dim` and PADDED_DIM.
 
 ### §3.3.4 `src/db/migrations/002_handoff.ts` — the handoff table
+
 The first migration after the flatten, and the shape every later one
 follows: additive, its own file, never a rewrite of 001.
 
@@ -1977,6 +2022,7 @@ that self-contradictory, and deleting a departing employee would fail on a
 constraint in a table nobody remembers exists.
 
 ### §3.3.5 `src/db/migrations/003_answer_tokens.ts` — what an answer cost
+
 Two columns on `messages`: `input_tokens` and `output_tokens`, the persisted
 form of `LLMUsage` (§2.4.5d) and the input to cost per 1k answers (§9.13).
 Columns rather than a usage table because they are facts ABOUT one answer,
@@ -1998,6 +2044,7 @@ record is a parsing bug, and storing it would quietly under-report output
 tokens, the expensive half on every model in the price list.
 
 ### §3.3.6 `src/db/migrations/004_usage_daily.ts` — the counters
+
 One row per org per UTC day: `answers`, `refusals`, `escalations`, and the
 day's token totals. What the pre-flight quota check reads (§3.18) and what
 a billing period sums (M5.4).
@@ -2029,6 +2076,7 @@ between writers unrepresentable rather than merely unlikely: counters never
 go negative, and `refusals <= answers`.
 
 ### §3.3.7 `src/db/migrations/005_billing.ts` — subscriptions and the event ledger
+
 Two tables, and one separation that is the whole design: **entitlement and
 billing record are different things.** `organizations.plan` is what the
 product ALLOWS, read on the hot path before every model call (§3.18) — one
@@ -2060,6 +2108,7 @@ NO billing code at all. The dashboard writes them; realtime reads the
 entitlement column and nothing else.
 
 ### §3.3.8 `src/db/migrations/006_origin_daily.ts` — traffic by origin
+
 One row per org per UTC day per ORIGIN: `minted` (sessions issued to an
 allowlisted origin) and `refused` (mints turned away because the origin was
 not allowlisted). Trust-model layer 4, M7.2: "every session mint records
@@ -2088,6 +2137,7 @@ the key's leading columns are exactly the range read (this org, last N days)
 the dashboard scans. UTC days, as usage_daily.
 
 ### §3.3.9 `src/db/migrations/007_secret_keys.ts` — what the secret key needs
+
 Three statements about `api_keys` that the publishable key never needed
 (M7.3, layer 6). `api_keys` has carried `kind = 'secret'` and `secret_hash`
 since 001, and M7.1's rotation already writes every row a secret key's
@@ -2129,6 +2179,7 @@ must write the older keys FIRST — which is the order real history writes
 them, an older key being rotated out before a newer one is issued.
 
 ### §3.3.10 `src/db/migrations/008_skipped_pages.ts` — what a crawl left out, and one live job per source
+
 Two things about `ingest_jobs` (M7.5). First, the record of what a crawl did
 NOT ingest: `skipped_count` (the TRUE total — robots.txt refusals, dead
 links, off-origin redirects, unparseable bodies) and `skipped_pages`, a
@@ -2161,6 +2212,7 @@ routes now say ON CONFLICT DO NOTHING and read the row count, which is the
 handoff table's argument (§3.3.4) applied to the queue.
 
 ### §3.3.11 `src/db/migrations/009_source_uploads.ts` — what an uploaded file leaves behind
+
 One row per upload source (M7.6b), holding what the parser extracted rather
 than the file. `sources.kind` allowed 'upload' from 001 and nothing could
 produce one; this is the missing half.
@@ -2201,6 +2253,7 @@ upload row individually) with ON DELETE CASCADE, and one file per source: a
 replacement is a new upload.
 
 ### §3.3.12 `src/db/migrations/010_schema_violations.ts` — counting the contract's failures
+
 The plan's anti-tutorial rules name this one directly: structured output
 differs per provider, weaker paths need validate-and-one-retry, and **schema
 violations are a counted metric, not a swallowed exception**. The pipeline
@@ -2248,6 +2301,7 @@ daily allowance for a question the product failed to answer would let a
 misbehaving model burn a customer's plan.
 
 ### §3.4 `src/db/migrate.ts`
+
 An `ExplicitMigrationProvider`: migrations are registered by import in a
 `MIGRATIONS` record, not discovered from disk. Kysely's stock
 `FileMigrationProvider` would find nothing in production, because the prod
@@ -2259,7 +2313,9 @@ rows against it, so forgetting to register a migration fails CI.
 hatch Kysely's own docs use for migrators.)
 
 ### §3.5 `src/routes/health.ts`
+
 Two probes with deliberately different contracts:
+
 - **`GET /api/health` — liveness, NEVER touches Postgres.** Render's health
   check and the keepalive cron (§5.2) both depend on that property; the
   whole free-tier design hinges on it (a DB-touching keepalive would burn
@@ -2270,6 +2326,7 @@ Two probes with deliberately different contracts:
   failure detail on a public endpoint is reconnaissance.
 
 ### §3.6 `src/app.ts`
+
 Builds the Express app without binding a port, so tests can drive it on an
 ephemeral port while server.ts owns boot. `trust proxy: 1` (Render sits one
 proxy hop away; what makes `req.ip` honest for the widget rate limits);
@@ -2280,6 +2337,7 @@ probe health build the bare app and never construct providers they won't
 use.
 
 ### §3.7 `src/server.ts`
+
 Boot order is a contract: **migrate, then listen** — a process that can't
 reach the schema it was built for must not accept traffic; a migration
 failure exits nonzero so the orchestrator restarts with backoff. The port is
@@ -2322,10 +2380,11 @@ in-flight job between pages — §3.10.5) → drain pool → exit; a second sign
 force-exits.
 
 ### §3.8 Tests (`src/**/__tests__/`)
+
 - `routes/__tests__/health.test.ts` — drives the real HTTP listener via
   `fetch` on an ephemeral port. Environment-adaptive: with
   `POSTGRES_PASSWORD` set, `/api/ready` must 200; without, it must 503
-  *fast* (the sub-second health assertion also guards "someone added a DB
+  _fast_ (the sub-second health assertion also guards "someone added a DB
   call to the liveness route").
 - `db/__tests__/migrate.test.ts` — integration suite, self-gated on
   `POSTGRES_PASSWORD` (green on a machine with no DB, lights up in compose/
@@ -2353,7 +2412,7 @@ force-exits.
   model rejected, full assistant row accepted); the span/verdict equality
   CHECK at all three boundaries (verified without span, unverified with
   span, half a span); inverted/empty/minimum spans; duplicate `(message_id,
-  ord)`; the conversation→message→citation cascade; and the deliberate
+ord)`; the conversation→message→citation cascade; and the deliberate
   ABSENCE of a chunk FK (a citation naming a never-existing chunk inserts
   cleanly — that test failing means someone re-coupled transcripts to
   pipeline state).
@@ -2899,6 +2958,7 @@ force-exits.
   are different stories.
 
 ### §3.9 `realtime/Dockerfile`
+
 Multi-stage on node:22-alpine, **build context = repo root** (shared/ must
 exist inside the image). `deps → dev → build → prod`, plus a `widget`
 stage since M2.7: the widget bundle builds inside the image and lands at
@@ -2920,12 +2980,13 @@ the database, the worker owns ALL persistence. The chunker sits in shared/
 mechanics.
 
 #### §3.10.1 `src/ingest/ip.ts`
+
 Byte-level IP classification for the SSRF guard: "is this address
 affirmatively public-routable?" Hand-rolled v4/v6 parsers (16 bytes, then
 prefix checks) because this is a security boundary that must FAIL CLOSED —
 anything unparseable is non-public by definition, and the alternate
 spellings resolvers interpret creatively (`0x7f000001`, `127.1`, leading
-zeros) are deliberately *not recognized* rather than normalized, since
+zeros) are deliberately _not recognized_ rather than normalized, since
 "ambiguous" is an answer of no. Blocks loopback, RFC1918, link-local
 (which is what makes 169.254.169.254 — the cloud metadata endpoint —
 unreachable), CGNAT, TEST-NETs, benchmarking, multicast/reserved, ULA, and
@@ -2934,6 +2995,7 @@ EMBEDDED v4 address; 6to4/Teredo are rejected wholesale because the guard
 cannot see through a tunnel.
 
 #### §3.10.2 `src/ingest/safeFetch.ts`
+
 The SSRF-guarded HTTP client every ingest fetch goes through — crawl
 targets are user-supplied URLs this server then fetches, the textbook SSRF
 shape. Three layers that must move together: (1) per-hop vetting — scheme,
@@ -2958,6 +3020,7 @@ operator can follow to learn what the bot is; robots.txt is only useful to
 someone who knows whom to name.
 
 #### §3.10.3 `src/ingest/parsers/`
+
 One contract rules all of them (`types.ts`):
 `block.text === text.slice(charStart, charEnd)` — the identity that makes
 span-verified citations (M2) able to deep-link into source text. `text` is
@@ -2980,7 +3043,7 @@ functions of content (the HTML whitespace-collapse test pins this).
   answer — HTML parsing is infrastructure, not the thesis. Chrome subtrees
   (nav/header/footer/script/style/forms/svg) are dropped wholesale — a
   support answer citing a nav menu is worse than none — but their `<a
-  href>` values ARE collected: nav menus are how docs sites interlink.
+href>` values ARE collected: nav menus are how docs sites interlink.
   `<pre>` preserves whitespace as a code block; prose whitespace collapses
   (HTML's own rendering rule, and what makes extraction deterministic).
 - `pdf.ts` — real since M7.6; its own section, §3.10.7, because the
@@ -3000,6 +3063,7 @@ functions of content (the HTML whitespace-collapse test pins this).
   than text and a charset applied to one would corrupt it.
 
 #### §3.10.4 `src/ingest/crawler.ts`
+
 Source → stream of parsed pages, as an async GENERATOR: a crawl is minutes
 of network, so the worker persists page-by-page, reports progress, and can
 stop between pages — none of which an awaited array allows. Memory is
@@ -3043,6 +3107,7 @@ helper (`pace`) so sitemap fetches wait their turn like pages do; a
 redirect's hops are one logical request inside safeFetch and are not paced.
 
 #### §3.10.5 `src/ingest/worker.ts`
+
 The queue consumer that ties the pipeline together; runs IN-PROCESS (a
 separate worker service was rejected: Render's free tier funds one
 instance, and the throughput ceiling is embedding rate limits, not CPU).
@@ -3126,6 +3191,7 @@ not a rewrite" true. A page robots.txt now closes is soft-deleted with the
 other absent pages, by the same rule: the site said not to keep it.
 
 #### §3.10.5a Surviving a metered embedding provider (M9)
+
 The worker's embed calls are wrapped in §3.15.5's `withRetry` under a
 PATIENT policy — 8 attempts inside a 5-minute waiting budget, 2s base,
 60s ceiling — and the reason is a defect the deployed demo made
@@ -3174,6 +3240,7 @@ division of labor §3.14 made for the eval harness against this identical
 provider behavior, from the other side.
 
 #### §3.10.6 `src/ingest/robots.ts`
+
 The Robots Exclusion Protocol (RFC 9309), parsed and applied — hand-written
 for RRF's reason (§2.4.3): the whole protocol is a few pages of RFC and the
 decisions worth pointing at in code are the ones a dependency would hide.
@@ -3229,6 +3296,7 @@ on verbatim and the dashboard shows: "disallowed by robots.txt (User-agent:
 file says so and why nothing may be fetched.
 
 #### §3.10.7 `src/ingest/parsers/pdf.ts`
+
 The format the pipeline refused until M7.6, and the one the M1 review was
 right to defer: a PDF parser is the largest third-party surface in the
 ingest path, and back then nothing could hand the product a PDF. Both facts
@@ -3248,6 +3316,7 @@ encryption, fourteen standard fonts and a dozen text-positioning operators
 
 **Two mechanical facts about pdf.js**, both learned from it failing rather
 than from the documentation, and both load-bearing:
+
 1. It TRANSFERS (detaches) the array it is given — after the first call
    `bytes.byteLength` is 0 and the next one throws `DataCloneError`. So the
    document is opened ONCE into a proxy and the title and the text are both
@@ -3305,6 +3374,7 @@ shipped prod image, which is the failure a dual ESM/CJS package behind a
 dynamic import would otherwise save for production.
 
 #### §3.10.8 The upload path (`POST /internal/orgs/:orgId/sources/upload`)
+
 The surface the crawler was never going to provide (M7.6b). It lives on the
 internal API (§3.22) because the dashboard is its only caller, and it is
 described here because what it does is ingest.
@@ -3352,6 +3422,7 @@ response carries the character count, because that is the only honest answer
 to "did that work?" about a file the service deliberately did not keep.
 
 ### §3.11 `realtime/scripts/enqueueSource.ts`
+
 Dev-only CLI (`npm run enqueue -- <url> [--depth N] [--sitemap]`):
 registers a source and queues a job so the worker can be watched end to end
 before the M3 dashboard exists. Deliberately glue over the same inserts the
@@ -3362,6 +3433,7 @@ reads env at module load, and a hoisted top-level import would construct it
 before the fallback ran, silently pointing at the wrong Postgres.
 
 ### §3.12 `src/retrieval/search.ts`
+
 The query side of the content pipeline (traced in DATAFLOW.md §4): three
 public entry points, because the eval harness measures each arm alone
 against the fusion — the delta is the case for hybrid.
@@ -3372,7 +3444,7 @@ against the fusion — the delta is the case for hybrid.
   leaks onto a pooled connection, and set_config rather than SET LOCAL
   because SET cannot take bind parameters (the values travel as parameters
   instead of being spliced into SQL text). `hnsw.iterative_scan =
-  'relaxed_order'` is the load-bearing setting: without it HNSW yields
+'relaxed_order'` is the load-bearing setting: without it HNSW yields
   ~ef_search candidates, the org filter discards other tenants' rows, and
   a small tenant silently gets fewer than k results. `"off"` is accepted
   because the eval harness measures the with/without delta — the number
@@ -3399,6 +3471,7 @@ through the join or it would keep answering from pages a site removed.
 Limits are validated as if they were already user input (M2 makes them so).
 
 ### §3.13 `realtime/scripts/searchDev.ts`
+
 Dev-only CLI (`npm run search -- "<question>" [--org N] [--k N]
 [--dense-only]`): hybrid retrieval against ingested content, so the whole
 M1 loop — enqueue → crawl → embed → retrieve — is drivable by hand before
@@ -3411,8 +3484,9 @@ one provider and querying under another, which otherwise looks like
 retrieval returning nothing. `npm run ask` (§3.16) resolves identically.
 
 ### §3.14 `realtime/scripts/runEval.ts`
+
 The evaluation harness runner (`npm run eval`) — lives in realtime/ because
-it drives realtime's retrieval code; the *assets* it consumes (corpus,
+it drives realtime's retrieval code; the _assets_ it consumes (corpus,
 golden set, scorer, floor) live in eval/ (§7). Four stages, each loud on
 failure:
 
@@ -3478,6 +3552,7 @@ unauthenticated LLM-spending route never reaches the auto-deploying dev
 branch. Callers today: the pipeline integration tests and `npm run ask`.
 
 #### §3.15.1 `src/answer/gate.ts`
+
 The groundedness gate — answer-or-refuse decided BEFORE any model call, so
 a refusal costs zero tokens. Carries a correction to the M1 docs worth
 reading in full in the file header: the plan said the threshold cuts on
@@ -3499,6 +3574,7 @@ per-answer in messages.retrieval_score so production accumulates tuning
 data.
 
 #### §3.15.2 `src/answer/prompt.ts`
+
 Prompt assembly with the injection boundary as its organizing principle:
 the system prompt is a CONSTANT (plus the org's persona — org-controlled
 config, not visitor input) containing instructions and the JSON contract;
@@ -3514,6 +3590,7 @@ to surface. The final-answer-only instruction exists because reasoning
 models leak deliberation and TTFT is a headline metric.
 
 #### §3.15.3 `src/answer/pipeline.ts`
+
 The orchestration: conversation resolve (a supplied conversation id is
 validated against the ORG before anything is written — cross-tenant
 append is a thrown error, and the test proves it) → visitor message
@@ -3540,6 +3617,7 @@ because the visitor has been waiting since the original question, while
 tokens accumulate because the tenant paid for both calls.
 
 #### §3.15.4 `src/answer/mockResponder.ts` + `src/answer/buildLLM.ts`
+
 The context-quoting mock responder lives in answer/ (not providers/)
 because it knows the prompt format — formatChunk is the other half of its
 contract and the two must change together. It is what lets every stack
@@ -3558,6 +3636,7 @@ every keyless stack — dev compose, prod compose, CI, the demo org —
 serving grounded mock answers.
 
 #### §3.15.5 `src/answer/retry.ts` — surviving a provider's rate limit (M7.7)
+
 The caller's half of a division of labor providers/llm/types.ts stated from
 the start: implementations throw on transport failure, and "retry/backoff
 belongs to the caller" (§2.4.5d). This is that caller, and it exists because
@@ -3654,6 +3733,7 @@ deliberate trust-model property — failure detail on a public stream is
 reconnaissance — to say something the visitor can act on no differently.
 
 ### §3.15.6 The answer deadline (M8.4) — the bound the retry policy cannot be
+
 Sixty seconds, wall-clock, on the WHOLE answer — embed, retrieve, generate,
 the schema retry included — enforced in pipeline.ts as `AbortSignal.timeout`
 composed with the visitor's own signal via `AbortSignal.any`, so both aborts
@@ -3711,6 +3791,7 @@ harness's slow-answer note now reports against the deadline instead of
 reporting that nothing exists.
 
 ### §3.16 `realtime/scripts/askDev.ts`
+
 Dev-only CLI (`npm run ask -- "<question>" [--org N] [--conversation
 con_…] [--llm mock|groq|gemini|ollama|anthropic] [--tamper]`): the full M2 loop
 drivable by hand. Same glue-only rule as the sibling CLIs. The default
@@ -3770,6 +3851,7 @@ to compute inline, so exactly one function decides what "today" means for
 the quota.
 
 ### §3.27 `realtime/scripts/seedSecurityFixture.ts` (M6.1)
+
 Dev/CI CLI (`npm run seed-security -- --out <fixture.json>`): seeds the two
 probe organizations the security and injection probes attack and writes
 what they need to know as a JSON fixture — the CONTRACT between this script
@@ -3811,6 +3893,7 @@ about the deployment it attacks. Runs from the host against the compose dev
 database, or inside the compose network as §4.4's `seed` service.
 
 ### §3.28 `src/usage/origins.ts` — the per-origin counters (M7.2)
+
 The write side of `origin_daily` (§3.3.8): `recordOriginMint(db, {orgId,
 origin, outcome})`, one upsert per mint attempt that names an org, called
 from the session route (§3.18) after the allowlist check — `minted` when it
@@ -3848,6 +3931,7 @@ are NOT counted: neither names an org without a lookup the route
 deliberately does not spend on requests it refuses for free.
 
 ### §3.29 `realtime/scripts/runTenantScan.ts` — what iterative scans are worth (M7.12)
+
 `npm run tenant-scan`. The runner for §7.8's scoring, in realtime/ for
 runEval.ts's reason: it drives realtime's retrieval code and needs its
 dependencies, while the scoring stays a package-less module the root runner
@@ -3890,6 +3974,7 @@ because the fixture used a label where the column requires a 64-character
 sha256 — the schema holding a harness to the same rule as the product.
 
 ### §3.30 `realtime/scripts/runProviderComparison.ts` — the provider table (M8.3)
+
 `npm run compare`. The harness half of §7.9, in realtime/ for runEval.ts's
 and runTenantScan.ts's reason: it drives realtime's answer pipeline and needs
 its dependencies, while the scoring stays a package-less module the root
@@ -3953,6 +4038,7 @@ expensive: every question would have been refused by the gate and the table
 would have reported a provider that never ran as a provider that refused.
 
 ### §3.31 `realtime/scripts/runIngestBench.ts` — ingest throughput (M8.7)
+
 `npm run ingest-bench`. The plan's latency list names "ingest throughput"
 beside retrieval-only latency and TTFT; both of those have had committed
 producers for milestones while ingest speed existed only as anecdotes
@@ -3996,6 +4082,7 @@ measures the runner.
 ### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
 
 #### §3.17.1 `src/widget/sessionToken.ts`
+
 Trust-model layer 2. The publishable key is spent ONCE at bubble-open;
 chat authenticates with a short-lived (30 min) HMAC token BINDING org +
 origin + visitor. Hand-rolled compact token, deliberately not a JWT
@@ -4012,6 +4099,7 @@ restart), wrong in prod (render.yaml prompts for it, sync:false); a
 nonempty-but-short secret refuses to boot rather than limp.
 
 #### §3.17.2 `src/widget/rateLimit.ts`
+
 Trust-model layer 3 — the layer that actually bounds SCRIPTED abuse
 (Origin defeats browsers; curl forges it, and the plan says so).
 Classic token buckets, in-memory BY DESIGN: this deployment is exactly
@@ -4025,6 +4113,7 @@ fully-refilled buckets past 10k keys instead of a timer (no interval
 handle to leak; a map only grows when traffic touches it).
 
 ### §3.18 `src/routes/widget.ts`
+
 The only routes an untrusted browser ever calls, implementing the trust
 model in layer order. `POST /v1/widget/session`: Origin header required
 (absence means a script — no free sessions), per-IP mint bucket, pk
@@ -4125,6 +4214,7 @@ called by a server with a bearer credential — a different caller, a
 different posture, and a path that says so.
 
 ### §3.19 `realtime/scripts/seedWidgetDemo.ts`
+
 Dev-only CLI (`npm run seed-demo [-- --corpus fastify] [--origin url]`):
 the fixture/demo organization — org, the fixed publishable key the
 fixture pages hardcode (pk values are public by design), the :4400
@@ -4144,6 +4234,7 @@ killing exact-text retrieval (the mock's only mode) and making the gate
 refuse everything, which looks like a widget bug and is not.
 
 ### §3.20 `src/routes/demo.ts`
+
 The public demo surface: GET /demo, a page wearing the widget exactly the
 way a customer's site would (same snippet, same public routes), and GET
 /widget.js — this service as the bundle's ORIGIN FALLBACK (the plan's
@@ -4226,6 +4317,7 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   computes the model id a stored row resolves to WITHOUT decrypting its
   key, which is what lets §3.22 compare "what the corpus was embedded
   with" against "what it will be embedded with next".
+
 - **resolve.ts** (M3.5, M3.6b) — the vault's READ side: org →
   ready-to-call provider, decrypted per call with deliberately NO cache (a
   cache would serve a revoked key until eviction — the exact window
@@ -4560,15 +4652,18 @@ sockets.
 ## §4 `database/` and compose
 
 ### §4.1 `database/Dockerfile`
+
 `FROM pgvector/pgvector:pg18` — the pgvector project's official layer over
 Postgres 18. One line of intent; compiling the extension into
 postgres:18-alpine ourselves was rejected as maintenance for no gain.
 
 ### §4.2 `docker-compose.yaml` (dev)
+
 Hot-reload stack: database + realtime (target `dev`, tsx watch) with
 `./realtime/src` and `./shared` bind-mounted. Postgres publishes
 `${POSTGRES_PORT:-5432} → 5432` so host-side `npm test` can reach it;
 containers always use `database:5432` internally. Two hard-won details:
+
 - The data volume mounts at **`/var/lib/postgresql`** (not `…/data`): the
   PG18 image moved the convention up a level; the old path makes the
   container refuse to initialize.
@@ -4586,6 +4681,7 @@ ephemeral in both, which is correct for stacks whose sessions should not
 outlive them.
 
 ### §4.3 `docker-compose.prod.yaml`
+
 Production shape: prod image target, no bind mounts, Postgres **not**
 published to the host. This is the stack CI's e2e job boots — the artifact
 probed is the artifact shipped. Since M6.2 it passes `INTERNAL_API_SECRET`
@@ -4595,6 +4691,7 @@ neither behaves exactly as before, while CI's throwaway pair mounts the
 surface so the security probe can attack it.
 
 ### §4.4 `docker-compose.probe.yaml` — the harness half of e2e (M6)
+
 Layered OVER the prod stack, never used alone: one profile-gated, one-shot
 `seed` service that gives the security and injection probes a tenant to
 attack. A black-box probe needs orgs, keys, an allowlisted origin, and
@@ -4637,6 +4734,7 @@ or the internal routes do not mount and the section skips).
 ## §5 `.github/workflows/`
 
 ### §5.1 `ci.yml`
+
 `verify` (10-min timeout): pgvector service container + per-package
 `npm ci` → typechecks (shared, providers, eval, realtime, widget) →
 tests (including the widget's jsdom suite) → widget build → the §6.2
@@ -4661,6 +4759,7 @@ not vibes. **No API keys anywhere in CI, by design** — fork PRs get the
 full pipeline.
 
 ### §5.2 `keepalive.yml`
+
 Every 10 minutes, curl `RENDER_URL/api/health` — defeats Render's 15-minute
 free-tier spin-down so a recruiter never eats a 60-second cold start. Pings
 the DB-free liveness route on purpose (§3.5); Neon is woken later by the
@@ -4672,6 +4771,7 @@ repo variable so it no-ops until the service exists.
 ## §6 `scripts/`
 
 ### §6.1 `scripts/smoke-test.mjs`
+
 Zero-dependency probe (Node 22 stdlib only — runs without `npm install`,
 pointable at any base URL including production). Checks health, readiness,
 that unknown routes 404, and — since M2.5 — the widget surface's POSTURE:
@@ -4698,6 +4798,7 @@ rest; every fetch carries a timeout because a probe that can hang turns a
 dead service into a stuck CI job.
 
 ### §6.5 `scripts/playground.mjs` + `playground-core.mjs` — the whole product in one command (M8.1)
+
 `npm run playground`. The odd one out in `scripts/`: its siblings PROBE a
 running stack, and this one BOOTS one — database, realtime, the dashboard and
 the fixture host pages — seeds a real corpus and a dashboard login, and prints
@@ -4760,6 +4861,7 @@ verification, the trust model, every metric) versus what is a mock until a key
 is connected (the model).
 
 ### §6.6 `scripts/measure-ttft.mjs` — answer latency on a DEPLOYED stack (M9)
+
 The committed producer for the last metric in the plan's latency list, and
 the one that cannot be produced anywhere but a real deployment: Render's
 container wake and Neon's autosuspend ARE the cold number. Zero
@@ -4785,6 +4887,7 @@ mint p50 88 ms. Each run spends one answer against the org's daily cap,
 which is why n is small and stated rather than averaged away.
 
 ### §6.3 `scripts/security-probe.mjs` (M6.1)
+
 The trust model attacked from the outside, the way a script on the internet
 would, against a seeded tenant rather than posture alone. Where the smoke
 probe asks "is the surface mounted and closed?", this asks "does each layer
@@ -4908,6 +5011,7 @@ found by re-running the whole sequence against the prod image, which is the
 point of running it there.
 
 ### §6.4 `scripts/injection-probe.mjs` (M6.3)
+
 Poisoned pages in the retrieved context, and what reaches the visitor. The
 file opens with what it can and cannot prove, because that IS its content.
 The pipeline's defense against a poisoned page has three parts, each
@@ -4955,6 +5059,7 @@ alias. Committed artifacts only — `eval/results/` (per-run droppings) is
 gitignored; what IS committed is what someone chose to publish.
 
 ### §6.2 `scripts/widget-size.mjs` — what the widget costs a host page
+
 The 15 KB gzipped budget as a merge blocker, and since M7.9 the place the
 plan's two STATIC widget metrics are produced. Gzip, not raw — gzip is what
 crosses the wire from any CDN and what a customer's performance audit
@@ -4986,6 +5091,7 @@ is a browser measurement and lives in `widget/fixtures/measure.html`
 (§8.4), not here: no .mjs probe can time a mount.
 
 ### §7.1 `eval/corpus/`
+
 The frozen documentation snapshot: 31 Fastify v5.11.3 pages, MIT-licensed,
 with LICENSE and PROVENANCE.md recording the exact upstream tag, what was
 excluded and why, and the refresh procedure (an upgrade re-verifies every
@@ -4997,6 +5103,7 @@ make retrieval look easy: 31 pages about one Node web framework share
 vocabulary everywhere.
 
 ### §7.2 `eval/golden.jsonl`
+
 80 hand-written question → anchor pairs (the plan's floor is 60;
 LLM-generated-and-self-graded sets are worthless and interviewers know
 it). Each entry anchors to a document URL plus a VERBATIM `mustContain`
@@ -5010,6 +5117,7 @@ dense arm's strength) with exact-term phrasing (the lexical arm's), the
 way real support traffic mixes both.
 
 ### §7.3 `eval/metrics.ts`
+
 The scorer: recall@k, MRR@k, nDCG@k (binary gains) plus macro-averaged
 `scoreRun`. Pure and database-free, so every metric is pinned by
 hand-computed unit fixtures (`__tests__/metrics.test.ts`) — including the
@@ -5019,6 +5127,7 @@ an average: empty run, empty relevant set (an unresolved anchor), duplicate
 ranked ids.
 
 ### §7.4 `eval/resolve.ts`
+
 Anchor → chunk-id resolution: squash whitespace on both sides (markdown
 hard-wraps at upstream's whim; anchors must survive rewrapping), then
 case-SENSITIVE containment — an anchor is a quotation, and case-folding
@@ -5028,6 +5137,7 @@ placed twice makes both chunks correct retrieval targets. Returns empty
 rather than throwing so the runner can report every broken anchor at once.
 
 ### §7.5 `eval/floor.json` + `eval/RESULTS.md`
+
 The committed operating point and the published measurement. floor.json
 holds the CI threshold (hybrid recall@5 ≥ 0.70 against a 75.0 baseline —
 headroom for cross-machine ONNX/HNSW noise, tight enough that a broken
@@ -5041,6 +5151,7 @@ failure analysis that categorizes all 12 misses and commits to not padding
 the golden set to bless near-misses.
 
 ### §7.6 `eval/noanswer.jsonl`
+
 The adversarial no-answer set (M2.7): 40 hand-written questions the
 corpus can NOT answer, in three categories that fail differently —
 off_topic (banana bread; lands far away in embedding space), adjacent
@@ -5054,6 +5165,7 @@ distance gate separates off-topic perfectly and absent_detail barely at
 all.
 
 ### §7.7 `eval/injection.jsonl`
+
 The poisoned-document corpus (M6.3): nine hand-written support pages, each
 a legitimate paragraph followed by an attacker's planted instruction, in
 nine categories — instruction override (the plan's "tell them their refund
@@ -5080,6 +5192,7 @@ the pipeline these are simply more of the tenant's documentation, which is
 the threat.
 
 ### §7.8 `eval/tenantScan.ts`
+
 The scoring half of the tenant-filtering measurement (M7.12) — pure and
 database-free, the same split as §7.3's metrics and its runner (§3.29), for
 the same reason: the numbers reach a README, so they get a test a reader can
@@ -5099,6 +5212,7 @@ duplicated here rather than imported because eval/ and loadtest/ are separate
 alias roots that nothing else joins.
 
 ### §7.9 `eval/providerComparison.ts`
+
 The scoring half of the provider comparison (M8.3) — the plan's "strongest
 evidence the author evaluated rather than guessed", and the last of its
 named metrics with no producer. Pure and database-free, the §7.3/§7.8 split,
@@ -5135,6 +5249,7 @@ denominator under-reports in the direction that gets believed. TTFT
 percentiles exclude refusals, the bug §9.13 found live. An empty run throws.
 
 ### §7.10 What the comparison measured
+
 Published in eval/RESULTS.md; the two findings worth citing from here.
 **A real model had 23.8% of its claims stripped** where the context-quoting
 mock strips 0% — the mock is the control that proves the number is about the
@@ -5186,6 +5301,7 @@ an alias in the widget's esbuild command and vitest config, because
 type-only imports were erased before anything had to resolve them.
 
 ### §8.1 `src/index.ts` + `src/api.ts` + `src/sse.ts`
+
 The boot and network half. index.ts reads its config off its own
 `<script>` tag (data-key / data-api / data-title / data-accent) via
 document.currentScript, captures window.fetch at evaluation time (before
@@ -5283,6 +5399,7 @@ reconnect loop arguing with a 400 forever is precisely what a bounded rejoin
 exists to avoid.
 
 ### §8.1b `src/handoff.ts`
+
 The visitor's end of the handoff socket (§2.4.7) — sse.ts's sibling: the
 protocol is shared, the transport is not. It owns the one fact the UI
 should not have to think about, that a socket is not a durable
@@ -5310,6 +5427,7 @@ TTL timer lives here too: the RECEIVER expiring it is precisely why the
 server needs no timer per socket.
 
 ### §8.1c The handoff UI (in `src/ui.ts`)
+
 Three entry points, one state. The "Talk to a person" offer appears after
 a REFUSAL — the moment the product has admitted it cannot help, which the
 events protocol names in as many words (§2.4.4c) — and never stacks a
@@ -5383,6 +5501,7 @@ after the last one ended REPLACES the line instead of stacking under "the
 support chat has ended" — a wart the rejoin would have made routine.
 
 ### §8.2 `src/ui.ts` + `src/styles.ts`
+
 The rendering half, built on a three-line element factory with one iron
 rule: everything textual goes through textContent, NEVER innerHTML —
 claim text is MODEL OUTPUT relayed from crawled documents
@@ -5401,6 +5520,7 @@ the ONE deliberate opening through the boundary (custom properties
 inherit), so hosts theme the bubble without a widget API.
 
 ### §8.3 Tests (`src/__tests__/`, jsdom)
+
 sse: frame reassembly across network chunks, a multi-byte character
 split mid-encoding, non-data frames ignored, trailing partial never
 parsed. api: mint-once semantics, visitor-id persistence and reuse,
@@ -5482,25 +5602,27 @@ bookmark spends a mint AND a ticket at once, because a person is waiting
 and the rejoin IS the probe (§8.1c).
 
 ### §8.4 `fixtures/` + `scripts/serve.mjs`
+
 The three host pages the plan requires, each testing a distinct failure
 mode: Tailwind (preflight reset), Bootstrap (high-specificity components
-+ a fixed navbar; also proves data-accent wins), and hostile —
-`* { all: unset }` plus a strict CSP whose every directive is explained
-in the page source (connect-src is the ONE thing customers must add —
-and since M7.4 it names the API host TWICE, `http://…` and `ws://…`,
-because CSP's scheme matching goes http→https and never http→ws, so a
-directive listing only the http(s) origin lets chat work and silently
-blocks the handoff socket; the M7.4 rejoin check on this page found the
-socket refused at "Connecting…" with the ws: URL in the console as a CSP
-violation, a gap that had been there since M4.4's socket, verified only on
-the Tailwind fixture — the Install page prints both origins now, §9.11;
-style-src deliberately excludes anything the widget would need, pinning
-the adoptedStyleSheets path). serve.mjs hosts them on :4400 because
-file:// sends `Origin: null`, which the allowlist rightly rejects — the
-fixtures exercise the SAME origin rules production enforces. Verified
-live in a real browser at M2.6: grounded answers with citations on all
-three pages, refusal on off-corpus questions, 56px styled bubble under
-the hostile reset. Prerequisite: `npm run seed-demo` (§3.19), `npm run
+
+- a fixed navbar; also proves data-accent wins), and hostile —
+  `* { all: unset }` plus a strict CSP whose every directive is explained
+  in the page source (connect-src is the ONE thing customers must add —
+  and since M7.4 it names the API host TWICE, `http://…` and `ws://…`,
+  because CSP's scheme matching goes http→https and never http→ws, so a
+  directive listing only the http(s) origin lets chat work and silently
+  blocks the handoff socket; the M7.4 rejoin check on this page found the
+  socket refused at "Connecting…" with the ws: URL in the console as a CSP
+  violation, a gap that had been there since M4.4's socket, verified only on
+  the Tailwind fixture — the Install page prints both origins now, §9.11;
+  style-src deliberately excludes anything the widget would need, pinning
+  the adoptedStyleSheets path). serve.mjs hosts them on :4400 because
+  file:// sends `Origin: null`, which the allowlist rightly rejects — the
+  fixtures exercise the SAME origin rules production enforces. Verified
+  live in a real browser at M2.6: grounded answers with citations on all
+  three pages, refusal on off-corpus questions, 56px styled bubble under
+  the hostile reset. Prerequisite: `npm run seed-demo` (§3.19), `npm run
 build`, `npm run fixtures`.
 
 M7.3 added a fourth, `strong.html`, whose test is what is NOT on it: no
@@ -5621,7 +5743,7 @@ is why it is gitignored, not committed (§9.1).
   (§3.22) and REALTIME_INTERNAL_URL pointing at the Render service; and
   NEXT_PUBLIC_WIDGET_API_URL — the widget's PUBLIC base URL, which the
   install page prints into the snippet (§9.11). Since M5.4, optionally
-  the Stripe set (§9.15): STRIPE_SECRET_KEY (**sk_test_ only — a live key
+  the Stripe set (§9.15): STRIPE_SECRET_KEY (**sk_test\_ only — a live key
   is refused by name**), STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_STARTER,
   STRIPE_PRICE_PRO, and NEXT_PUBLIC_APP_URL for the checkout return.
   All five are OPTIONAL: unset, the webhook route 404s and the billing
@@ -6282,8 +6404,7 @@ Verified live at M3.8, with the widget route as the oracle: pasting
 `  https://DOCS.Example.com/help/faq?x=1#top  ` stored
 `https://docs.example.com` and that origin immediately minted a session
 (200) while an unlisted one was refused (403); removing it flipped the
-same origin to 403 on the next request, with the other origin still at
-200. A bare host was rejected in the form with the scheme sentence.
+same origin to 403 on the next request, with the other origin still at 200. A bare host was rejected in the form with the scheme sentence.
 
 ---
 
@@ -6298,6 +6419,7 @@ been stable since 22, so the harness runs with nothing installed, the same
 standard the .mjs probes hold themselves to.
 
 ### §10.1 `loadtest/histogram.ts`
+
 Samples in, percentiles out. Kept as raw samples rather than buckets: a run
 against a free-tier stack produces thousands, not millions, so exact
 percentiles cost one sort and remove the "which bucket did p95 land in"
@@ -6310,6 +6432,7 @@ against hand-computed fixtures for the same reason eval/metrics.ts is: the
 numbers it produces are published.
 
 ### §10.2 `loadtest/handoffLoad.ts`
+
 The scenario. One **session** is one conversation — a visitor socket AND an
 agent socket — because that is the product's unit: somebody waiting,
 somebody answering. Three measurements, each chosen for what it contains:
@@ -6329,6 +6452,7 @@ throughput divided by an elapsed that included the drain window understated
 178/s as 106/s.
 
 ### §10.3 `realtime/scripts/runLoadtest.ts`
+
 The runner: seeds its own org, conversations, and open handoffs, mints
 tickets with the SERVER'S signer, runs the scenario, prints the table, and
 deletes everything — including on Ctrl-C, via one cascading delete. It
@@ -6340,6 +6464,7 @@ bucket doing its job rather than the socket. It refuses to run without a
 100 upgrade refusals and a confusing report.
 
 ### §10.4 `loadtest/RESULTS.md`
+
 The published measurement, in eval/RESULTS.md's shape: the table, the knee,
 and the failure analysis. The findings — 300 concurrent sockets with
 nothing dropped, connect flat at ~10 ms p50 across that range, a round trip

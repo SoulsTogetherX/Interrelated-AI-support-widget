@@ -33,7 +33,16 @@ export interface CredentialDisplay {
 export async function listCredentialDisplay(orgId: string): Promise<CredentialDisplay[]> {
   const rows = await db
     .selectFrom("org_provider_credentials")
-    .select(["role", "provider", "model", "base_url", "dim", "key_suffix", "last_validated_at", "last_validation"])
+    .select([
+      "role",
+      "provider",
+      "model",
+      "base_url",
+      "dim",
+      "key_suffix",
+      "last_validated_at",
+      "last_validation",
+    ])
     .where("org_id", "=", orgId)
     .orderBy("role")
     .execute()

@@ -81,12 +81,14 @@ describe.skipIf(!hasDb)("internal credential API", () => {
           const dim = body.model === "huge-embed" ? 1536 : 8
           const input = body.input ?? []
           res.writeHead(200, { "content-type": "application/json" })
-          res.end(JSON.stringify({
-            data: input.map((_, i) => ({
-              index: i,
-              embedding: Array.from({ length: dim }, (_, j) => (j === i % dim ? 1 : 0)),
-            })),
-          }))
+          res.end(
+            JSON.stringify({
+              data: input.map((_, i) => ({
+                index: i,
+                embedding: Array.from({ length: dim }, (_, j) => (j === i % dim ? 1 : 0)),
+              })),
+            }),
+          )
           return
         }
 
@@ -111,7 +113,9 @@ describe.skipIf(!hasDb)("internal credential API", () => {
         testTimeoutMs: 3000,
         // Stands in for server.ts's wiring to the socket server: what the
         // close test asserts is that the room is told, and told once.
-        onHandoffClosed: (conversationId) => { closedRooms.push(conversationId) },
+        onHandoffClosed: (conversationId) => {
+          closedRooms.push(conversationId)
+        },
       },
     })
     appServer = createServer(app)
@@ -271,7 +275,13 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     const before = requestsSeen.length
     const cases: Array<Record<string, unknown>> = [
       { role: "generation", provider: "groq" }, // key required
-      { role: "generation", provider: "ollama", baseUrl: fakeBase, model: "m", apiKey: "k".repeat(10) }, // ollama+key
+      {
+        role: "generation",
+        provider: "ollama",
+        baseUrl: fakeBase,
+        model: "m",
+        apiKey: "k".repeat(10),
+      }, // ollama+key
       { role: "generation", provider: "openai_compatible", model: "m" }, // base required
       { role: "generation", provider: "groq", apiKey: "k".repeat(10), baseUrl: fakeBase }, // fixed endpoint
       { role: "generation", provider: "anthropic" }, // key required
@@ -280,9 +290,19 @@ describe.skipIf(!hasDb)("internal credential API", () => {
       // provider that accepted a tenant-typed base URL would be a
       // request-forgery lever wearing a vendor's name (§3.3.3).
       { role: "generation", provider: "anthropic", apiKey: "k".repeat(10), baseUrl: fakeBase },
-      { role: "generation", provider: "openai_compatible", baseUrl: fakeBase, apiKey: "k".repeat(10) }, // model required
+      {
+        role: "generation",
+        provider: "openai_compatible",
+        baseUrl: fakeBase,
+        apiKey: "k".repeat(10),
+      }, // model required
       { role: "generation", provider: "openai_compatible", baseUrl: "ftp://x/", model: "m" },
-      { role: "generation", provider: "openai_compatible", baseUrl: "http://user:pw@host/v1", model: "m" },
+      {
+        role: "generation",
+        provider: "openai_compatible",
+        baseUrl: "http://user:pw@host/v1",
+        model: "m",
+      },
     ]
     for (const body of cases) {
       const res = await post(`/internal/orgs/${orgId}/credentials`, body, SECRET)
@@ -405,22 +425,35 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     // A source to re-index. (No job yet: enqueueReindex skips sources with
     // work already queued, which is the behavior the second half asserts.)
     const sourceId = newId("src")
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: orgId, kind: "url", location: "https://docs.example.com/", crawl_depth: 0,
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: orgId,
+        kind: "url",
+        location: "https://docs.example.com/",
+        crawl_depth: 0,
+      })
+      .execute()
 
     const changed = await post(
       `/internal/orgs/${orgId}/credentials`,
       {
-        role: "embedding", provider: "openai_compatible", apiKey: "sk-embed-tenant-key-5678",
-        baseUrl: fakeBase, model: "second-embed",
+        role: "embedding",
+        provider: "openai_compatible",
+        apiKey: "sk-embed-tenant-key-5678",
+        baseUrl: fakeBase,
+        model: "second-embed",
       },
       SECRET,
     )
     expect(((await changed.json()) as ApiBody).reindexed).toBe(1)
     const queued = await db
-      .selectFrom("ingest_jobs").selectAll()
-      .where("source_id", "=", sourceId).where("state", "=", "queued").execute()
+      .selectFrom("ingest_jobs")
+      .selectAll()
+      .where("source_id", "=", sourceId)
+      .where("state", "=", "queued")
+      .execute()
     expect(queued).toHaveLength(1)
 
     // Re-pasting a rotated key for the SAME model changes nothing about the
@@ -428,14 +461,18 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     const same = await post(
       `/internal/orgs/${orgId}/credentials`,
       {
-        role: "embedding", provider: "openai_compatible", apiKey: "sk-embed-rotated-key-4321",
-        baseUrl: fakeBase, model: "second-embed",
+        role: "embedding",
+        provider: "openai_compatible",
+        apiKey: "sk-embed-rotated-key-4321",
+        baseUrl: fakeBase,
+        model: "second-embed",
       },
       SECRET,
     )
     expect(((await same.json()) as ApiBody).reindexed).toBe(0)
-    expect(await db.selectFrom("ingest_jobs").selectAll().where("source_id", "=", sourceId).execute())
-      .toHaveLength(1)
+    expect(
+      await db.selectFrom("ingest_jobs").selectAll().where("source_id", "=", sourceId).execute(),
+    ).toHaveLength(1)
   })
 
   it("re-indexes on removal too — the org reverts to the platform model", async () => {
@@ -448,7 +485,9 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     })
     expect(res.status).toBe(200)
     expect(((await res.json()) as ApiBody).reindexed).toBe(1)
-    expect(await db.selectFrom("ingest_jobs").selectAll().where("org_id", "=", orgId).execute()).toHaveLength(1)
+    expect(
+      await db.selectFrom("ingest_jobs").selectAll().where("org_id", "=", orgId).execute(),
+    ).toHaveLength(1)
 
     // A second DELETE removes nothing, so it must queue nothing.
     await db.deleteFrom("ingest_jobs").where("org_id", "=", orgId).execute()
@@ -457,7 +496,9 @@ describe.skipIf(!hasDb)("internal credential API", () => {
       headers: { "x-internal-secret": SECRET },
     })
     expect(((await again.json()) as ApiBody).reindexed).toBe(0)
-    expect(await db.selectFrom("ingest_jobs").selectAll().where("org_id", "=", orgId).execute()).toHaveLength(0)
+    expect(
+      await db.selectFrom("ingest_jobs").selectAll().where("org_id", "=", orgId).execute(),
+    ).toHaveLength(0)
   })
   //#endregion
 
@@ -466,12 +507,24 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     const userId = newId("usr")
     const outsiderId = newId("usr")
     const conversationId = newId("con")
-    await db.insertInto("users").values([
-      { id: userId, email_index: `idx_${userId}`, email_ciphertext: "x", password_hash: "x" },
-      { id: outsiderId, email_index: `idx_${outsiderId}`, email_ciphertext: "x", password_hash: "x" },
-    ]).execute()
-    await db.insertInto("org_members").values({ org_id: orgId, user_id: userId, role: "agent" }).execute()
-    await db.insertInto("conversations")
+    await db
+      .insertInto("users")
+      .values([
+        { id: userId, email_index: `idx_${userId}`, email_ciphertext: "x", password_hash: "x" },
+        {
+          id: outsiderId,
+          email_index: `idx_${outsiderId}`,
+          email_ciphertext: "x",
+          password_hash: "x",
+        },
+      ])
+      .execute()
+    await db
+      .insertInto("org_members")
+      .values({ org_id: orgId, user_id: userId, role: "agent" })
+      .execute()
+    await db
+      .insertInto("conversations")
       .values({ id: conversationId, org_id: orgId, visitor_id: "vis_ticket" })
       .execute()
 
@@ -481,9 +534,15 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     // nobody asked for help with.
     expect((await ask({ conversationId, userId })).status).toBe(404)
 
-    await db.insertInto("handoff_sessions").values({
-      id: newId("hnd"), org_id: orgId, conversation_id: conversationId, reason: "visitor_request",
-    }).execute()
+    await db
+      .insertInto("handoff_sessions")
+      .values({
+        id: newId("hnd"),
+        org_id: orgId,
+        conversation_id: conversationId,
+        reason: "visitor_request",
+      })
+      .execute()
 
     const granted = await ask({ conversationId, userId })
     expect(granted.status).toBe(200)
@@ -498,7 +557,9 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     expect((await ask({ conversationId, userId: "not-an-id" })).status).toBe(422)
     expect((await ask({ conversationId: newId("con"), userId })).status).toBe(404)
     // And the surface still refuses an unauthenticated caller.
-    expect((await post(`/internal/orgs/${orgId}/handoff-tickets`, { conversationId, userId })).status).toBe(401)
+    expect(
+      (await post(`/internal/orgs/${orgId}/handoff-tickets`, { conversationId, userId })).status,
+    ).toBe(401)
 
     await db.deleteFrom("conversations").where("id", "=", conversationId).execute()
     await db.deleteFrom("users").where("id", "in", [userId, outsiderId]).execute()
@@ -508,17 +569,35 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     const userId = newId("usr")
     const outsiderId = newId("usr")
     const conversationId = newId("con")
-    await db.insertInto("users").values([
-      { id: userId, email_index: `idx_${userId}`, email_ciphertext: "x", password_hash: "x" },
-      { id: outsiderId, email_index: `idx_${outsiderId}`, email_ciphertext: "x", password_hash: "x" },
-    ]).execute()
-    await db.insertInto("org_members").values({ org_id: orgId, user_id: userId, role: "agent" }).execute()
-    await db.insertInto("conversations")
+    await db
+      .insertInto("users")
+      .values([
+        { id: userId, email_index: `idx_${userId}`, email_ciphertext: "x", password_hash: "x" },
+        {
+          id: outsiderId,
+          email_index: `idx_${outsiderId}`,
+          email_ciphertext: "x",
+          password_hash: "x",
+        },
+      ])
+      .execute()
+    await db
+      .insertInto("org_members")
+      .values({ org_id: orgId, user_id: userId, role: "agent" })
+      .execute()
+    await db
+      .insertInto("conversations")
       .values({ id: conversationId, org_id: orgId, visitor_id: "vis_close" })
       .execute()
-    await db.insertInto("handoff_sessions").values({
-      id: newId("hnd"), org_id: orgId, conversation_id: conversationId, reason: "visitor_request",
-    }).execute()
+    await db
+      .insertInto("handoff_sessions")
+      .values({
+        id: newId("hnd"),
+        org_id: orgId,
+        conversation_id: conversationId,
+        reason: "visitor_request",
+      })
+      .execute()
 
     const close = (body: unknown, id = conversationId) =>
       post(`/internal/orgs/${orgId}/handoffs/${id}/close`, body, SECRET)
@@ -543,7 +622,9 @@ describe.skipIf(!hasDb)("internal credential API", () => {
     expect((await close({ userId: outsiderId })).status).toBe(404)
     expect((await close({ userId: "not-an-id" })).status).toBe(422)
     expect((await close({ userId }, newId("con"))).status).toBe(404)
-    expect((await post(`/internal/orgs/${orgId}/handoffs/${conversationId}/close`, { userId })).status).toBe(401)
+    expect(
+      (await post(`/internal/orgs/${orgId}/handoffs/${conversationId}/close`, { userId })).status,
+    ).toBe(401)
 
     await db.deleteFrom("conversations").where("id", "=", conversationId).execute()
     await db.deleteFrom("users").where("id", "in", [userId, outsiderId]).execute()

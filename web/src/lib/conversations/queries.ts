@@ -55,10 +55,7 @@ export interface ConversationView {
 //#endregion
 
 //#region Queries
-export async function listConversations(
-  orgId: string,
-  limit = 50,
-): Promise<ConversationSummary[]> {
+export async function listConversations(orgId: string, limit = 50): Promise<ConversationSummary[]> {
   // The (org_id, last_message_at DESC) index from §3.3.2 IS this
   // list — the schema was shaped for exactly this query.
   const conversations = await db
@@ -120,14 +117,19 @@ export async function getConversation(
     .orderBy("created_at", "asc")
     .execute()
 
-  const citations = messages.length > 0
-    ? await db
-        .selectFrom("message_citations")
-        .select(["message_id", "ord", "claim_text", "quote", "verdict", "url", "heading_path"])
-        .where("message_id", "in", messages.map((m) => m.id))
-        .orderBy("ord", "asc")
-        .execute()
-    : []
+  const citations =
+    messages.length > 0
+      ? await db
+          .selectFrom("message_citations")
+          .select(["message_id", "ord", "claim_text", "quote", "verdict", "url", "heading_path"])
+          .where(
+            "message_id",
+            "in",
+            messages.map((m) => m.id),
+          )
+          .orderBy("ord", "asc")
+          .execute()
+      : []
   const byMessage = new Map<string, CitationView[]>()
   for (const c of citations) {
     const list = byMessage.get(c.message_id) ?? []

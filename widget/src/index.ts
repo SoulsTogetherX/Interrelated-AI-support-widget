@@ -50,7 +50,9 @@ function boot(): void {
   const sessionUrl = script.dataset["sessionUrl"]
   const api = script.dataset["api"]
   if ((key === undefined && sessionUrl === undefined) || api === undefined) {
-    console.warn("[interrelated] widget needs data-api and either data-key or data-session-url on its <script> tag")
+    console.warn(
+      "[interrelated] widget needs data-api and either data-key or data-session-url on its <script> tag",
+    )
     return
   }
   // Two copies of the snippet must not produce two bubbles.
@@ -66,7 +68,7 @@ function boot(): void {
       host,
       new ApiClient({
         apiBase: api,
-        ...(sessionUrl !== undefined ? { sessionUrl } : { publishableKey: key as string }),
+        ...(sessionUrl !== undefined ? { sessionUrl } : { publishableKey: key }),
         fetchImpl: capturedFetch,
         socketFactory: capturedSocketFactory,
       }),

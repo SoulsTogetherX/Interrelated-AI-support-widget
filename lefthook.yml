@@ -1,0 +1,10 @@
+# Local guard before a push; CI is the real gate. pre-push (not pre-commit)
+# because interactive rebase replays commits and fires pre-commit hooks on
+# intermediate states never meant to pass.
+pre-push:
+  parallel: true
+  jobs:
+    - name: format
+      run: npx prettier . --check --cache
+    - name: lint
+      run: npx eslint .

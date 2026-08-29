@@ -6,7 +6,13 @@
 import { createServer } from "node:http"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { createSource, recrawlSource, removeCredential, submitCredential, uploadSource } from "../index"
+import {
+  createSource,
+  recrawlSource,
+  removeCredential,
+  submitCredential,
+  uploadSource,
+} from "../index"
 
 import type { Server } from "node:http"
 import type { IncomingMessage } from "node:http"
@@ -83,7 +89,14 @@ describe("realtime internal client", () => {
   })
 
   it("carries the embedding role's dimension and re-index count through", async () => {
-    await listen(200, { ok: true, saved: true, model: "gemini-embedding-001", latencyMs: 300, dim: 768, reindexed: 2 })
+    await listen(200, {
+      ok: true,
+      saved: true,
+      model: "gemini-embedding-001",
+      latencyMs: 300,
+      dim: 768,
+      reindexed: 2,
+    })
     const result = await submitCredential(
       "org_00000000000000000000000000000000",
       { role: "embedding", provider: "gemini", apiKey: "AIza-something" },
@@ -103,7 +116,12 @@ describe("realtime internal client", () => {
     await listen(422, { ok: false, error: "The base URL must resolve to a public address." })
     const result = await submitCredential(
       "org_00000000000000000000000000000000",
-      { role: "generation", provider: "openai_compatible", baseUrl: "http://10.0.0.1/v1", model: "m" },
+      {
+        role: "generation",
+        provider: "openai_compatible",
+        baseUrl: "http://10.0.0.1/v1",
+        model: "m",
+      },
       false,
     )
     expect(result).toEqual({
@@ -148,7 +166,10 @@ describe("realtime internal client", () => {
 
   it("POSTs a re-crawl and reads `queued` back, false being a normal answer", async () => {
     await listen(200, { ok: true, queued: false })
-    const result = await recrawlSource("org_00000000000000000000000000000000", "src_00000000000000000000000000000000")
+    const result = await recrawlSource(
+      "org_00000000000000000000000000000000",
+      "src_00000000000000000000000000000000",
+    )
     expect(result).toEqual({ ok: true, value: { queued: false } })
     expect(seen[0].method).toBe("POST")
     expect(seen[0].url).toBe(
@@ -158,7 +179,13 @@ describe("realtime internal client", () => {
   })
 
   it("POSTs an upload as raw bytes, with the name and type in headers (M7.6b)", async () => {
-    await listen(200, { ok: true, sourceId: "src_u", filename: "handbook.pdf", format: "pdf", charCount: 4210 })
+    await listen(200, {
+      ok: true,
+      sourceId: "src_u",
+      filename: "handbook.pdf",
+      format: "pdf",
+      charCount: 4210,
+    })
     const bytes = new TextEncoder().encode("%PDF-1.7 pretend").buffer
     const result = await uploadSource("org_00000000000000000000000000000000", {
       name: "handbook.pdf",
@@ -183,7 +210,13 @@ describe("realtime internal client", () => {
   })
 
   it("percent-encodes a filename a header could not otherwise carry", async () => {
-    await listen(200, { ok: true, sourceId: "src_u", filename: "café menu.pdf", format: "pdf", charCount: 12 })
+    await listen(200, {
+      ok: true,
+      sourceId: "src_u",
+      filename: "café menu.pdf",
+      format: "pdf",
+      charCount: 12,
+    })
     await uploadSource("org_00000000000000000000000000000000", {
       name: "café menu.pdf",
       type: "",

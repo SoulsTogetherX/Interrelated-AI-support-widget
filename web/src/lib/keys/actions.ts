@@ -151,8 +151,11 @@ export async function secretKeyAction(
       // 007's one-current-secret index refused a second: another owner
       // (or another tab) got there first, and the page now shows that key.
       return {
-        error: "This organization already has a secret key — the page now shows it. Rotate it if you need a new value.",
-        success: null, secretKey: null, keyId: null,
+        error:
+          "This organization already has a secret key — the page now shows it. Rotate it if you need a new value.",
+        success: null,
+        secretKey: null,
+        keyId: null,
       }
     }
     return {
@@ -169,7 +172,9 @@ export async function secretKeyAction(
   if (!result.rotated) {
     return {
       error: "That key was already rotated — the page now shows the current one.",
-      success: null, secretKey: null, keyId: null,
+      success: null,
+      secretKey: null,
+      keyId: null,
     }
   }
   return {

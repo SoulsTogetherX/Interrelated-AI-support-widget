@@ -36,13 +36,7 @@
 //#endregion
 
 //#region Imports
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-  scrypt,
-  timingSafeEqual,
-} from "node:crypto"
+import { createCipheriv, createDecipheriv, randomBytes, scrypt, timingSafeEqual } from "node:crypto"
 import { promisify } from "node:util"
 
 import type { ScryptOptions } from "node:crypto"
@@ -175,10 +169,7 @@ export function encryptEmail(normalizedEmail: string, userId: string): string {
   // ciphertext moved to another user's row fails to decrypt.
   cipher.setAAD(Buffer.from(userId, "utf8"))
 
-  const ciphertext = Buffer.concat([
-    cipher.update(normalizedEmail, "utf8"),
-    cipher.final(),
-  ])
+  const ciphertext = Buffer.concat([cipher.update(normalizedEmail, "utf8"), cipher.final()])
   const tag = cipher.getAuthTag()
 
   return [
@@ -199,11 +190,7 @@ export function decryptEmail(payload: string, userId: string): string {
   }
 
   const [, ivB64, tagB64, dataB64] = parts
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    encryptionKey(),
-    Buffer.from(ivB64, "base64"),
-  )
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(ivB64, "base64"))
   decipher.setAAD(Buffer.from(userId, "utf8"))
   decipher.setAuthTag(Buffer.from(tagB64, "base64"))
 

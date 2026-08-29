@@ -46,12 +46,23 @@ describe("injection corpus", () => {
   it("has entries with every field the seed and the probe read", () => {
     expect(entries.length).toBeGreaterThanOrEqual(8)
     for (const entry of entries) {
-      for (const field of ["id", "category", "url", "title", "heading", "legit", "injected", "question"] as const) {
+      for (const field of [
+        "id",
+        "category",
+        "url",
+        "title",
+        "heading",
+        "legit",
+        "injected",
+        "question",
+      ] as const) {
         expect(typeof entry[field], `${entry.id}.${field}`).toBe("string")
         expect(entry[field].length, `${entry.id}.${field}`).toBeGreaterThan(0)
       }
       expect(Array.isArray(entry.attackerUrls), `${entry.id}.attackerUrls`).toBe(true)
-      expect(entry.canary === null || typeof entry.canary === "string", `${entry.id}.canary`).toBe(true)
+      expect(entry.canary === null || typeof entry.canary === "string", `${entry.id}.canary`).toBe(
+        true,
+      )
     }
   })
 
@@ -66,9 +77,17 @@ describe("injection corpus", () => {
     // injection.
     for (const entry of entries) {
       if (entry.canary === null) continue
-      expect(entry.injected.includes(entry.canary), `${entry.id}: canary missing from injected`).toBe(true)
-      expect(entry.legit.includes(entry.canary), `${entry.id}: canary leaked into legit`).toBe(false)
-      expect(entry.question.includes(entry.canary), `${entry.id}: canary in the natural question`).toBe(false)
+      expect(
+        entry.injected.includes(entry.canary),
+        `${entry.id}: canary missing from injected`,
+      ).toBe(true)
+      expect(entry.legit.includes(entry.canary), `${entry.id}: canary leaked into legit`).toBe(
+        false,
+      )
+      expect(
+        entry.question.includes(entry.canary),
+        `${entry.id}: canary in the natural question`,
+      ).toBe(false)
     }
   })
 
@@ -83,8 +102,13 @@ describe("injection corpus", () => {
     // assertion is only meaningful if no legitimate page lives there.
     for (const entry of entries) {
       for (const url of entry.attackerUrls) {
-        expect(new URL(url).host, `${entry.id}: attacker URL on the corpus host`).not.toBe(new URL(entry.url).host)
-        expect(entry.injected.includes(url), `${entry.id}: attacker URL not actually in the injected text`).toBe(true)
+        expect(new URL(url).host, `${entry.id}: attacker URL on the corpus host`).not.toBe(
+          new URL(entry.url).host,
+        )
+        expect(
+          entry.injected.includes(url),
+          `${entry.id}: attacker URL not actually in the injected text`,
+        ).toBe(true)
       }
     }
   })
@@ -94,13 +118,21 @@ describe("injection corpus", () => {
     // over the cap would be refused with 400 and vanish from the run.
     for (const entry of entries) {
       const text = `${entry.legit}\n\n${entry.injected}`
-      expect(text.length, `${entry.id}: ${text.length} chars`).toBeLessThanOrEqual(MAX_QUESTION_CHARS)
+      expect(text.length, `${entry.id}: ${text.length} chars`).toBeLessThanOrEqual(
+        MAX_QUESTION_CHARS,
+      )
     }
   })
 
   it("covers the categories the probe's report groups by", () => {
     const categories = new Set(entries.map((e) => e.category))
-    for (const required of ["instruction_override", "prompt_exfiltration", "link_injection", "format_override", "data_exfiltration"]) {
+    for (const required of [
+      "instruction_override",
+      "prompt_exfiltration",
+      "link_injection",
+      "format_override",
+      "data_exfiltration",
+    ]) {
       expect(categories.has(required), `missing category ${required}`).toBe(true)
     }
   })

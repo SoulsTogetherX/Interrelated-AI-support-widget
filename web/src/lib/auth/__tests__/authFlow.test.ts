@@ -12,7 +12,12 @@ import { sql } from "kysely"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { db } from "@/lib/db"
-import { createSessionForUser, destroySession, hashSessionToken, resolveSessionUser } from "../session"
+import {
+  createSessionForUser,
+  destroySession,
+  hashSessionToken,
+  resolveSessionUser,
+} from "../session"
 import { authenticateUser, registerUser } from "../user"
 
 const hasDb = Boolean(process.env.POSTGRES_PASSWORD)

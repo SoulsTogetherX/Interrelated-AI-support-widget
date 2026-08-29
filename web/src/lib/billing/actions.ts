@@ -17,7 +17,6 @@
 import { redirect } from "next/navigation"
 
 import { isPlanId } from "@shared/billing/plans"
-import type { PlanId } from "@shared/billing/plans"
 
 import { currentUser } from "@/lib/auth/requireUser"
 import { getSubscription } from "@/lib/billing/queries"
@@ -90,7 +89,7 @@ export async function startCheckoutAction(
   const existing = await getSubscription(orgId)
   const result = await createCheckoutSession({
     orgId,
-    plan: plan as Exclude<PlanId, "free">,
+    plan: plan,
     successUrl: appUrl(`/dashboard/${orgId}/billing?checkout=done`),
     cancelUrl: appUrl(`/dashboard/${orgId}/billing?checkout=cancelled`),
     customerId: existing?.stripeCustomerId,

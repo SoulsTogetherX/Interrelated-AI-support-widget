@@ -28,7 +28,9 @@
 const args = process.argv.slice(2)
 const [baseUrl, pk, origin] = args
 if (!baseUrl || !pk || !origin) {
-  console.error("usage: node scripts/measure-ttft.mjs <baseUrl> <pk> <origin> [--n 5] [--label warm]")
+  console.error(
+    "usage: node scripts/measure-ttft.mjs <baseUrl> <pk> <origin> [--n 5] [--label warm]",
+  )
   process.exit(1)
 }
 const flag = (name, fallback) => {
@@ -50,7 +52,14 @@ async function once() {
     body: JSON.stringify({ publishableKey: pk }),
   })
   const mintMs = Date.now() - t0
-  if (!mintRes.ok) return { ok: false, stage: "mint", status: mintRes.status, detail: (await mintRes.text()).slice(0, 200), mintMs }
+  if (!mintRes.ok)
+    return {
+      ok: false,
+      stage: "mint",
+      status: mintRes.status,
+      detail: (await mintRes.text()).slice(0, 200),
+      mintMs,
+    }
   const { token } = await mintRes.json()
 
   const t1 = Date.now()
@@ -59,7 +68,14 @@ async function once() {
     headers: { "content-type": "application/json", origin, authorization: `Bearer ${token}` },
     body: JSON.stringify({ question: QUESTION }),
   })
-  if (!chatRes.ok) return { ok: false, stage: "chat", status: chatRes.status, detail: (await chatRes.text()).slice(0, 200), mintMs }
+  if (!chatRes.ok)
+    return {
+      ok: false,
+      stage: "chat",
+      status: chatRes.status,
+      detail: (await chatRes.text()).slice(0, 200),
+      mintMs,
+    }
 
   let ttftMs = null
   let kinds = []
@@ -73,11 +89,18 @@ async function once() {
       buffer = buffer.slice(nl + 1)
       if (!line.startsWith("data:")) continue
       let event
-      try { event = JSON.parse(line.slice(5).trim()) } catch { continue }
+      try {
+        event = JSON.parse(line.slice(5).trim())
+      } catch {
+        continue
+      }
       kinds.push(event.type)
       // First CONTENT event, not first byte: meta is emitted before the
       // model is called, so counting it would report the flush.
-      if (ttftMs === null && (event.type === "claim" || event.type === "refusal" || event.type === "error")) {
+      if (
+        ttftMs === null &&
+        (event.type === "claim" || event.type === "refusal" || event.type === "error")
+      ) {
         ttftMs = Date.now() - t1
       }
     }
@@ -97,7 +120,9 @@ for (let i = 1; i <= N; i++) {
   if (!r.ok) {
     console.log(`  run ${i}: FAILED at ${r.stage} (HTTP ${r.status}) ${r.detail ?? ""}`)
   } else {
-    console.log(`  run ${i}: mint ${r.mintMs} ms · ttft ${r.ttftMs} ms · total ${r.totalMs} ms · [${r.kinds.join(" ")}]`)
+    console.log(
+      `  run ${i}: mint ${r.mintMs} ms · ttft ${r.ttftMs} ms · total ${r.totalMs} ms · [${r.kinds.join(" ")}]`,
+    )
   }
   runs.push(r)
   // A pause between runs so the per-visitor token bucket is never what is

@@ -94,6 +94,7 @@ function mintHandoffTicket(
 /** Signature, then expiry, then SHAPE — payload or null, never a reason.
  *  Same stance as the session token: which check failed is not information
  *  an upgrade attempt gets to learn. */
+// eslint-disable-next-line complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function verifyHandoffTicket(
   ticket: string,
   secret: string,
@@ -121,9 +122,17 @@ function verifyHandoffTicket(
     typeof c["sub"] !== "string" ||
     typeof c["exp"] !== "number" ||
     typeof c["jti"] !== "string"
-  ) return null
+  )
+    return null
   if (c["exp"] <= now) return null
-  return { con: c["con"], org: c["org"], role: c["role"], sub: c["sub"], exp: c["exp"], jti: c["jti"] }
+  return {
+    con: c["con"],
+    org: c["org"],
+    role: c["role"],
+    sub: c["sub"],
+    exp: c["exp"],
+    jti: c["jti"],
+  }
 }
 //#endregion
 

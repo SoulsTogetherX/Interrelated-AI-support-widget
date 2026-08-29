@@ -26,9 +26,7 @@ import type { PlanId } from "@shared/billing/plans"
 //#endregion
 
 //#region Types
-export type StripeResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: string }
+export type StripeResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
 export interface StripeConfig {
   secretKey: string
@@ -132,9 +130,8 @@ async function post(
   }
   if (!res.ok) {
     const error = body.error as { message?: unknown } | undefined
-    const message = typeof error?.message === "string"
-      ? error.message
-      : `Stripe request failed (${res.status}).`
+    const message =
+      typeof error?.message === "string" ? error.message : `Stripe request failed (${res.status}).`
     return { ok: false, error: message }
   }
   return { ok: true, value: body }
@@ -202,10 +199,14 @@ export async function createPortalSession(args: {
 }): Promise<StripeResult<{ url: string }>> {
   const config = stripeConfig()
   if (!config) return { ok: false, error: NOT_CONFIGURED }
-  const result = await post("/billing_portal/sessions", {
-    customer: args.customerId,
-    return_url: args.returnUrl,
-  }, config)
+  const result = await post(
+    "/billing_portal/sessions",
+    {
+      customer: args.customerId,
+      return_url: args.returnUrl,
+    },
+    config,
+  )
   if (!result.ok) return result
   const url = result.value.url
   if (typeof url !== "string") {

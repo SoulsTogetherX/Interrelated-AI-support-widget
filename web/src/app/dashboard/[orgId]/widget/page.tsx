@@ -30,11 +30,8 @@ function widgetApiUrl(): string | null {
   return raw && raw.trim() !== "" ? raw.trim().replace(/\/$/, "") : null
 }
 
-export default async function WidgetPage({
-  params,
-}: {
-  params: Promise<{ orgId: string }>
-}) {
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
+export default async function WidgetPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params
   const { org } = await requireOrgMember(orgId)
   const [keys, secretKeys, origins, traffic] = await Promise.all([
@@ -107,16 +104,14 @@ export default async function WidgetPage({
       <section className="install-card">
         <h2 className="install-cardtitle">1. Allow your site&apos;s origin</h2>
         <p className="install-note">
-          The widget only answers for origins you list here. The browser sets
-          the <code>Origin</code> header and page JavaScript cannot forge it,
-          so a copy of your snippet on someone else&apos;s site is refused
-          before any model call — which is why the publishable key below is
-          safe to be public.
+          The widget only answers for origins you list here. The browser sets the{" "}
+          <code>Origin</code> header and page JavaScript cannot forge it, so a copy of your snippet
+          on someone else&apos;s site is refused before any model call — which is why the
+          publishable key below is safe to be public.
         </p>
         {origins.length === 0 ? (
           <p className="install-empty">
-            No origins allowed yet — the widget will refuse every request
-            until you add one.
+            No origins allowed yet — the widget will refuse every request until you add one.
           </p>
         ) : (
           <ul className="install-origins">
@@ -151,8 +146,8 @@ export default async function WidgetPage({
           <>
             {refusedOrigins.length > 0 ? (
               <p className="install-warning">
-                {refusedOrigins.length === 1 ? "One origin" : `${refusedOrigins.length} origins`} you
-                have not allowlisted presented your publishable key and{" "}
+                {refusedOrigins.length === 1 ? "One origin" : `${refusedOrigins.length} origins`}{" "}
+                you have not allowlisted presented your publishable key and{" "}
                 {refusedOrigins.length === 1 ? "was" : "were"} refused. If one is your own site,
                 allow it; if not, someone has a copy of your snippet — the allowlist is already
                 refusing it, and it never got a session.
@@ -163,14 +158,25 @@ export default async function WidgetPage({
                 <thead>
                   <tr>
                     <th scope="col">Origin</th>
-                    <th scope="col" className="install-num">Sessions</th>
-                    <th scope="col" className="install-num">Refused</th>
-                    {isOwner ? <th scope="col"><span className="install-srlabel">Action</span></th> : null}
+                    <th scope="col" className="install-num">
+                      Sessions
+                    </th>
+                    <th scope="col" className="install-num">
+                      Refused
+                    </th>
+                    {isOwner ? (
+                      <th scope="col">
+                        <span className="install-srlabel">Action</span>
+                      </th>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
                   {traffic.map((t) => (
-                    <tr key={t.origin} className={t.refused > 0 && !t.allowlisted ? "install-refused" : undefined}>
+                    <tr
+                      key={t.origin}
+                      className={t.refused > 0 && !t.allowlisted ? "install-refused" : undefined}
+                    >
                       {/* Origin and its last-seen day share a cell, and the
                           origin may wrap: four narrow columns fit a phone,
                           where five would only ever be read by scrolling. */}
@@ -199,9 +205,9 @@ export default async function WidgetPage({
               </table>
             </div>
             <p className="install-note">
-              Counted per origin per UTC day on every attempt that presented your key — sessions
-              for allowlisted origins, refusals for the rest. No visitor identity is stored:
-              an origin and a count, nothing else.
+              Counted per origin per UTC day on every attempt that presented your key — sessions for
+              allowlisted origins, refusals for the rest. No visitor identity is stored: an origin
+              and a count, nothing else.
             </p>
           </>
         )}
@@ -210,33 +216,35 @@ export default async function WidgetPage({
       <section className="install-card">
         <h2 className="install-cardtitle">2. Paste the snippet</h2>
         <p className="install-note">
-          Anywhere in your page — the script is async, ~4 KB gzipped, has no
-          dependencies, and renders inside a Shadow DOM so your styles and
-          the widget&apos;s cannot reach each other.
+          Anywhere in your page — the script is async, ~4 KB gzipped, has no dependencies, and
+          renders inside a Shadow DOM so your styles and the widget&apos;s cannot reach each other.
         </p>
         <pre className="install-snippet">{snippet}</pre>
         <CopyButton text={snippet} label="Copy snippet" />
         {api === null ? (
           <p className="install-warning">
-            This deployment has no <code>NEXT_PUBLIC_WIDGET_API_URL</code>{" "}
-            configured, so the snippet above shows a placeholder host.
-            Replace it with your realtime service URL, or set that variable
-            and reload.
+            This deployment has no <code>NEXT_PUBLIC_WIDGET_API_URL</code> configured, so the
+            snippet above shows a placeholder host. Replace it with your realtime service URL, or
+            set that variable and reload.
           </p>
         ) : null}
         {publishableKey === null ? (
           <p className="install-warning">
-            This organization has no live publishable key — unexpected;
-            contact support before installing.
+            This organization has no live publishable key — unexpected; contact support before
+            installing.
           </p>
         ) : null}
         {retiring.length > 0 ? (
           <p className="install-warning">
-            A key rotation is in progress: the snippet above carries your new
-            key. {retiring.length === 1 ? "Your previous key is" : `${retiring.length} previous keys are`}{" "}
+            A key rotation is in progress: the snippet above carries your new key.{" "}
+            {retiring.length === 1
+              ? "Your previous key is"
+              : `${retiring.length} previous keys are`}{" "}
             still accepted until{" "}
             {retiring
-              .map((k) => (k.revokedAt ? k.revokedAt.toISOString().slice(0, 16).replace("T", " ") : "—"))
+              .map((k) =>
+                k.revokedAt ? k.revokedAt.toISOString().slice(0, 16).replace("T", " ") : "—",
+              )
               .join(", ")}{" "}
             UTC — deploy this snippet before then. Manage retiring keys from the{" "}
             <Link href={`/dashboard/${org.id}`}>overview</Link>.
@@ -247,15 +255,13 @@ export default async function WidgetPage({
       <section className="install-card">
         <h2 className="install-cardtitle">3. If your site sends a CSP</h2>
         <p className="install-note">
-          Two directives, and only these two. The API host appears twice in{" "}
-          <code>connect-src</code> on purpose: once for the widget&apos;s
-          requests and once as <code>wss://</code> for the socket that carries
-          a human handoff — a CSP that lists only the <code>https://</code>{" "}
-          origin lets chat work and silently blocks the handoff. The
-          widget&apos;s styles ride <code>adoptedStyleSheets</code>, which CSP
-          does not govern, so no <code>style-src</code> entry is needed — a
-          claim we test against a fixture page whose CSP deliberately
-          withholds one.
+          Two directives, and only these two. The API host appears twice in <code>connect-src</code>{" "}
+          on purpose: once for the widget&apos;s requests and once as <code>wss://</code> for the
+          socket that carries a human handoff — a CSP that lists only the <code>https://</code>{" "}
+          origin lets chat work and silently blocks the handoff. The widget&apos;s styles ride{" "}
+          <code>adoptedStyleSheets</code>, which CSP does not govern, so no <code>style-src</code>{" "}
+          entry is needed — a claim we test against a fixture page whose CSP deliberately withholds
+          one.
         </p>
         <pre className="install-snippet">{csp}</pre>
         <CopyButton text={csp} label="Copy directives" />
@@ -272,23 +278,23 @@ export default async function WidgetPage({
         <p className="install-note">
           By default the page above proves nothing about the visitor — the widget is for anyone on
           your allowlisted site. If your users sign in, your server can mint the widget session
-          instead: it calls us with your <strong>secret key</strong> and your user&apos;s id, hands the
-          token to the page, and the page carries no publishable key at all. Only your logged-in users
-          can open a chat, and the transcript shows <em>which</em> user — an identity your server
-          asserted, which a browser cannot forge.
+          instead: it calls us with your <strong>secret key</strong> and your user&apos;s id, hands
+          the token to the page, and the page carries no publishable key at all. Only your logged-in
+          users can open a chat, and the transcript shows <em>which</em> user — an identity your
+          server asserted, which a browser cannot forge.
         </p>
         <p className="install-note">
           {currentSecret ? (
             <>
               This organization has a secret key ending in <code>…{currentSecret.suffix}</code>
-              {currentSecret.lastUsedAt ? " (in use)" : " (not used yet)"}. Rotate or revoke it from the{" "}
-              <Link href={`/dashboard/${org.id}`}>overview</Link>.
+              {currentSecret.lastUsedAt ? " (in use)" : " (not used yet)"}. Rotate or revoke it from
+              the <Link href={`/dashboard/${org.id}`}>overview</Link>.
             </>
           ) : (
             <>
               No secret key yet — {isOwner ? "generate one" : "the owner can generate one"} on the{" "}
-              <Link href={`/dashboard/${org.id}`}>overview</Link>. It is shown once and belongs in your
-              server&apos;s configuration, never in a page.
+              <Link href={`/dashboard/${org.id}`}>overview</Link>. It is shown once and belongs in
+              your server&apos;s configuration, never in a page.
             </>
           )}
         </p>
@@ -297,19 +303,20 @@ export default async function WidgetPage({
         <CopyButton text={endpointRecipe} label="Copy endpoint recipe" />
         <p className="install-note">
           A 403 with <code>origin not allowed</code> means the origin your server named is not
-          allowlisted in section 1 — the attempt shows up in the table there with an Allow button. The
-          token lasts 30 minutes; the widget calls your endpoint again on its own when it expires, so
-          the endpoint should not be cacheable and should keep answering while the user is signed in.
+          allowlisted in section 1 — the attempt shows up in the table there with an Allow button.
+          The token lasts 30 minutes; the widget calls your endpoint again on its own when it
+          expires, so the endpoint should not be cacheable and should keep answering while the user
+          is signed in.
         </p>
         <h3 className="install-subtitle">b. The snippet, without a publishable key</h3>
         <pre className="install-snippet">{strongSnippet}</pre>
         <CopyButton text={strongSnippet} label="Copy strong-mode snippet" />
         <p className="install-note">
-          <code>data-session-url</code> replaces <code>data-key</code>: the widget fetches its session
-          from that URL on your site (same-origin, with the user&apos;s cookies) instead of minting one
-          with a publishable key. Signed-out users get whatever your endpoint answers them — a 401
-          renders as the widget being unable to start, so most sites simply omit the snippet on pages
-          that do not require sign-in.
+          <code>data-session-url</code> replaces <code>data-key</code>: the widget fetches its
+          session from that URL on your site (same-origin, with the user&apos;s cookies) instead of
+          minting one with a publishable key. Signed-out users get whatever your endpoint answers
+          them — a 401 renders as the widget being unable to start, so most sites simply omit the
+          snippet on pages that do not require sign-in.
         </p>
       </section>
 

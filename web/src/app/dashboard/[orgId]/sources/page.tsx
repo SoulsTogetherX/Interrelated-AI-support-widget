@@ -64,11 +64,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default async function SourcesPage({
-  params,
-}: {
-  params: Promise<{ orgId: string }>
-}) {
+export default async function SourcesPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params
   const { org } = await requireOrgMember(orgId)
   const sources = await listSourcesWithProgress(org.id)
@@ -88,16 +84,15 @@ export default async function SourcesPage({
       </nav>
       <h1 className="sources-title">Documentation sources</h1>
       <p className="sources-intro">
-        Point Interrelated at your documentation. Crawling stays on your
-        site&apos;s public pages (same-origin, private addresses refused),
-        honors the site&apos;s <code>robots.txt</code>, re-crawls skip
-        unchanged pages, and every indexed page becomes citable by the
-        widget. Pages a crawl left out are listed under it with the reason.
+        Point Interrelated at your documentation. Crawling stays on your site&apos;s public pages
+        (same-origin, private addresses refused), honors the site&apos;s <code>robots.txt</code>,
+        re-crawls skip unchanged pages, and every indexed page becomes citable by the widget. Pages
+        a crawl left out are listed under it with the reason.
       </p>
 
       <p className="sources-quota">
-        {sources.length} of {plan.sources} {plan.sources === 1 ? "source" : "sources"} on
-        the {plan.name} plan
+        {sources.length} of {plan.sources} {plan.sources === 1 ? "source" : "sources"} on the{" "}
+        {plan.name} plan
         {atLimit
           ? " — the plan is full. Delete a source below or upgrade to connect another."
           : "."}
@@ -113,12 +108,11 @@ export default async function SourcesPage({
         <section className="sources-card">
           <h2 className="sources-subtitle">Or upload a file</h2>
           <p className="sources-note">
-            PDF, Markdown, HTML or plain text, up to 10 MB — for the handbook
-            or policy that is not on a public page. The file is read when you
-            upload it and is <strong>not stored</strong>: what we keep is the
-            text extracted from it, which is what gets indexed and cited. A
-            scanned PDF has no text to extract and is refused rather than
-            indexed as an empty document.
+            PDF, Markdown, HTML or plain text, up to 10 MB — for the handbook or policy that is not
+            on a public page. The file is read when you upload it and is <strong>not stored</strong>
+            : what we keep is the text extracted from it, which is what gets indexed and cited. A
+            scanned PDF has no text to extract and is refused rather than indexed as an empty
+            document.
           </p>
           <UploadSourceForm orgId={org.id} />
         </section>
@@ -126,11 +120,10 @@ export default async function SourcesPage({
 
       <section className="sources-card">
         {sources.length === 0 ? (
-          <p className="sources-empty">
-            No sources yet{isOwner ? " — connect one above" : ""}.
-          </p>
+          <p className="sources-empty">No sources yet{isOwner ? " — connect one above" : ""}.</p>
         ) : (
           <ul className="sources-list">
+            {/* eslint-disable-next-line complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches */}
             {sources.map((s) => {
               const skipped = s.job?.skippedPages ?? []
               const skippedCount = s.job?.skippedCount ?? 0
@@ -182,7 +175,8 @@ export default async function SourcesPage({
                   {skippedCount > 0 ? (
                     <details className="sources-skipped">
                       <summary>
-                        {skippedCount === 1 ? "1 page skipped" : `${skippedCount} pages skipped`} — why
+                        {skippedCount === 1 ? "1 page skipped" : `${skippedCount} pages skipped`} —
+                        why
                       </summary>
                       <ul className="sources-skipped-list">
                         {skipped.map((p) => (
@@ -192,7 +186,8 @@ export default async function SourcesPage({
                         ))}
                         {skippedCount > skipped.length ? (
                           <li className="sources-skipped-more">
-                            …and {skippedCount - skipped.length} more not listed (the first {skipped.length} are kept).
+                            …and {skippedCount - skipped.length} more not listed (the first{" "}
+                            {skipped.length} are kept).
                           </li>
                         ) : null}
                       </ul>

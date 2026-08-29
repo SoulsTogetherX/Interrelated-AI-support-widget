@@ -29,9 +29,7 @@ interface AnswerPayload {
   claims: Claim[]
 }
 
-type ParseResult =
-  | { ok: true; payload: AnswerPayload }
-  | { ok: false; errors: string[] }
+type ParseResult = { ok: true; payload: AnswerPayload } | { ok: false; errors: string[] }
 //#endregion
 
 //#region Constants
@@ -95,14 +93,17 @@ function isNonBlankString(value: unknown): value is string {
  */
 function parseAnswerPayload(value: unknown): ParseResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { ok: false, errors: ["root: expected an object with a \"claims\" array"] }
+    return { ok: false, errors: ['root: expected an object with a "claims" array'] }
   }
   const claims = (value as Record<string, unknown>)["claims"]
   if (!Array.isArray(claims)) {
     return { ok: false, errors: ["claims: expected an array"] }
   }
   if (claims.length > MAX_CLAIMS) {
-    return { ok: false, errors: [`claims: at most ${MAX_CLAIMS} claims allowed, got ${claims.length}`] }
+    return {
+      ok: false,
+      errors: [`claims: at most ${MAX_CLAIMS} claims allowed, got ${claims.length}`],
+    }
   }
 
   const errors: string[] = []

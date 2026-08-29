@@ -89,6 +89,7 @@ class GeminiProvider implements LLMProvider {
     this.#baseUrl = (options.baseUrl ?? GEMINI_BASE_URL).replace(/\/$/, "")
   }
 
+  // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     // Gemini splits roles differently: system text is a dedicated
     // systemInstruction field, and the turn list uses "model" where the
@@ -100,7 +101,10 @@ class GeminiProvider implements LLMProvider {
       .join("\n\n")
     const contents = request.messages
       .filter((m) => m.role !== "system")
-      .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }))
+      .map((m) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }))
 
     const generationConfig = {
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
@@ -140,7 +144,8 @@ class GeminiProvider implements LLMProvider {
         chunk = JSON.parse(data) as GeminiStreamChunk
       } catch {
         throw new LLMHttpError({
-          provider: "gemini", status: 200,
+          provider: "gemini",
+          status: 200,
           detail: `stream carried a non-JSON data line: ${data.slice(0, 120)}`,
         })
       }
@@ -154,7 +159,11 @@ class GeminiProvider implements LLMProvider {
         finishReason = reason === "STOP" ? "stop" : reason === "MAX_TOKENS" ? "length" : "other"
       }
       const meta = chunk.usageMetadata
-      if (meta && typeof meta.promptTokenCount === "number" && typeof meta.candidatesTokenCount === "number") {
+      if (
+        meta &&
+        typeof meta.promptTokenCount === "number" &&
+        typeof meta.candidatesTokenCount === "number"
+      ) {
         // Thinking tokens are BILLED as output and reported separately, so
         // they are added rather than ignored: a cost metric that counted only
         // the visible answer would under-report every reasoning model, and

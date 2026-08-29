@@ -82,13 +82,15 @@ async function recordAnswer(
       input_tokens: entry.usage?.inputTokens ?? 0,
       output_tokens: entry.usage?.outputTokens ?? 0,
     })
-    .onConflict((oc) => oc.columns(["org_id", "day"]).doUpdateSet({
-      answers: sql`usage_daily.answers + excluded.answers`,
-      refusals: sql`usage_daily.refusals + excluded.refusals`,
-      input_tokens: sql`usage_daily.input_tokens + excluded.input_tokens`,
-      output_tokens: sql`usage_daily.output_tokens + excluded.output_tokens`,
-      updated_at: sql`NOW()`,
-    }))
+    .onConflict((oc) =>
+      oc.columns(["org_id", "day"]).doUpdateSet({
+        answers: sql`usage_daily.answers + excluded.answers`,
+        refusals: sql`usage_daily.refusals + excluded.refusals`,
+        input_tokens: sql`usage_daily.input_tokens + excluded.input_tokens`,
+        output_tokens: sql`usage_daily.output_tokens + excluded.output_tokens`,
+        updated_at: sql`NOW()`,
+      }),
+    )
     .execute()
 }
 
@@ -96,10 +98,7 @@ async function recordAnswer(
  *  created (§3.23) — an idempotent re-request returns the first handoff and
  *  must add nothing, or one visitor's impatience inflates the escalation
  *  rate the deflection metric is measured against. */
-async function recordEscalation(
-  db: DbOrTrx,
-  entry: { orgId: string; now?: Date },
-): Promise<void> {
+async function recordEscalation(db: DbOrTrx, entry: { orgId: string; now?: Date }): Promise<void> {
   await db
     .insertInto("usage_daily")
     .values({
@@ -111,10 +110,12 @@ async function recordEscalation(
       input_tokens: 0,
       output_tokens: 0,
     })
-    .onConflict((oc) => oc.columns(["org_id", "day"]).doUpdateSet({
-      escalations: sql`usage_daily.escalations + excluded.escalations`,
-      updated_at: sql`NOW()`,
-    }))
+    .onConflict((oc) =>
+      oc.columns(["org_id", "day"]).doUpdateSet({
+        escalations: sql`usage_daily.escalations + excluded.escalations`,
+        updated_at: sql`NOW()`,
+      }),
+    )
     .execute()
 }
 
@@ -137,11 +138,7 @@ async function recordEscalation(
  * immediately after — and the caller wraps it so an instrumentation failure
  * can never replace the error the visitor's request actually produced.
  */
-async function recordSchemaFailure(
-  db: DbOrTrx,
-  orgId: string,
-  now?: Date,
-): Promise<void> {
+async function recordSchemaFailure(db: DbOrTrx, orgId: string, now?: Date): Promise<void> {
   await db
     .insertInto("usage_daily")
     .values({
@@ -154,10 +151,12 @@ async function recordSchemaFailure(
       input_tokens: 0,
       output_tokens: 0,
     })
-    .onConflict((oc) => oc.columns(["org_id", "day"]).doUpdateSet({
-      schema_failures: sql`usage_daily.schema_failures + excluded.schema_failures`,
-      updated_at: sql`NOW()`,
-    }))
+    .onConflict((oc) =>
+      oc.columns(["org_id", "day"]).doUpdateSet({
+        schema_failures: sql`usage_daily.schema_failures + excluded.schema_failures`,
+        updated_at: sql`NOW()`,
+      }),
+    )
     .execute()
 }
 //#endregion
@@ -190,18 +189,19 @@ async function getDailyQuota(
 ): Promise<DailyQuota | null> {
   const row = await db
     .selectFrom("organizations")
-    .leftJoin("usage_daily", (join) => join
-      .onRef("usage_daily.org_id", "=", "organizations.id")
-      .on("usage_daily.day", "=", utcDay(options.now)))
+    .leftJoin("usage_daily", (join) =>
+      join
+        .onRef("usage_daily.org_id", "=", "organizations.id")
+        .on("usage_daily.day", "=", utcDay(options.now)),
+    )
     .select(["organizations.plan as plan", "usage_daily.answers as answers"])
     .where("organizations.id", "=", orgId)
     .executeTakeFirst()
   if (!row) return null
 
   const planLimit = planFor(row.plan).dailyAnswers
-  const limit = options.overrideLimit === undefined
-    ? planLimit
-    : Math.min(planLimit, options.overrideLimit)
+  const limit =
+    options.overrideLimit === undefined ? planLimit : Math.min(planLimit, options.overrideLimit)
   const answersToday = Number(row.answers ?? 0)
   return { plan: row.plan, answersToday, limit, exceeded: answersToday >= limit }
 }

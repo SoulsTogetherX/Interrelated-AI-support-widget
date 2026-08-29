@@ -118,7 +118,8 @@ class AnswerSchemaError extends Error {
  *  the gate declining BEFORE the model ran (refused = true);
  *  NOTHING_VERIFIED_TEXT is the model answering and verification stripping
  *  everything (refused = false, strip rate 100%). */
-const REFUSAL_TEXT = "I don't have enough information in the documentation to answer that confidently."
+const REFUSAL_TEXT =
+  "I don't have enough information in the documentation to answer that confidently."
 const NOTHING_VERIFIED_TEXT = "I couldn't verify an answer to that from the documentation."
 
 /** Cap on generated tokens. Answers are a handful of claims (~50–100 tokens
@@ -198,6 +199,7 @@ function addUsage(a: LLMUsage | null, b: LLMUsage | null): LLMUsage | null {
 //#endregion
 
 //#region Pipeline
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerResult> {
   const { db, embedder, llm, orgId, question } = options
   const emit = options.onEvent ?? (() => {})
@@ -209,7 +211,8 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   // Only the signal is consulted after generation, so a deadline can never
   // kill an answer that already arrived — the persist step runs to the end.
   const deadline = AbortSignal.timeout(options.deadlineMs ?? DEFAULT_ANSWER_DEADLINE_MS)
-  const signal = options.signal !== undefined ? AbortSignal.any([options.signal, deadline]) : deadline
+  const signal =
+    options.signal !== undefined ? AbortSignal.any([options.signal, deadline]) : deadline
   // One hooks object for every provider call in this pipeline, so the
   // visitor's abort reaches the backoff as well as the request: a closed tab
   // must stop a WAIT just as surely as it stops a generation.
@@ -228,14 +231,18 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   // — the session token binds the visitor id precisely so this holds.
   let conversationId = options.conversationId
   if (conversationId !== undefined) {
-    const existing = await db.selectFrom("conversations")
-      .select(["id"]).where("id", "=", conversationId).where("org_id", "=", orgId)
+    const existing = await db
+      .selectFrom("conversations")
+      .select(["id"])
+      .where("id", "=", conversationId)
+      .where("org_id", "=", orgId)
       .where("visitor_id", "=", options.visitorId)
       .executeTakeFirst()
     if (!existing) throw new Error("conversation not found for this organization")
   } else {
     conversationId = newId("con")
-    await db.insertInto("conversations")
+    await db
+      .insertInto("conversations")
       .values({ id: conversationId, org_id: orgId, visitor_id: options.visitorId })
       .execute()
   }
@@ -245,14 +252,18 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   // recency bump rides along here (not only with the answer) so a thread
   // whose answer FAILED still surfaces at the top of the dashboard list —
   // that is precisely the conversation a human should look at.
-  await db.insertInto("messages").values({
-    id: newId("msg"),
-    conversation_id: conversationId,
-    org_id: orgId,
-    role: "visitor",
-    content: question,
-  }).execute()
-  await db.updateTable("conversations")
+  await db
+    .insertInto("messages")
+    .values({
+      id: newId("msg"),
+      conversation_id: conversationId,
+      org_id: orgId,
+      role: "visitor",
+      content: question,
+    })
+    .execute()
+  await db
+    .updateTable("conversations")
     .set({ last_message_at: new Date() })
     .where("id", "=", conversationId)
     .execute()
@@ -303,7 +314,7 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
   const retrieved = await hybridSearch(db, {
     orgId,
     queryText: question,
-    queryVector: queryVector!,
+    queryVector: queryVector,
     model: embedder.model,
     ...(options.k !== undefined ? { k: options.k } : {}),
   })
@@ -315,30 +326,49 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     // ran — zero tokens is the point of gating before the call.
     const totalMs = Date.now() - startedAt
     await persistAssistantMessage(db, {
-      messageId, conversationId, orgId,
-      content: REFUSAL_TEXT, model: null, refused: true,
+      messageId,
+      conversationId,
+      orgId,
+      content: REFUSAL_TEXT,
+      model: null,
+      refused: true,
       // No model ran, so there is no usage to report — null, not zero, and
       // the distinction is load-bearing for cost: refusals are excluded
       // from the per-answer average rather than dragging it toward free.
-      retrievalScore: gate.signal, ttftMs: null, totalMs, usage: null,
+      retrievalScore: gate.signal,
+      ttftMs: null,
+      totalMs,
+      usage: null,
       // No model ran, so there is no contract to have broken — NULL, not 0,
       // for the same reason usage is (migration 010).
       schemaViolations: null,
-      citations: [], retrieved,
+      citations: [],
+      retrieved,
     })
     emit({ type: "refusal", text: REFUSAL_TEXT })
     emit({ type: "done", claimsTotal: 0, claimsShown: 0 })
     return {
-      conversationId, messageId, refused: true,
-      content: REFUSAL_TEXT, claims: [], ttftMs: null, totalMs, usage: null,
+      conversationId,
+      messageId,
+      refused: true,
+      content: REFUSAL_TEXT,
+      claims: [],
+      ttftMs: null,
+      totalMs,
+      usage: null,
     }
   }
 
   // ── Generate, parse, one retry ───────────────────────────────────────────
-  const persona = await db.selectFrom("organizations")
-    .select("system_persona").where("id", "=", orgId).executeTakeFirstOrThrow()
+  const persona = await db
+    .selectFrom("organizations")
+    .select("system_persona")
+    .where("id", "=", orgId)
+    .executeTakeFirstOrThrow()
   const messages = buildAnswerMessages({
-    question, retrieved, persona: persona.system_persona,
+    question,
+    retrieved,
+    persona: persona.system_persona,
   })
   const baseRequest = {
     temperature: 0,
@@ -460,16 +490,24 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     retrieved.map((chunk) => ({ id: chunk.chunkId, text: chunk.text })),
   )
   const shown = displayableClaims(verified)
-  const content = shown.length > 0
-    ? shown.map((claim) => claim.text).join("\n\n")
-    : NOTHING_VERIFIED_TEXT
+  const content =
+    shown.length > 0 ? shown.map((claim) => claim.text).join("\n\n") : NOTHING_VERIFIED_TEXT
 
   const totalMs = Date.now() - startedAt
   await persistAssistantMessage(db, {
-    messageId, conversationId, orgId,
-    content, model: answeredBy.model, refused: false,
-    retrievalScore: gate.signal, ttftMs, totalMs, usage, schemaViolations,
-    citations: verified, retrieved,
+    messageId,
+    conversationId,
+    orgId,
+    content,
+    model: answeredBy.model,
+    refused: false,
+    retrievalScore: gate.signal,
+    ttftMs,
+    totalMs,
+    usage,
+    schemaViolations,
+    citations: verified,
+    retrieved,
   })
 
   if (shown.length === 0) {
@@ -479,16 +517,25 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
     shown.forEach((claim, ord) => {
       const source = retrievedById.get(claim.chunkId)
       emit({
-        type: "claim", ord, text: claim.text,
-        url: source?.url ?? null, headingPath: source?.headingPath ?? null,
+        type: "claim",
+        ord,
+        text: claim.text,
+        url: source?.url ?? null,
+        headingPath: source?.headingPath ?? null,
       })
     })
   }
   emit({ type: "done", claimsTotal: verified.length, claimsShown: shown.length })
 
   return {
-    conversationId, messageId, refused: false,
-    content, claims: verified, ttftMs, totalMs, usage,
+    conversationId,
+    messageId,
+    refused: false,
+    content,
+    claims: verified,
+    ttftMs,
+    totalMs,
+    usage,
   }
 }
 
@@ -499,64 +546,74 @@ async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerRes
  *  are the audit trail that makes the answer trustworthy — and so the
  *  counter the next question's quota check reads can never disagree with
  *  the rows it counts. */
-async function persistAssistantMessage(db: Kysely<Database>, row: {
-  messageId: string
-  conversationId: string
-  orgId: string
-  content: string
-  model: string | null
-  refused: boolean
-  retrievalScore: number | null
-  ttftMs: number | null
-  totalMs: number
-  usage: LLMUsage | null
-  schemaViolations: number | null
-  citations: readonly VerifiedClaim[]
-  retrieved: readonly RetrievedChunk[]
-}): Promise<void> {
+async function persistAssistantMessage(
+  db: Kysely<Database>,
+  row: {
+    messageId: string
+    conversationId: string
+    orgId: string
+    content: string
+    model: string | null
+    refused: boolean
+    retrievalScore: number | null
+    ttftMs: number | null
+    totalMs: number
+    usage: LLMUsage | null
+    schemaViolations: number | null
+    citations: readonly VerifiedClaim[]
+    retrieved: readonly RetrievedChunk[]
+  },
+): Promise<void> {
   const retrievedById = new Map(row.retrieved.map((chunk) => [chunk.chunkId, chunk]))
   await db.transaction().execute(async (trx) => {
-    await trx.insertInto("messages").values({
-      id: row.messageId,
-      conversation_id: row.conversationId,
-      org_id: row.orgId,
-      role: "assistant",
-      content: row.content,
-      model: row.model,
-      refused: row.refused,
-      retrieval_score: row.retrievalScore,
-      ttft_ms: row.ttftMs,
-      total_ms: row.totalMs,
-      input_tokens: row.usage?.inputTokens ?? null,
-      output_tokens: row.usage?.outputTokens ?? null,
-      schema_violations: row.schemaViolations,
-    }).execute()
+    await trx
+      .insertInto("messages")
+      .values({
+        id: row.messageId,
+        conversation_id: row.conversationId,
+        org_id: row.orgId,
+        role: "assistant",
+        content: row.content,
+        model: row.model,
+        refused: row.refused,
+        retrieval_score: row.retrievalScore,
+        ttft_ms: row.ttftMs,
+        total_ms: row.totalMs,
+        input_tokens: row.usage?.inputTokens ?? null,
+        output_tokens: row.usage?.outputTokens ?? null,
+        schema_violations: row.schemaViolations,
+      })
+      .execute()
 
     if (row.citations.length > 0) {
-      await trx.insertInto("message_citations").values(
-        row.citations.map((entry, ord) => {
-          const source = retrievedById.get(entry.claim.chunkId)
-          const verifiedSpan = entry.verdict.status === "verified" ? entry.verdict : null
-          return {
-            message_id: row.messageId,
-            ord,
-            chunk_id: entry.claim.chunkId,
-            claim_text: entry.claim.text,
-            quote: entry.claim.quote,
-            verdict: entry.verdict.status,
-            span_start: verifiedSpan ? verifiedSpan.start : null,
-            span_end: verifiedSpan ? verifiedSpan.end : null,
-            // Snapshots — the citation must outlive the chunk (§3.3.2).
-            // unknown_chunk claims have no source to snapshot; nulls are
-            // the honest value.
-            url: source?.url ?? null,
-            heading_path: source?.headingPath ?? null,
-          }
-        }),
-      ).execute()
+      await trx
+        .insertInto("message_citations")
+        .values(
+          row.citations.map((entry, ord) => {
+            const source = retrievedById.get(entry.claim.chunkId)
+            const verifiedSpan = entry.verdict.status === "verified" ? entry.verdict : null
+            return {
+              message_id: row.messageId,
+              ord,
+              chunk_id: entry.claim.chunkId,
+              claim_text: entry.claim.text,
+              quote: entry.claim.quote,
+              verdict: entry.verdict.status,
+              span_start: verifiedSpan ? verifiedSpan.start : null,
+              span_end: verifiedSpan ? verifiedSpan.end : null,
+              // Snapshots — the citation must outlive the chunk (§3.3.2).
+              // unknown_chunk claims have no source to snapshot; nulls are
+              // the honest value.
+              url: source?.url ?? null,
+              heading_path: source?.headingPath ?? null,
+            }
+          }),
+        )
+        .execute()
     }
 
-    await trx.updateTable("conversations")
+    await trx
+      .updateTable("conversations")
       .set({ last_message_at: new Date() })
       .where("id", "=", row.conversationId)
       .execute()
@@ -575,6 +632,12 @@ async function persistAssistantMessage(db: Kysely<Database>, row: {
 //#endregion
 
 //#region Exports
-export { answerQuestion, AnswerSchemaError, REFUSAL_TEXT, NOTHING_VERIFIED_TEXT, DEFAULT_ANSWER_DEADLINE_MS }
+export {
+  answerQuestion,
+  AnswerSchemaError,
+  REFUSAL_TEXT,
+  NOTHING_VERIFIED_TEXT,
+  DEFAULT_ANSWER_DEADLINE_MS,
+}
 export type { AnswerPipelineOptions, AnswerResult }
 //#endregion

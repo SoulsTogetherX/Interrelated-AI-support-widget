@@ -77,7 +77,11 @@ export async function listOpenHandoffs(orgId: string, limit = 50): Promise<Waiti
   const messages = await db
     .selectFrom("messages")
     .select(["conversation_id", "content", "created_at"])
-    .where("conversation_id", "in", handoffs.map((h) => h.conversation_id))
+    .where(
+      "conversation_id",
+      "in",
+      handoffs.map((h) => h.conversation_id),
+    )
     .orderBy("created_at", "desc")
     .execute()
   const newest = new Map<string, string>()

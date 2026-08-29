@@ -31,7 +31,7 @@ export default function CopyButton({ text, label = "Copy" }: { text: string; lab
   }
 
   return (
-    <button className="copybtn" type="button" onClick={copy}>
+    <button className="copybtn" type="button" onClick={() => void copy()}>
       {status === "copied" ? "Copied" : status === "failed" ? "Copy failed — select it" : label}
     </button>
   )

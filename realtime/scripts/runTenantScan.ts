@@ -62,8 +62,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -72,7 +72,9 @@ if (!process.env.POSTGRES_PASSWORD) {
 }
 
 if (!process.env.POSTGRES_PASSWORD) {
-  console.error("tenant-scan needs a database: set POSTGRES_PASSWORD (or fill .env) and start the compose database.")
+  console.error(
+    "tenant-scan needs a database: set POSTGRES_PASSWORD (or fill .env) and start the compose database.",
+  )
   process.exit(1)
 }
 //#endregion
@@ -185,7 +187,10 @@ async function main(): Promise<void> {
         ORDER BY embedding <=> ${toPgvector(padVector([...queryVector]))}::halfvec(1024)
         LIMIT ${K}
       `.execute(conn)
-      return explain.rows.map((r) => r["QUERY PLAN"]).join(" ").includes("hnsw")
+      return explain.rows
+        .map((r) => r["QUERY PLAN"])
+        .join(" ")
+        .includes("hnsw")
     }
 
     const rows: Array<{ tenants: number; on: ScanSummary; off: ScanSummary; hnsw: boolean }> = []
@@ -199,21 +204,36 @@ async function main(): Promise<void> {
       for (let t = 0; t < tenants; t++) {
         const orgId = newId("org")
         createdOrgs.push(orgId)
-        await db.insertInto("organizations").values({ id: orgId, name: `Scan Tenant ${t}` }).execute()
+        await db
+          .insertInto("organizations")
+          .values({ id: orgId, name: `Scan Tenant ${t}` })
+          .execute()
         const sourceId = newId("src")
-        await db.insertInto("sources").values({
-          id: sourceId, org_id: orgId, kind: "url", location: `https://tenant-${t}.example`,
-        }).execute()
+        await db
+          .insertInto("sources")
+          .values({
+            id: sourceId,
+            org_id: orgId,
+            kind: "url",
+            location: `https://tenant-${t}.example`,
+          })
+          .execute()
         const documentId = newId("doc")
-        await db.insertInto("documents").values({
-          id: documentId, org_id: orgId, source_id: sourceId,
-          url: `https://tenant-${t}.example/docs`, title: `Tenant ${t}`,
-          // A real sha256 hex: the column CHECKs char_length = 64, because a
-          // content hash that is not one would break the recrawl
-          // short-circuit that compares them (§3.10.5). The harness has no
-          // recrawl, but the schema is the schema.
-          content_hash: createHash("sha256").update(orgId).digest("hex"),
-        }).execute()
+        await db
+          .insertInto("documents")
+          .values({
+            id: documentId,
+            org_id: orgId,
+            source_id: sourceId,
+            url: `https://tenant-${t}.example/docs`,
+            title: `Tenant ${t}`,
+            // A real sha256 hex: the column CHECKs char_length = 64, because a
+            // content hash that is not one would break the recrawl
+            // short-circuit that compares them (§3.10.5). The harness has no
+            // recrawl, but the schema is the schema.
+            content_hash: createHash("sha256").update(orgId).digest("hex"),
+          })
+          .execute()
 
         const texts = Array.from(
           { length: CHUNKS_PER_TENANT },
@@ -224,14 +244,29 @@ async function main(): Promise<void> {
         for (let j = 0; j < texts.length; j++) {
           const chunkId = newId("chk")
           ids.add(chunkId)
-          await db.insertInto("chunks").values({
-            id: chunkId, document_id: documentId, org_id: orgId, ord: j,
-            text: texts[j] as string, token_count: 12, char_start: 0, char_end: (texts[j] as string).length,
-          }).execute()
-          await db.insertInto("chunk_embeddings").values({
-            chunk_id: chunkId, org_id: orgId, model: embedder.model, dim: embedder.dim,
-            embedding: toPgvector(padVector(vectors[j] as number[])),
-          }).execute()
+          await db
+            .insertInto("chunks")
+            .values({
+              id: chunkId,
+              document_id: documentId,
+              org_id: orgId,
+              ord: j,
+              text: texts[j],
+              token_count: 12,
+              char_start: 0,
+              char_end: texts[j].length,
+            })
+            .execute()
+          await db
+            .insertInto("chunk_embeddings")
+            .values({
+              chunk_id: chunkId,
+              org_id: orgId,
+              model: embedder.model,
+              dim: embedder.dim,
+              embedding: toPgvector(padVector(vectors[j])),
+            })
+            .execute()
         }
         tenantChunks.set(orgId, ids)
       }
@@ -246,8 +281,12 @@ async function main(): Promise<void> {
         for (const [orgId, ownIds] of tenantChunks) {
           const startedAt = Date.now()
           const hits = await denseSearch(conn, {
-            orgId, model: embedder.model, queryVector: queryVector as number[],
-            k: K, efSearch: EF_SEARCH, iterativeScan,
+            orgId,
+            model: embedder.model,
+            queryVector: queryVector,
+            k: K,
+            efSearch: EF_SEARCH,
+            iterativeScan,
           })
           const latencyMs = Date.now() - startedAt
           // A foreign row would be a filtering bug, not starvation. Loudly,
@@ -255,7 +294,9 @@ async function main(): Promise<void> {
           // healthy-looking number.
           for (const hit of hits) {
             if (!ownIds.has(hit.chunkId)) {
-              throw new Error(`tenant ${orgId} received foreign chunk ${hit.chunkId} — filtering is broken`)
+              throw new Error(
+                `tenant ${orgId} received foreign chunk ${hit.chunkId} — filtering is broken`,
+              )
             }
           }
           outcomes.push({ orgId, returned: hits.length, latencyMs })
@@ -265,29 +306,31 @@ async function main(): Promise<void> {
 
       // Relaxed order first: if the index is healthy it should satisfy every
       // tenant, which is the control for the "off" run that follows.
-      const hnsw = await usesHnsw(queryVector as number[])
+      const hnsw = await usesHnsw(queryVector)
       const on = await measure("relaxed_order")
       const off = await measure("off")
       rows.push({ tenants, on, off, hnsw })
 
       console.log(
         `  ${String(tenants).padStart(3)} tenants  ` +
-        `(${tenants * CHUNKS_PER_TENANT} vectors)  ` +
-        `on: ${on.starved}/${tenants} starved, recall ${(on.recall * 100).toFixed(1)}%  |  ` +
-        `off: ${off.starved}/${tenants} starved, recall ${(off.recall * 100).toFixed(1)}%` +
-        (hnsw ? "" : "   [NOT HNSW — unmeasured]"),
+          `(${tenants * CHUNKS_PER_TENANT} vectors)  ` +
+          `on: ${on.starved}/${tenants} starved, recall ${(on.recall * 100).toFixed(1)}%  |  ` +
+          `off: ${off.starved}/${tenants} starved, recall ${(off.recall * 100).toFixed(1)}%` +
+          (hnsw ? "" : "   [NOT HNSW — unmeasured]"),
       )
     }
 
     // The table, in the shape eval/RESULTS.md publishes it.
-    console.log("\n| tenants | vectors | plan | starved (on) | recall (on) | starved (off) | recall (off) | p50 on | p50 off |")
+    console.log(
+      "\n| tenants | vectors | plan | starved (on) | recall (on) | starved (off) | recall (off) | p50 on | p50 off |",
+    )
     console.log("|---|---|---|---|---|---|---|---|---|")
     for (const { tenants, on, off, hnsw } of rows) {
       console.log(
         `| ${tenants} | ${tenants * CHUNKS_PER_TENANT} | ${hnsw ? "HNSW" : "exact (unmeasured)"} | ` +
-        `${on.starved}/${tenants} | ${(on.recall * 100).toFixed(1)}% | ` +
-        `${off.starved}/${tenants} | ${(off.recall * 100).toFixed(1)}% | ` +
-        `${on.latencyP50Ms} ms | ${off.latencyP50Ms} ms |`,
+          `${on.starved}/${tenants} | ${(on.recall * 100).toFixed(1)}% | ` +
+          `${off.starved}/${tenants} | ${(off.recall * 100).toFixed(1)}% | ` +
+          `${on.latencyP50Ms} ms | ${off.latencyP50Ms} ms |`,
       )
     }
 
@@ -297,8 +340,8 @@ async function main(): Promise<void> {
     if (skipped > 0) {
       console.log(
         `\n${skipped} of ${rows.length} sweep points did not run on the HNSW index and are ` +
-        "reported as unmeasured: an exact plan sorts every matching row, so it cannot starve, " +
-        "and publishing its 100% as a finding would say iterative scans are unnecessary.",
+          "reported as unmeasured: an exact plan sorts every matching row, so it cannot starve, " +
+          "and publishing its 100% as a finding would say iterative scans are unnecessary.",
       )
     }
     // The WORST measured point, not the last one: the sweep is not monotonic
@@ -311,9 +354,9 @@ async function main(): Promise<void> {
     if (worst !== undefined) {
       console.log(
         `\nWorst measured point: at ${worst.tenants} tenants ` +
-        `(${worst.tenants * CHUNKS_PER_TENANT} vectors), turning iterative scans off costs ` +
-        `${((worst.on.recall - worst.off.recall) * 100).toFixed(1)} points of recall ` +
-        `and starves ${worst.off.starved} of ${worst.tenants} tenants.`,
+          `(${worst.tenants * CHUNKS_PER_TENANT} vectors), turning iterative scans off costs ` +
+          `${((worst.on.recall - worst.off.recall) * 100).toFixed(1)} points of recall ` +
+          `and starves ${worst.off.starved} of ${worst.tenants} tenants.`,
       )
     }
   } finally {

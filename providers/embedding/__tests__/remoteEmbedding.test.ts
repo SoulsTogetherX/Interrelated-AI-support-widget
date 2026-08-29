@@ -72,7 +72,12 @@ function ramp(n: number): number[] {
 describe("GeminiEmbeddingProvider", () => {
   it("requests the reduced dimension per text and returns unit vectors in order", async () => {
     const { baseUrl, captured } = await boot((_, res) =>
-      json(res, 200, { embeddings: [{ values: ramp(GEMINI_EMBED_DIM) }, { values: ramp(GEMINI_EMBED_DIM).reverse() }] }),
+      json(res, 200, {
+        embeddings: [
+          { values: ramp(GEMINI_EMBED_DIM) },
+          { values: ramp(GEMINI_EMBED_DIM).reverse() },
+        ],
+      }),
     )
     const provider = new GeminiEmbeddingProvider({ apiKey: "AIza-test", baseUrl })
     const vectors = await provider.embed(["first", "second"])
@@ -80,11 +85,11 @@ describe("GeminiEmbeddingProvider", () => {
     expect(vectors).toHaveLength(2)
     expect(vectors[0]).toHaveLength(GEMINI_EMBED_DIM)
     // Re-normalized: the ramp we served has a norm far from 1.
-    const norm = Math.sqrt(vectors[0]!.reduce((acc, v) => acc + v * v, 0))
+    const norm = Math.sqrt(vectors[0].reduce((acc, v) => acc + v * v, 0))
     expect(norm).toBeCloseTo(1, 10)
     // Order preserved, not sorted: [0] is "first"'s ascending ramp.
-    expect(vectors[0]![0]!).toBeLessThan(vectors[0]![1]!)
-    expect(vectors[1]![0]!).toBeGreaterThan(vectors[1]![1]!)
+    expect(vectors[0][0]).toBeLessThan(vectors[0][1])
+    expect(vectors[1][0]).toBeGreaterThan(vectors[1][1])
 
     const sent = captured()
     expect(sent.url).toBe("/v1beta/models/gemini-embedding-001:batchEmbedContents")
@@ -93,25 +98,33 @@ describe("GeminiEmbeddingProvider", () => {
     expect(sent.url).not.toContain("AIza-test")
     const requests = sent.body["requests"] as Array<Record<string, unknown>>
     expect(requests).toHaveLength(2)
-    expect(requests[0]!["model"]).toBe("models/gemini-embedding-001")
+    expect(requests[0]["model"]).toBe("models/gemini-embedding-001")
     // 3072 native would not fit halfvec(1024) — the reduced size is not
     // optional, so it must be on every sub-request.
-    expect(requests[0]!["outputDimensionality"]).toBe(GEMINI_EMBED_DIM)
-    expect(requests[0]!["taskType"]).toBe("RETRIEVAL_DOCUMENT")
+    expect(requests[0]["outputDimensionality"]).toBe(GEMINI_EMBED_DIM)
+    expect(requests[0]["taskType"]).toBe("RETRIEVAL_DOCUMENT")
   })
 
   it("maps the query task hint to RETRIEVAL_QUERY", async () => {
-    const { baseUrl, captured } = await boot((_, res) => json(res, 200, { embeddings: [{ values: ramp(GEMINI_EMBED_DIM) }] }))
+    const { baseUrl, captured } = await boot((_, res) =>
+      json(res, 200, { embeddings: [{ values: ramp(GEMINI_EMBED_DIM) }] }),
+    )
     const provider = new GeminiEmbeddingProvider({ apiKey: "k".repeat(10), baseUrl })
     await provider.embed(["how do refunds work?"], { task: "query" })
 
     const requests = captured().body["requests"] as Array<Record<string, unknown>>
-    expect(requests[0]!["taskType"]).toBe("RETRIEVAL_QUERY")
+    expect(requests[0]["taskType"]).toBe("RETRIEVAL_QUERY")
   })
 
   it("throws when the model's dimension changes under a declared credential", async () => {
-    const { baseUrl } = await boot((_, res) => json(res, 200, { embeddings: [{ values: ramp(1536) }] }))
-    const provider = new GeminiEmbeddingProvider({ apiKey: "k".repeat(10), baseUrl, dim: GEMINI_EMBED_DIM })
+    const { baseUrl } = await boot((_, res) =>
+      json(res, 200, { embeddings: [{ values: ramp(1536) }] }),
+    )
+    const provider = new GeminiEmbeddingProvider({
+      apiKey: "k".repeat(10),
+      baseUrl,
+      dim: GEMINI_EMBED_DIM,
+    })
     await expect(provider.embed(["text"])).rejects.toThrow(/1536 dimensions, expected 768/)
   })
 
@@ -142,7 +155,11 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
         ],
       }),
     )
-    const provider = new OpenAICompatibleEmbeddingProvider({ baseUrl, model: "bge-small", apiKey: "sk-test" })
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      baseUrl,
+      model: "bge-small",
+      apiKey: "sk-test",
+    })
     expect(provider.dim).toBe(0) // DIM_UNKNOWN until the first response
 
     const vectors = await provider.embed(["first", "second"])
@@ -160,21 +177,29 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
   })
 
   it("sends no Authorization header for a keyless server", async () => {
-    const { baseUrl, captured } = await boot((_, res) => json(res, 200, { data: [{ index: 0, embedding: [1, 0] }] }))
+    const { baseUrl, captured } = await boot((_, res) =>
+      json(res, 200, { data: [{ index: 0, embedding: [1, 0] }] }),
+    )
     await new OpenAICompatibleEmbeddingProvider({ baseUrl, model: "local-model" }).embed(["text"])
     expect(captured().headers.authorization).toBeUndefined()
   })
 
   it("rejects a base64 embedding instead of storing corruption", async () => {
-    const { baseUrl } = await boot((_, res) => json(res, 200, { data: [{ index: 0, embedding: "eyJhIjoxfQ==" }] }))
+    const { baseUrl } = await boot((_, res) =>
+      json(res, 200, { data: [{ index: 0, embedding: "eyJhIjoxfQ==" }] }),
+    )
     const provider = new OpenAICompatibleEmbeddingProvider({ baseUrl, model: "m" })
     await expect(provider.embed(["text"])).rejects.toThrow(/non-numeric embedding/)
   })
 
   it("rejects a short batch — one vector per text or nothing", async () => {
-    const { baseUrl } = await boot((_, res) => json(res, 200, { data: [{ index: 0, embedding: [1, 0] }] }))
+    const { baseUrl } = await boot((_, res) =>
+      json(res, 200, { data: [{ index: 0, embedding: [1, 0] }] }),
+    )
     const provider = new OpenAICompatibleEmbeddingProvider({ baseUrl, model: "m" })
-    await expect(provider.embed(["one", "two"])).rejects.toThrow(/returned 1 embeddings for 2 texts/)
+    await expect(provider.embed(["one", "two"])).rejects.toThrow(
+      /returned 1 embeddings for 2 texts/,
+    )
   })
 
   it("reports a non-JSON 200 (wrong endpoint, captive portal) as a provider error", async () => {
@@ -188,7 +213,9 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
 
   it("spends no request on an empty batch", async () => {
     const { baseUrl, captured } = await boot((_, res) => json(res, 200, { data: [] }))
-    expect(await new OpenAICompatibleEmbeddingProvider({ baseUrl, model: "m" }).embed([])).toEqual([])
+    expect(await new OpenAICompatibleEmbeddingProvider({ baseUrl, model: "m" }).embed([])).toEqual(
+      [],
+    )
     expect(() => captured()).toThrow(/saw no request/)
   })
 })
@@ -196,12 +223,20 @@ describe("OpenAICompatibleEmbeddingProvider", () => {
 describe("OllamaEmbeddingProvider", () => {
   it("uses the batch endpoint and returns vectors in order", async () => {
     const { baseUrl, captured } = await boot((_, res) =>
-      json(res, 200, { embeddings: [[1, 0, 0], [0, 1, 0]] }),
+      json(res, 200, {
+        embeddings: [
+          [1, 0, 0],
+          [0, 1, 0],
+        ],
+      }),
     )
     const provider = new OllamaEmbeddingProvider({ model: "nomic-embed-text", baseUrl })
     const vectors = await provider.embed(["first", "second"])
 
-    expect(vectors).toEqual([[1, 0, 0], [0, 1, 0]])
+    expect(vectors).toEqual([
+      [1, 0, 0],
+      [0, 1, 0],
+    ])
     expect(provider.dim).toBe(3)
     const sent = captured()
     // /api/embed (batch), not the single-prompt /api/embeddings.

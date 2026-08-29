@@ -141,7 +141,7 @@ function decodeXmlEntities(text: string): string {
 function extractLocs(xml: string): string[] {
   const locs: string[] = []
   for (const match of xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
-    locs.push(decodeXmlEntities(match[1] as string))
+    locs.push(decodeXmlEntities(match[1]))
   }
   return locs
 }
@@ -171,14 +171,18 @@ type PageResult =
    *  duplicate after redirect, which is not news to anyone. */
   | { ok: false; url: string; event: PageIssue | null }
 
-async function* crawl(source: CrawlSource, options: CrawlerOptions = {}): AsyncGenerator<CrawlEvent> {
+async function* crawl(
+  source: CrawlSource,
+  options: CrawlerOptions = {},
+): AsyncGenerator<CrawlEvent> {
   const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES
   const fetchDelayMs = options.fetchDelayMs ?? DEFAULT_FETCH_DELAY_MS
   const maxCrawlDelayMs = options.maxCrawlDelayMs ?? DEFAULT_MAX_CRAWL_DELAY_MS
   const fetchOptions = options.fetchOptions ?? {}
 
   const root = normalizeUrl(source.location)
-  if (root === null) throw new CrawlError(`source location is not a crawlable URL: ${source.location}`)
+  if (root === null)
+    throw new CrawlError(`source location is not a crawlable URL: ${source.location}`)
   const origin = new URL(root).origin
 
   // robots.txt FIRST — before the root, before anything. One file per crawl
@@ -187,7 +191,10 @@ async function* crawl(source: CrawlSource, options: CrawlerOptions = {}): AsyncG
   // asks in Crawl-delay is honored up to the cap, and never below the
   // crawler's own politeness delay.
   const robots = await fetchRobotsPolicy(origin, fetchOptions)
-  const delayMs = Math.max(fetchDelayMs, Math.min((robots.crawlDelaySeconds ?? 0) * 1000, maxCrawlDelayMs))
+  const delayMs = Math.max(
+    fetchDelayMs,
+    Math.min((robots.crawlDelaySeconds ?? 0) * 1000, maxCrawlDelayMs),
+  )
 
   //#region Shared page-fetch machinery
   // Dedupe is by REQUESTED and FINAL URL both: two links that redirect to
@@ -211,7 +218,11 @@ async function* crawl(source: CrawlSource, options: CrawlerOptions = {}): AsyncG
     try {
       res = await safeFetch(url, fetchOptions)
     } catch (err) {
-      return { ok: false, url, event: { kind: "error", url, message: err instanceof Error ? err.message : String(err) } }
+      return {
+        ok: false,
+        url,
+        event: { kind: "error", url, message: err instanceof Error ? err.message : String(err) },
+      }
     }
     if (res.status < 200 || res.status >= 300) {
       return { ok: false, url, event: { kind: "error", url, message: `HTTP ${res.status}` } }
@@ -222,17 +233,30 @@ async function* crawl(source: CrawlSource, options: CrawlerOptions = {}): AsyncG
       visited.add(finalUrl)
     }
     if (new URL(finalUrl).origin !== origin) {
-      return { ok: false, url, event: { kind: "error", url, message: `redirected off-origin to ${finalUrl}` } }
+      return {
+        ok: false,
+        url,
+        event: { kind: "error", url, message: `redirected off-origin to ${finalUrl}` },
+      }
     }
     // A redirect lands somewhere the discovery check never saw. The fetch
     // was spent (safeFetch follows hops internally), but the content is
     // still not ingested: robots.txt speaks about the URL that answered.
     const refused = finalUrl !== url ? refusal(finalUrl) : null
     if (refused !== null) {
-      return { ok: false, url: finalUrl, event: { kind: "skipped", url: finalUrl, reason: refused } }
+      return {
+        ok: false,
+        url: finalUrl,
+        event: { kind: "skipped", url: finalUrl, reason: refused },
+      }
     }
     try {
-      const doc = await parseResource({ url: finalUrl, contentType: res.contentType, charset: res.charset, body: res.body })
+      const doc = await parseResource({
+        url: finalUrl,
+        contentType: res.contentType,
+        charset: res.charset,
+        body: res.body,
+      })
       return { ok: true, url: finalUrl, doc }
     } catch (err) {
       const message = `unparseable: ${err instanceof Error ? err.message : String(err)}`
@@ -260,6 +284,7 @@ function rootFailure(result: Extract<PageResult, { ok: false }>): CrawlError {
 
 /** Breadth-first over same-origin links. BFS (not DFS) so depth means "link
  *  distance from the root" — the intuitive meaning of a crawl_depth knob. */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function* crawlBfs(
   root: string,
   crawlDepth: number,
@@ -314,6 +339,7 @@ async function* crawlBfs(
  *  same-origin — a sitemap listing foreign URLs is out of scope by the same
  *  rule as everywhere else). One level of sitemapindex nesting is supported,
  *  because index files are how every generator ships large sites. */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function* crawlSitemap(
   root: string,
   maxPages: number,
@@ -325,7 +351,8 @@ async function* crawlSitemap(
   const fetchXml = async (url: string): Promise<string> => {
     await pace()
     const res = await safeFetch(url, fetchOptions)
-    if (res.status < 200 || res.status >= 300) throw new CrawlError(`sitemap fetch failed: HTTP ${res.status} for ${url}`)
+    if (res.status < 200 || res.status >= 300)
+      throw new CrawlError(`sitemap fetch failed: HTTP ${res.status} for ${url}`)
     return res.body.toString("utf8")
   }
 
@@ -374,7 +401,11 @@ async function* crawlSitemap(
       try {
         collectLocs(await fetchXml(child))
       } catch (err) {
-        yield { kind: "error", url: child, message: err instanceof Error ? err.message : String(err) }
+        yield {
+          kind: "error",
+          url: child,
+          message: err instanceof Error ? err.message : String(err),
+        }
       }
     }
   } else {

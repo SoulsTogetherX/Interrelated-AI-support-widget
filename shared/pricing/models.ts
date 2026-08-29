@@ -71,8 +71,8 @@ const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   // Flash charges ~8× more for output than input, which is exactly why the
   // pipeline caps generated tokens (MAX_ANSWER_TOKENS) rather than trusting
   // a model to be brief.
-  "gemini-2.5-flash": { inputPerMTok: 0.30, outputPerMTok: 2.50 },
-  "gemini-2.5-flash-lite": { inputPerMTok: 0.10, outputPerMTok: 0.40 },
+  "gemini-2.5-flash": { inputPerMTok: 0.3, outputPerMTok: 2.5 },
+  "gemini-2.5-flash-lite": { inputPerMTok: 0.1, outputPerMTok: 0.4 },
   // The 2.5 rows are kept although the adapter's default moved to
   // gemini-3.6-flash at M7.11: a NEW free-tier key gets 404 for 2.5 Flash
   // ("no longer available to new users"), but existing credentials and every
@@ -101,8 +101,8 @@ const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   // Same for any model newer than PRICES_AS_OF, including the Claude 5
   // family: unpriced until someone reads the page and dates the table
   // again. That is the intended failure mode, not a gap.
-  "claude-haiku-4-5-20251001": { inputPerMTok: 1.00, outputPerMTok: 5.00 },
-  "claude-sonnet-4-5-20250929": { inputPerMTok: 3.00, outputPerMTok: 15.00 },
+  "claude-haiku-4-5-20251001": { inputPerMTok: 1.0, outputPerMTok: 5.0 },
+  "claude-sonnet-4-5-20250929": { inputPerMTok: 3.0, outputPerMTok: 15.0 },
 
   // The mock (providers/llm/mock.ts) — the one row that is legitimately
   // zero, since it never leaves the process. Without it every keyless

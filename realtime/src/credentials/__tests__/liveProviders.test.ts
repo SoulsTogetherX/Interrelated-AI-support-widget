@@ -107,7 +107,12 @@ const PROVIDERS: LiveProvider[] = [
   // case is the interesting one for this provider: it is the only forced
   // TOOL CALL in the table, and whether that really constrains the claims
   // contract is a measurement, not an assumption (§2.4.5n).
-  { name: "anthropic", provider: "anthropic", key: ANTHROPIC_KEY, model: process.env.ANTHROPIC_MODEL },
+  {
+    name: "anthropic",
+    provider: "anthropic",
+    key: ANTHROPIC_KEY,
+    model: process.env.ANTHROPIC_MODEL,
+  },
   // xAI (M8.6) — the generic compat adapter against a real hosted endpoint;
   // the header comment is the full argument. The model must be EXPLICIT
   // (checkCredentialInput refuses the self-hosted shape without one — there
@@ -135,7 +140,8 @@ const ANY_KEY = PROVIDERS.some((p) => Boolean(p.key))
  *  saves the next person half an hour. */
 function describeFailure(error: unknown): string {
   if (error instanceof LLMHttpError) {
-    const retry = error.retryAfterMs !== null ? ` (retry in ~${Math.ceil(error.retryAfterMs / 1000)}s)` : ""
+    const retry =
+      error.retryAfterMs !== null ? ` (retry in ~${Math.ceil(error.retryAfterMs / 1000)}s)` : ""
     // LLMHttpError.message already carries the provider label and status
     // (§2.4.5f), so it is used verbatim — re-prefixing would double it.
     // The 429 sentence has been wrong twice, in opposite directions, and
@@ -150,8 +156,8 @@ function describeFailure(error: unknown): string {
     // one re-run a minute later is what tells them apart.
     return error.status === 429
       ? `rate limited${retry} — a free tier, not a broken adapter. Generation is limited ` +
-        `per MINUTE (this suite's own back-to-back calls can trip it — re-run in a minute) ` +
-        `AND per DAY (20/day on gemini-3.6-flash — then only the window's rollover helps). ${error.message}`
+          `per MINUTE (this suite's own back-to-back calls can trip it — re-run in a minute) ` +
+          `AND per DAY (20/day on gemini-3.6-flash — then only the window's rollover helps). ${error.message}`
       : error.message
   }
   return error instanceof Error ? error.message : String(error)
@@ -197,7 +203,10 @@ for (const provider of PROVIDERS) {
 
     it("accepts a real key and completes a live round-trip", async () => {
       const checked = await checkCredentialInput(payload)
-      expect(checked.ok, checked.ok ? "" : `validation rejected the payload: ${checked.error}`).toBe(true)
+      expect(
+        checked.ok,
+        checked.ok ? "" : `validation rejected the payload: ${checked.error}`,
+      ).toBe(true)
       if (!checked.ok) return
 
       const llm = buildGenerationProvider(checked.value)
@@ -290,7 +299,7 @@ for (const provider of PROVIDERS) {
           return await attempt()
         } catch (error) {
           if (!allow429Wait || !(error instanceof LLMHttpError) || error.status !== 429) {
-            throw new Error(`${provider.name}: ${describeFailure(error)}`)
+            throw new Error(`${provider.name}: ${describeFailure(error)}`, { cause: error })
           }
           const waitMs = error.retryAfterMs ?? 60_000
           console.log(
@@ -301,7 +310,9 @@ for (const provider of PROVIDERS) {
           try {
             return await attempt()
           } catch (retryError) {
-            throw new Error(`${provider.name}: ${describeFailure(retryError)}`)
+            throw new Error(`${provider.name}: ${describeFailure(retryError)}`, {
+              cause: retryError,
+            })
           }
         }
       }
@@ -343,7 +354,7 @@ for (const provider of PROVIDERS) {
         parsed.ok
           ? ""
           : `${provider.name} violated the claims contract twice — production grants exactly ` +
-            `one retry (§3.15.2), so this is the failure a visitor would see: ${parsed.errors.join("; ")}`,
+              `one retry (§3.15.2), so this is the failure a visitor would see: ${parsed.errors.join("; ")}`,
       ).toBe(true)
       if (!parsed.ok) return
       // A model that returns zero claims for answerable context is not a
@@ -370,9 +381,13 @@ describe.skipIf(!GEMINI_KEY)("live gemini embedding credential path", () => {
       role: "embedding" as const,
       provider: "gemini",
       apiKey: GEMINI_KEY,
-      ...(process.env.GEMINI_EMBED_MODEL !== undefined ? { model: process.env.GEMINI_EMBED_MODEL } : {}),
+      ...(process.env.GEMINI_EMBED_MODEL !== undefined
+        ? { model: process.env.GEMINI_EMBED_MODEL }
+        : {}),
     })
-    expect(checked.ok, checked.ok ? "" : `validation rejected the payload: ${checked.error}`).toBe(true)
+    expect(checked.ok, checked.ok ? "" : `validation rejected the payload: ${checked.error}`).toBe(
+      true,
+    )
     if (!checked.ok) return
 
     const trip = await testEmbeddingRoundTrip(buildEmbeddingProvider(checked.value), 30_000)
@@ -381,7 +396,9 @@ describe.skipIf(!GEMINI_KEY)("live gemini embedding credential path", () => {
 
     expect(trip.dim).toBeGreaterThan(0)
     expect(trip.dim!).toBeLessThanOrEqual(PADDED_DIM)
-    console.log(`[live] gemini embeddings: ${trip.model} returned ${trip.dim}-d in ${trip.latencyMs}ms`)
+    console.log(
+      `[live] gemini embeddings: ${trip.model} returned ${trip.dim}-d in ${trip.latencyMs}ms`,
+    )
   }, 60_000)
 
   it("embeds a batch in order, and a query differently from a document", async () => {
@@ -390,28 +407,35 @@ describe.skipIf(!GEMINI_KEY)("live gemini embedding credential path", () => {
     // RETRIEVAL_QUERY and RETRIEVAL_DOCUMENT produced identical vectors,
     // passing them would be theatre.
     const provider = buildEmbeddingProvider({
-      role: "embedding", provider: "gemini", apiKey: GEMINI_KEY as string,
+      role: "embedding",
+      provider: "gemini",
+      apiKey: GEMINI_KEY,
     })
-    const texts = ["Refunds are processed within five business days.", "Bananas ripen faster in a paper bag."]
+    const texts = [
+      "Refunds are processed within five business days.",
+      "Bananas ripen faster in a paper bag.",
+    ]
     let asDocuments: number[][]
     let asQuery: number[][]
     try {
       asDocuments = await provider.embed(texts, { task: "document" })
-      asQuery = await provider.embed([texts[0] as string], { task: "query" })
+      asQuery = await provider.embed([texts[0]], { task: "query" })
     } catch (error) {
-      throw new Error(`gemini: ${describeFailure(error)}`)
+      throw new Error(`gemini: ${describeFailure(error)}`, { cause: error })
     }
 
     expect(asDocuments).toHaveLength(2)
-    const dot = (a: number[], b: number[]) => a.reduce((acc, v, i) => acc + v * (b[i] as number), 0)
+    const dot = (a: number[], b: number[]) => a.reduce((acc, v, i) => acc + v * b[i], 0)
     // Unit-normalized, as the adapter promises after Matryoshka reduction.
-    expect(Math.sqrt(dot(asDocuments[0] as number[], asDocuments[0] as number[]))).toBeCloseTo(1, 4)
+    expect(Math.sqrt(dot(asDocuments[0], asDocuments[0]))).toBeCloseTo(1, 4)
     // Real semantics, unlike the mock: the refund sentence is nearer to its
     // own query embedding than the banana sentence is.
-    const own = dot(asQuery[0] as number[], asDocuments[0] as number[])
-    const other = dot(asQuery[0] as number[], asDocuments[1] as number[])
+    const own = dot(asQuery[0], asDocuments[0])
+    const other = dot(asQuery[0], asDocuments[1])
     expect(own).toBeGreaterThan(other)
-    console.log(`[live] gemini task types: same-text ${own.toFixed(3)} vs unrelated ${other.toFixed(3)}`)
+    console.log(
+      `[live] gemini task types: same-text ${own.toFixed(3)} vs unrelated ${other.toFixed(3)}`,
+    )
   }, 60_000)
 })
 //#endregion

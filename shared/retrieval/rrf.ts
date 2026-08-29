@@ -55,7 +55,7 @@ function rrfFuse(
   for (const ranking of rankings) {
     const inThisRanking = new Set<string>()
     for (let rank = 1; rank <= ranking.length; rank++) {
-      const id = ranking[rank - 1] as string
+      const id = ranking[rank - 1]
       if (inThisRanking.has(id)) {
         throw new Error(`duplicate id "${id}" within one ranking — upstream retrieval bug`)
       }

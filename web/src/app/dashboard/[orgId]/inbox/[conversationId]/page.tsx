@@ -58,8 +58,8 @@ export default async function InboxConversationPage({
         // A NORMAL state, not an error: it was closed, or was never
         // escalated. Saying so beats a socket that could only fail.
         <p className="live-closed">
-          Nobody is waiting on this conversation — it was never escalated, or the handoff has
-          been closed. The transcript is still available above.
+          Nobody is waiting on this conversation — it was never escalated, or the handoff has been
+          closed. The transcript is still available above.
         </p>
       ) : (
         <>

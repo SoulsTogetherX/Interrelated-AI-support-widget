@@ -197,7 +197,10 @@ async function denseSearch(db: Kysely<Database>, options: DenseSearchOptions): P
  * identically-worded chunks, and a nondeterministic order there would make
  * eval runs non-reproducible.
  */
-async function lexicalSearch(db: Kysely<Database>, options: LexicalSearchOptions): Promise<LexicalHit[]> {
+async function lexicalSearch(
+  db: Kysely<Database>,
+  options: LexicalSearchOptions,
+): Promise<LexicalHit[]> {
   assertLimit("k", options.k, 1_000)
 
   const { rows } = await sql<{ chunk_id: string; score: number }>`
@@ -225,7 +228,10 @@ async function lexicalSearch(db: Kysely<Database>, options: LexicalSearchOptions
  * surviving k ids, so the arm queries stay lean enough to be pure
  * index-shaped work.
  */
-async function hybridSearch(db: Kysely<Database>, options: HybridSearchOptions): Promise<RetrievedChunk[]> {
+async function hybridSearch(
+  db: Kysely<Database>,
+  options: HybridSearchOptions,
+): Promise<RetrievedChunk[]> {
   const k = options.k ?? DEFAULT_K
   const poolSize = options.poolSize ?? DEFAULT_POOL_SIZE
   assertLimit("k", k, 1_000)
@@ -249,15 +255,29 @@ async function hybridSearch(db: Kysely<Database>, options: HybridSearchOptions):
     .selectFrom("chunks")
     .innerJoin("documents", "documents.id", "chunks.document_id")
     .select([
-      "chunks.id", "chunks.document_id", "chunks.heading_path", "chunks.text",
-      "chunks.char_start", "chunks.char_end", "documents.url", "documents.title",
+      "chunks.id",
+      "chunks.document_id",
+      "chunks.heading_path",
+      "chunks.text",
+      "chunks.char_start",
+      "chunks.char_end",
+      "documents.url",
+      "documents.title",
     ])
-    .where("chunks.id", "in", fused.map((f) => f.id))
+    .where(
+      "chunks.id",
+      "in",
+      fused.map((f) => f.id),
+    )
     .execute()
   const metaById = new Map(meta.map((m) => [m.id, m]))
 
-  const denseByChunk = new Map(dense.map((h, i) => [h.chunkId, { rank: i + 1, distance: h.distance }]))
-  const lexicalByChunk = new Map(lexical.map((h, i) => [h.chunkId, { rank: i + 1, score: h.score }]))
+  const denseByChunk = new Map(
+    dense.map((h, i) => [h.chunkId, { rank: i + 1, distance: h.distance }]),
+  )
+  const lexicalByChunk = new Map(
+    lexical.map((h, i) => [h.chunkId, { rank: i + 1, score: h.score }]),
+  )
 
   return fused.map((f) => {
     // Every fused id came from an arm query, which joined these same tables
@@ -289,8 +309,11 @@ async function hybridSearch(db: Kysely<Database>, options: HybridSearchOptions):
 //#region Exports
 export { denseSearch, lexicalSearch, hybridSearch, DEFAULT_EF_SEARCH }
 export type {
-  DenseSearchOptions, DenseHit,
-  LexicalSearchOptions, LexicalHit,
-  HybridSearchOptions, RetrievedChunk,
+  DenseSearchOptions,
+  DenseHit,
+  LexicalSearchOptions,
+  LexicalHit,
+  HybridSearchOptions,
+  RetrievedChunk,
 }
 //#endregion

@@ -1,0 +1,12 @@
+{
+  "//": "dependency-cruiser alias shim for the web/ pass.",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["web/src/*"],
+      "@shared/*": ["shared/*"],
+      "kysely": ["web/node_modules/kysely"]
+    }
+  },
+  "include": ["web/src/instrumentation.ts"]
+}

@@ -29,19 +29,35 @@ async function makeConversation(org: string, visitor: string): Promise<string> {
  *  these properly (scrypt, encrypted email); a handoff just points at one. */
 async function makeAgent(): Promise<string> {
   const id = newId("usr")
-  await db.insertInto("users").values({
-    id, email_index: `idx_${id}`, email_ciphertext: "v1.stub", password_hash: "scrypt$stub",
-  }).execute()
+  await db
+    .insertInto("users")
+    .values({
+      id,
+      email_index: `idx_${id}`,
+      email_ciphertext: "v1.stub",
+      password_hash: "scrypt$stub",
+    })
+    .execute()
   await db.insertInto("org_members").values({ org_id: orgId, user_id: id, role: "agent" }).execute()
   return id
 }
 
 const conversationStatus = async (id: string): Promise<string> =>
-  (await db.selectFrom("conversations").select("status").where("id", "=", id).executeTakeFirstOrThrow()).status
+  (
+    await db
+      .selectFrom("conversations")
+      .select("status")
+      .where("id", "=", id)
+      .executeTakeFirstOrThrow()
+  ).status
 
 const openRows = (conversationId: string) =>
-  db.selectFrom("handoff_sessions").selectAll()
-    .where("conversation_id", "=", conversationId).where("status", "!=", "closed").execute()
+  db
+    .selectFrom("handoff_sessions")
+    .selectAll()
+    .where("conversation_id", "=", conversationId)
+    .where("status", "!=", "closed")
+    .execute()
 //#endregion
 
 describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
@@ -49,10 +65,13 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     await migrateToLatest(db)
     orgId = newId("org")
     otherOrgId = newId("org")
-    await db.insertInto("organizations").values([
-      { id: orgId, name: "Handoff Co" },
-      { id: otherOrgId, name: "Other Co" },
-    ]).execute()
+    await db
+      .insertInto("organizations")
+      .values([
+        { id: orgId, name: "Handoff Co" },
+        { id: otherOrgId, name: "Other Co" },
+      ])
+      .execute()
   })
 
   afterAll(async () => {
@@ -65,7 +84,10 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     expect(await conversationStatus(conversationId)).toBe("open")
 
     const outcome = await requestHandoff(db, {
-      orgId, conversationId, visitorId: "vis_a", reason: "visitor_request",
+      orgId,
+      conversationId,
+      visitorId: "vis_a",
+      reason: "visitor_request",
     })
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
@@ -86,10 +108,16 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
   it("is idempotent: a second request reports the first, and creates nothing", async () => {
     const conversationId = await makeConversation(orgId, "vis_b")
     const first = await requestHandoff(db, {
-      orgId, conversationId, visitorId: "vis_b", reason: "visitor_request",
+      orgId,
+      conversationId,
+      visitorId: "vis_b",
+      reason: "visitor_request",
     })
     const second = await requestHandoff(db, {
-      orgId, conversationId, visitorId: "vis_b", reason: "low_confidence",
+      orgId,
+      conversationId,
+      visitorId: "vis_b",
+      reason: "low_confidence",
     })
 
     expect(first.ok && second.ok).toBe(true)
@@ -112,19 +140,40 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     await db.insertInto("organizations").values({ id: org, name: "Counted Co" }).execute()
     try {
       const conversationId = await makeConversation(org, "vis_count")
-      await requestHandoff(db, { orgId: org, conversationId, visitorId: "vis_count", reason: "visitor_request" })
-      await requestHandoff(db, { orgId: org, conversationId, visitorId: "vis_count", reason: "visitor_request" })
+      await requestHandoff(db, {
+        orgId: org,
+        conversationId,
+        visitorId: "vis_count",
+        reason: "visitor_request",
+      })
+      await requestHandoff(db, {
+        orgId: org,
+        conversationId,
+        visitorId: "vis_count",
+        reason: "visitor_request",
+      })
 
-      const counter = await db.selectFrom("usage_daily")
-        .select("escalations").where("org_id", "=", org).executeTakeFirst()
+      const counter = await db
+        .selectFrom("usage_daily")
+        .select("escalations")
+        .where("org_id", "=", org)
+        .executeTakeFirst()
       expect(counter?.escalations).toBe(1)
 
       // A second, genuine escalation of the same conversation — after the
       // first is closed — DOES count: it is a second visitor waiting.
       await closeHandoff(db, { orgId: org, conversationId, closedBy: await makeAgent() })
-      await requestHandoff(db, { orgId: org, conversationId, visitorId: "vis_count", reason: "low_confidence" })
-      const after = await db.selectFrom("usage_daily")
-        .select("escalations").where("org_id", "=", org).executeTakeFirst()
+      await requestHandoff(db, {
+        orgId: org,
+        conversationId,
+        visitorId: "vis_count",
+        reason: "low_confidence",
+      })
+      const after = await db
+        .selectFrom("usage_daily")
+        .select("escalations")
+        .where("org_id", "=", org)
+        .executeTakeFirst()
       expect(after?.escalations).toBe(2)
     } finally {
       await db.deleteFrom("organizations").where("id", "=", org).execute()
@@ -139,7 +188,12 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     const conversationId = await makeConversation(orgId, "vis_c")
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
-        requestHandoff(db, { orgId, conversationId, visitorId: "vis_c", reason: "visitor_request" }),
+        requestHandoff(db, {
+          orgId,
+          conversationId,
+          visitorId: "vis_c",
+          reason: "visitor_request",
+        }),
       ),
     )
 
@@ -155,13 +209,22 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     const theirs = await makeConversation(otherOrgId, "vis_e")
 
     const crossTenant = await requestHandoff(db, {
-      orgId, conversationId: theirs, visitorId: "vis_e", reason: "visitor_request",
+      orgId,
+      conversationId: theirs,
+      visitorId: "vis_e",
+      reason: "visitor_request",
     })
     const crossVisitor = await requestHandoff(db, {
-      orgId, conversationId: mine, visitorId: "vis_someone_else", reason: "visitor_request",
+      orgId,
+      conversationId: mine,
+      visitorId: "vis_someone_else",
+      reason: "visitor_request",
     })
     const fabricated = await requestHandoff(db, {
-      orgId, conversationId: newId("con"), visitorId: "vis_d", reason: "visitor_request",
+      orgId,
+      conversationId: newId("con"),
+      visitorId: "vis_d",
+      reason: "visitor_request",
     })
 
     for (const outcome of [crossTenant, crossVisitor, fabricated]) {
@@ -177,40 +240,62 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     // index is over OPEN rows precisely so history does not block that.
     const conversationId = await makeConversation(orgId, "vis_f")
     const first = await requestHandoff(db, {
-      orgId, conversationId, visitorId: "vis_f", reason: "visitor_request",
+      orgId,
+      conversationId,
+      visitorId: "vis_f",
+      reason: "visitor_request",
     })
     expect(first.ok).toBe(true)
     if (!first.ok) return
 
-    await db.updateTable("handoff_sessions")
+    await db
+      .updateTable("handoff_sessions")
       .set({ status: "closed", closed_at: new Date() })
       .where("id", "=", first.handoff.id)
       .execute()
     expect(await getOpenHandoff(db, conversationId)).toBeNull()
 
     const second = await requestHandoff(db, {
-      orgId, conversationId, visitorId: "vis_f", reason: "low_confidence",
+      orgId,
+      conversationId,
+      visitorId: "vis_f",
+      reason: "low_confidence",
     })
     expect(second.ok && second.created).toBe(true)
     if (!second.ok) return
     expect(second.handoff.id).not.toBe(first.handoff.id)
-    expect(await db.selectFrom("handoff_sessions").selectAll()
-      .where("conversation_id", "=", conversationId).execute()).toHaveLength(2)
+    expect(
+      await db
+        .selectFrom("handoff_sessions")
+        .selectAll()
+        .where("conversation_id", "=", conversationId)
+        .execute(),
+    ).toHaveLength(2)
   })
 
   it("reports an active handoff as active, so the widget can word the wait", async () => {
     const conversationId = await makeConversation(orgId, "vis_g")
     const agentId = newId("usr")
-    await db.insertInto("users").values({
-      id: agentId, email_index: `idx_${agentId}`, email_ciphertext: "x", password_hash: "x",
-    }).execute()
+    await db
+      .insertInto("users")
+      .values({
+        id: agentId,
+        email_index: `idx_${agentId}`,
+        email_ciphertext: "x",
+        password_hash: "x",
+      })
+      .execute()
     const created = await requestHandoff(db, {
-      orgId, conversationId, visitorId: "vis_g", reason: "visitor_request",
+      orgId,
+      conversationId,
+      visitorId: "vis_g",
+      reason: "visitor_request",
     })
     expect(created.ok).toBe(true)
     if (!created.ok) return
 
-    await db.updateTable("handoff_sessions")
+    await db
+      .updateTable("handoff_sessions")
       .set({ status: "active", claimed_by: agentId, claimed_at: new Date() })
       .where("id", "=", created.handoff.id)
       .execute()
@@ -225,8 +310,11 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     // the 'active' CHECK to claimed_by instead of claimed_at made this
     // throw — the reason it is written the way it is.)
     await db.deleteFrom("users").where("id", "=", agentId).execute()
-    const orphaned = await db.selectFrom("handoff_sessions").selectAll()
-      .where("id", "=", created.handoff.id).executeTakeFirstOrThrow()
+    const orphaned = await db
+      .selectFrom("handoff_sessions")
+      .selectAll()
+      .where("id", "=", created.handoff.id)
+      .executeTakeFirstOrThrow()
     expect(orphaned.status).toBe("active")
     expect(orphaned.claimed_by).toBeNull()
     expect(orphaned.claimed_at).not.toBeNull()
@@ -235,7 +323,12 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
   //#region Closing (M4.6)
   it("closes: the row is finished, the conversation is the bot's again, and it can escalate anew", async () => {
     const conversationId = await makeConversation(orgId, "vis_close")
-    await requestHandoff(db, { orgId, conversationId, visitorId: "vis_close", reason: "visitor_request" })
+    await requestHandoff(db, {
+      orgId,
+      conversationId,
+      visitorId: "vis_close",
+      reason: "visitor_request",
+    })
     expect(await conversationStatus(conversationId)).toBe("escalated")
 
     const agent = await makeAgent()
@@ -247,8 +340,11 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     // the bot is answering.
     expect(await conversationStatus(conversationId)).toBe("open")
     expect(await getOpenHandoff(db, conversationId)).toBeNull()
-    const row = await db.selectFrom("handoff_sessions").selectAll()
-      .where("conversation_id", "=", conversationId).executeTakeFirstOrThrow()
+    const row = await db
+      .selectFrom("handoff_sessions")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .executeTakeFirstOrThrow()
     expect(row.status).toBe("closed")
     expect(row.closed_at).toBeInstanceOf(Date)
     // Nobody had attached, so closing is what claimed it — 'closed' with
@@ -259,7 +355,10 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     // The index is over OPEN rows only, which is what lets the same visitor
     // come back later.
     const again = await requestHandoff(db, {
-      orgId, conversationId, visitorId: "vis_close", reason: "visitor_request",
+      orgId,
+      conversationId,
+      visitorId: "vis_close",
+      reason: "visitor_request",
     })
     expect(again).toMatchObject({ ok: true, created: true })
     expect(await conversationStatus(conversationId)).toBe("escalated")
@@ -267,7 +366,12 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
 
   it("is idempotent, and concurrent closes produce ONE closed_at", async () => {
     const conversationId = await makeConversation(orgId, "vis_twice")
-    await requestHandoff(db, { orgId, conversationId, visitorId: "vis_twice", reason: "visitor_request" })
+    await requestHandoff(db, {
+      orgId,
+      conversationId,
+      visitorId: "vis_twice",
+      reason: "visitor_request",
+    })
     const agent = await makeAgent()
 
     // Five agents clicking at once — the UPDATE's `status <> 'closed'`
@@ -279,27 +383,42 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
     expect(outcomes.filter((o) => o.ok && o.closed)).toHaveLength(1)
     expect(outcomes.every((o) => o.ok)).toBe(true)
 
-    const rows = await db.selectFrom("handoff_sessions").selectAll()
-      .where("conversation_id", "=", conversationId).execute()
+    const rows = await db
+      .selectFrom("handoff_sessions")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .execute()
     expect(rows).toHaveLength(1)
 
     // And a sixth, later, still reports honestly rather than failing.
-    expect(await closeHandoff(db, { orgId, conversationId, closedBy: agent }))
-      .toEqual({ ok: true, closed: false })
+    expect(await closeHandoff(db, { orgId, conversationId, closedBy: agent })).toEqual({
+      ok: true,
+      closed: false,
+    })
   })
 
   it("keeps an existing claim rather than reassigning it to whoever closed", async () => {
     const conversationId = await makeConversation(orgId, "vis_claimed")
-    await requestHandoff(db, { orgId, conversationId, visitorId: "vis_claimed", reason: "visitor_request" })
+    await requestHandoff(db, {
+      orgId,
+      conversationId,
+      visitorId: "vis_claimed",
+      reason: "visitor_request",
+    })
     const owner = await makeAgent()
     const closer = await makeAgent()
-    await db.updateTable("handoff_sessions")
+    await db
+      .updateTable("handoff_sessions")
       .set({ status: "active", claimed_by: owner, claimed_at: new Date() })
-      .where("conversation_id", "=", conversationId).execute()
+      .where("conversation_id", "=", conversationId)
+      .execute()
 
     await closeHandoff(db, { orgId, conversationId, closedBy: closer })
-    const row = await db.selectFrom("handoff_sessions").selectAll()
-      .where("conversation_id", "=", conversationId).executeTakeFirstOrThrow()
+    const row = await db
+      .selectFrom("handoff_sessions")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .executeTakeFirstOrThrow()
     // Who HANDLED it is the fact worth keeping; a supervisor tidying the
     // queue must not overwrite it.
     expect(row.claimed_by).toBe(owner)
@@ -308,29 +427,44 @@ describe.skipIf(!DB_CONFIGURED)("handoff escalation", () => {
   it("refuses another org's conversation, and a conversation that was never escalated", async () => {
     const conversationId = await makeConversation(orgId, "vis_scope")
     const agent = await makeAgent()
-    expect(await closeHandoff(db, { orgId: otherOrgId, conversationId, closedBy: agent }))
-      .toEqual({ ok: false, error: "not_found" })
-    expect(await closeHandoff(db, { orgId, conversationId: newId("con"), closedBy: agent }))
-      .toEqual({ ok: false, error: "not_found" })
+    expect(await closeHandoff(db, { orgId: otherOrgId, conversationId, closedBy: agent })).toEqual({
+      ok: false,
+      error: "not_found",
+    })
+    expect(
+      await closeHandoff(db, { orgId, conversationId: newId("con"), closedBy: agent }),
+    ).toEqual({ ok: false, error: "not_found" })
     // Never escalated: found, nothing to close — distinct answers, because
     // this surface is internal and both ends are ours.
-    expect(await closeHandoff(db, { orgId, conversationId, closedBy: agent }))
-      .toEqual({ ok: true, closed: false })
+    expect(await closeHandoff(db, { orgId, conversationId, closedBy: agent })).toEqual({
+      ok: true,
+      closed: false,
+    })
   })
   //#endregion
 
   it("rejects the schema states that would corrupt the queue", async () => {
     const conversationId = await makeConversation(orgId, "vis_h")
-    const base = { org_id: orgId, conversation_id: conversationId, reason: "visitor_request" as const }
+    const base = {
+      org_id: orgId,
+      conversation_id: conversationId,
+      reason: "visitor_request" as const,
+    }
 
     // Active without an owner: an escalation nobody is holding, which is
     // exactly what 'pending' means.
     await expect(
-      db.insertInto("handoff_sessions").values({ ...base, id: newId("hnd"), status: "active" }).execute(),
+      db
+        .insertInto("handoff_sessions")
+        .values({ ...base, id: newId("hnd"), status: "active" })
+        .execute(),
     ).rejects.toThrow()
     // Closed without a closing time — M5 measures durations on these.
     await expect(
-      db.insertInto("handoff_sessions").values({ ...base, id: newId("hnd"), status: "closed" }).execute(),
+      db
+        .insertInto("handoff_sessions")
+        .values({ ...base, id: newId("hnd"), status: "closed" })
+        .execute(),
     ).rejects.toThrow()
     // An unknown reason.
     await expect(

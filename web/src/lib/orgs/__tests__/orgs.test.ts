@@ -8,12 +8,7 @@ import { newId } from "@shared/utils/ids"
 import { db } from "@/lib/db"
 import { hashPassword } from "@/lib/auth/password"
 import { emailBlindIndex, encryptEmail } from "@/lib/auth/emailCrypto"
-import {
-  createOrgForUser,
-  getOrgForMember,
-  getPublishableKey,
-  listOrgsForUser,
-} from "../index"
+import { createOrgForUser, getOrgForMember, getPublishableKey, listOrgsForUser } from "../index"
 
 const hasDb = Boolean(process.env.POSTGRES_PASSWORD)
 const RUN = Math.random().toString(36).slice(2, 10)
@@ -112,9 +107,7 @@ describe.skipIf(!hasDb)("org onboarding (integration)", () => {
     const orgs = await listOrgsForUser(ownerId)
     expect(orgs.map((o) => o.name)).toEqual(["Acme Support", "Second Org"])
     // Each org minted its OWN key.
-    expect(await getPublishableKey(second.orgId)).not.toBe(
-      await getPublishableKey(createdOrgs[0]),
-    )
+    expect(await getPublishableKey(second.orgId)).not.toBe(await getPublishableKey(createdOrgs[0]))
 
     expect(await listOrgsForUser(outsiderId)).toEqual([])
   })

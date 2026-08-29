@@ -28,8 +28,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -52,11 +52,17 @@ async function main(): Promise<void> {
   const kind = args.includes("--sitemap") ? ("sitemap" as const) : ("url" as const)
   const depthArg = args[args.indexOf("--depth") + 1]
   const crawlDepth = args.includes("--depth") ? Number(depthArg) : 1
-  const orgName = args.includes("--org") ? (args[args.indexOf("--org") + 1] ?? "Local Dev Org") : "Local Dev Org"
+  const orgName = args.includes("--org")
+    ? (args[args.indexOf("--org") + 1] ?? "Local Dev Org")
+    : "Local Dev Org"
 
   // Find-or-create keeps repeated runs landing in one org, which is what a
   // dev machine wants (and what makes cleanup a single delete).
-  let org = await db.selectFrom("organizations").select(["id"]).where("name", "=", orgName).executeTakeFirst()
+  let org = await db
+    .selectFrom("organizations")
+    .select(["id"])
+    .where("name", "=", orgName)
+    .executeTakeFirst()
   if (!org) {
     org = { id: newId("org") }
     await db.insertInto("organizations").values({ id: org.id, name: orgName }).execute()
@@ -64,11 +70,21 @@ async function main(): Promise<void> {
   }
 
   const sourceId = newId("src")
-  await db.insertInto("sources").values({
-    id: sourceId, org_id: org.id, kind, location, crawl_depth: crawlDepth,
-  }).execute()
+  await db
+    .insertInto("sources")
+    .values({
+      id: sourceId,
+      org_id: org.id,
+      kind,
+      location,
+      crawl_depth: crawlDepth,
+    })
+    .execute()
   const jobId = newId("job")
-  await db.insertInto("ingest_jobs").values({ id: jobId, org_id: org.id, source_id: sourceId }).execute()
+  await db
+    .insertInto("ingest_jobs")
+    .values({ id: jobId, org_id: org.id, source_id: sourceId })
+    .execute()
 
   console.log(`queued ${jobId}`)
   console.log(`  source ${sourceId} (${kind}, depth ${crawlDepth}): ${location}`)

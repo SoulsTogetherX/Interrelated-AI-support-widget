@@ -125,6 +125,7 @@ function splitOversized(block: Block, maxTokens: number): Piece[] {
  * a section boundary, because a retrieval hit that mixes the tail of one
  * section with the head of the next cites both wrongly.
  */
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function chunkBlocks(blocks: readonly Block[], options: ChunkOptions = {}): Chunk[] {
   const targetTokens = options.targetTokens ?? 400
   const maxTokens = options.maxTokens ?? 800
@@ -147,8 +148,8 @@ function chunkBlocks(blocks: readonly Block[], options: ChunkOptions = {}): Chun
       // Counted over the JOINED text (separators included) because that is
       // the exact string the embedding provider will see.
       tokenCount: approxTokens(text),
-      charStart: (pending[0] as Piece).charStart,
-      charEnd: (pending[pending.length - 1] as Piece).charEnd,
+      charStart: pending[0].charStart,
+      charEnd: pending[pending.length - 1].charEnd,
     })
     pending = []
     pendingTokens = 0
@@ -161,7 +162,10 @@ function chunkBlocks(blocks: readonly Block[], options: ChunkOptions = {}): Chun
       // previous h2 AND its h3 children), then push itself.
       flush()
       const level = block.level ?? 1
-      while (headingStack.length && (headingStack[headingStack.length - 1] as { level: number }).level >= level) {
+      while (
+        headingStack.length &&
+        (headingStack[headingStack.length - 1] as { level: number }).level >= level
+      ) {
         headingStack.pop()
       }
       headingStack.push({ level, text: block.text })

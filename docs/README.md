@@ -7,13 +7,13 @@ know how to program but not what any of this jargon means.
 
 ## Reading order
 
-| Doc | Question it answers | Time |
-|---|---|---|
-| [01 — What and why](01-what-and-why.md) | What is this product? What problem does it solve? What is the one idea everything hangs off? | 10 min |
-| [02 — Architecture](02-architecture.md) | What are the pieces, and how does each one work? | 40 min |
-| [03 — Logic flows](03-logic-flows.md) | What actually happens, step by step, when a page crawls / a visitor asks / a human takes over? | 30 min |
-| [04 — Using it](04-using-it.md) | How do I run it, demo it, operate the deployed instance, and use every tool in the repo? | 20 min |
-| [05 — Glossary](05-glossary.md) | What does that word mean? | lookup |
+| Doc                                     | Question it answers                                                                            | Time   |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------- | ------ |
+| [01 — What and why](01-what-and-why.md) | What is this product? What problem does it solve? What is the one idea everything hangs off?   | 10 min |
+| [02 — Architecture](02-architecture.md) | What are the pieces, and how does each one work?                                               | 40 min |
+| [03 — Logic flows](03-logic-flows.md)   | What actually happens, step by step, when a page crawls / a visitor asks / a human takes over? | 30 min |
+| [04 — Using it](04-using-it.md)         | How do I run it, demo it, operate the deployed instance, and use every tool in the repo?       | 20 min |
+| [05 — Glossary](05-glossary.md)         | What does that word mean?                                                                      | lookup |
 
 ## How this folder relates to the other documents
 
@@ -23,7 +23,7 @@ know how to program but not what any of this jargon means.
 - **[CLAUDE.md](../CLAUDE.md)** — the file-by-file architecture reference.
   Every file in the repo is described there, with the reasoning and the
   rejected alternatives, in numbered sections (`§3.15.1`) that code comments
-  cite. It is the *depth* document: when a doc here says "see §3.15.1", that
+  cite. It is the _depth_ document: when a doc here says "see §3.15.1", that
   is where the full story lives.
 - **[DATAFLOW.md](../DATAFLOW.md)** — request-by-request traces naming the
   exact function at every hop. The precise version of doc 03.

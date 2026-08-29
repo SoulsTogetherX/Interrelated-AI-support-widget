@@ -52,13 +52,17 @@ describe("stripe webhook signatures", () => {
     // exactly what makes it usable as a replay bound. Without this check a
     // captured "downgrade to free" is valid forever.
     const stale = signStripePayload(BODY, SECRET, NOW_SECONDS - 301)
-    expect(verifyStripeSignature(BODY, stale, SECRET, { now: NOW }))
-      .toEqual({ ok: false, reason: "stale" })
+    expect(verifyStripeSignature(BODY, stale, SECRET, { now: NOW })).toEqual({
+      ok: false,
+      reason: "stale",
+    })
     // A timestamp far in the FUTURE is as suspicious as one far in the
     // past, and clock skew cuts both ways.
     const future = signStripePayload(BODY, SECRET, NOW_SECONDS + 301)
-    expect(verifyStripeSignature(BODY, future, SECRET, { now: NOW }))
-      .toEqual({ ok: false, reason: "stale" })
+    expect(verifyStripeSignature(BODY, future, SECRET, { now: NOW })).toEqual({
+      ok: false,
+      reason: "stale",
+    })
     // At the boundary it is still good.
     const edge = signStripePayload(BODY, SECRET, NOW_SECONDS - 300)
     expect(verifyStripeSignature(BODY, edge, SECRET, { now: NOW }).ok).toBe(true)
@@ -70,9 +74,17 @@ describe("stripe webhook signatures", () => {
     // only the first signature would break every rotation — precisely the
     // operation a webhook secret must not discourage.
     const ours = createHmac("sha256", SECRET).update(`${NOW_SECONDS}.${BODY}`).digest("hex")
-    const theirs = createHmac("sha256", "whsec_previous").update(`${NOW_SECONDS}.${BODY}`).digest("hex")
-    expect(verifyStripeSignature(BODY, `t=${NOW_SECONDS},v1=${theirs},v1=${ours}`, SECRET, { now: NOW }).ok).toBe(true)
-    expect(verifyStripeSignature(BODY, `t=${NOW_SECONDS},v1=${ours},v1=${theirs}`, SECRET, { now: NOW }).ok).toBe(true)
+    const theirs = createHmac("sha256", "whsec_previous")
+      .update(`${NOW_SECONDS}.${BODY}`)
+      .digest("hex")
+    expect(
+      verifyStripeSignature(BODY, `t=${NOW_SECONDS},v1=${theirs},v1=${ours}`, SECRET, { now: NOW })
+        .ok,
+    ).toBe(true)
+    expect(
+      verifyStripeSignature(BODY, `t=${NOW_SECONDS},v1=${ours},v1=${theirs}`, SECRET, { now: NOW })
+        .ok,
+    ).toBe(true)
   })
 
   it("rejects malformed headers instead of throwing", () => {
@@ -104,7 +116,14 @@ describe("stripe webhook signatures", () => {
     // Signature valid, shape wrong. Whoever holds the secret can sign
     // anything; the handler still needs an id and a type, and a payload
     // without them must not reach the applier.
-    for (const body of ["not json", "[]", "null", '{"type":"x"}', '{"id":"evt_1"}', '{"id":"","type":"x"}']) {
+    for (const body of [
+      "not json",
+      "[]",
+      "null",
+      '{"type":"x"}',
+      '{"id":"evt_1"}',
+      '{"id":"","type":"x"}',
+    ]) {
       const header = signStripePayload(body, SECRET, NOW_SECONDS)
       const result = verifyStripeSignature(body, header, SECRET, { now: NOW })
       expect(result.ok).toBe(false)

@@ -8,7 +8,11 @@ import type { EmbeddingProvider } from "@providers/embedding/types"
 import type { LLMProvider } from "@providers/llm/types"
 import type { AnswerEvent } from "@shared/grounding/events"
 import { hashSecretKey, isId } from "@shared/utils/ids"
-import { isAnonymousVisitorId, isIdentifiedVisitorId, newAnonymousVisitorId } from "@shared/utils/visitorIds"
+import {
+  isAnonymousVisitorId,
+  isIdentifiedVisitorId,
+  newAnonymousVisitorId,
+} from "@shared/utils/visitorIds"
 import { answerQuestion } from "@/answer/pipeline"
 import { resolveEmbeddingProvider, resolveGenerationProvider } from "@/credentials/resolve"
 import { requestHandoff } from "@/handoff/escalate"
@@ -167,14 +171,24 @@ function sseWrite(res: Response, event: AnswerEvent): void {
 
 //#region Routes
 function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void {
-  const mintLimiter = options.mintLimiter
-    ?? new RateLimiter({ capacity: MINT_CAPACITY, refillPerSecond: MINT_REFILL_PER_SECOND })
-  const serverMintLimiter = options.serverMintLimiter
-    ?? new RateLimiter({ capacity: SERVER_MINT_CAPACITY, refillPerSecond: SERVER_MINT_REFILL_PER_SECOND })
-  const chatIpLimiter = options.chatIpLimiter
-    ?? new RateLimiter({ capacity: CHAT_IP_CAPACITY, refillPerSecond: CHAT_IP_REFILL_PER_SECOND })
-  const chatVisitorLimiter = options.chatVisitorLimiter
-    ?? new RateLimiter({ capacity: CHAT_VISITOR_CAPACITY, refillPerSecond: CHAT_VISITOR_REFILL_PER_SECOND })
+  const mintLimiter =
+    options.mintLimiter ??
+    new RateLimiter({ capacity: MINT_CAPACITY, refillPerSecond: MINT_REFILL_PER_SECOND })
+  const serverMintLimiter =
+    options.serverMintLimiter ??
+    new RateLimiter({
+      capacity: SERVER_MINT_CAPACITY,
+      refillPerSecond: SERVER_MINT_REFILL_PER_SECOND,
+    })
+  const chatIpLimiter =
+    options.chatIpLimiter ??
+    new RateLimiter({ capacity: CHAT_IP_CAPACITY, refillPerSecond: CHAT_IP_REFILL_PER_SECOND })
+  const chatVisitorLimiter =
+    options.chatVisitorLimiter ??
+    new RateLimiter({
+      capacity: CHAT_VISITOR_CAPACITY,
+      refillPerSecond: CHAT_VISITOR_REFILL_PER_SECOND,
+    })
 
   app.options("/v1/widget/session", preflight)
   app.options("/v1/widget/chat", preflight)
@@ -215,7 +229,11 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
    *  never allowed to fail the mint: instrumentation is not the product,
    *  and a visitor must get their session even if this table is having a
    *  bad day. */
-  const countOrigin = async (orgId: string, origin: string, outcome: MintOutcome): Promise<void> => {
+  const countOrigin = async (
+    orgId: string,
+    origin: string,
+    outcome: MintOutcome,
+  ): Promise<void> => {
     try {
       await recordOriginMint(options.db, { orgId, origin, outcome })
     } catch (err) {
@@ -253,7 +271,10 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       // anyone on an allowlisted origin impersonate user 42 to the support
       // agent reading the inbox (shared/utils/visitorIds.ts).
       const givenVisitor = body["visitorId"]
-      if (givenVisitor !== undefined && (typeof givenVisitor !== "string" || !isAnonymousVisitorId(givenVisitor))) {
+      if (
+        givenVisitor !== undefined &&
+        (typeof givenVisitor !== "string" || !isAnonymousVisitorId(givenVisitor))
+      ) {
         res.status(400).json({ error: "invalid visitorId" })
         return
       }
@@ -264,14 +285,14 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       // a snippet the customer has not yet updated keeps working. Postgres's
       // clock decides, not this process's: the dashboard wrote that instant
       // with NOW() on Neon, and Render's clock is a different machine's.
-      const key = await options.db.selectFrom("api_keys")
+      const key = await options.db
+        .selectFrom("api_keys")
         .select(["id", "org_id"])
         .where("kind", "=", "public")
         .where("public_id", "=", publishableKey)
-        .where((eb) => eb.or([
-          eb("revoked_at", "is", null),
-          eb("revoked_at", ">", sql<Date>`NOW()`),
-        ]))
+        .where((eb) =>
+          eb.or([eb("revoked_at", "is", null), eb("revoked_at", ">", sql<Date>`NOW()`)]),
+        )
         .executeTakeFirst()
       if (!key) {
         // Unknown, revoked, and past-its-grace collapse into one answer —
@@ -280,7 +301,8 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         return
       }
 
-      const allowed = await options.db.selectFrom("allowed_origins")
+      const allowed = await options.db
+        .selectFrom("allowed_origins")
         .select("origin")
         .where("org_id", "=", key.org_id)
         .where("origin", "=", origin)
@@ -301,7 +323,8 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       // "accepted until", and the latter is NOW() on Neon (§9.17), so the
       // two must be read off the same clock or a retiring key can look used
       // after it stopped being accepted.
-      await options.db.updateTable("api_keys")
+      await options.db
+        .updateTable("api_keys")
         .set({ last_used_at: sql`NOW()` })
         .where("id", "=", key.id)
         .execute()
@@ -311,7 +334,10 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       // during the seconds a human spends typing (the free-tier design:
       // the keepalive cron never touches the DB; the widget does, here).
       const visitorId = givenVisitor ?? newAnonymousVisitorId()
-      const minted = mintSessionToken({ org: key.org_id, origin, visitor: visitorId }, options.tokenSecret)
+      const minted = mintSessionToken(
+        { org: key.org_id, origin, visitor: visitorId },
+        options.tokenSecret,
+      )
       corsHeaders(res, origin)
       res.json({ token: minted.token, expiresAt: minted.expiresAt, visitorId })
     } catch (err) {
@@ -364,7 +390,8 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       }
 
       const auth = req.headers.authorization
-      const secretKey = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7).trim() : ""
+      const secretKey =
+        typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7).trim() : ""
       if (!secretKey.startsWith("sk_")) {
         // The publishable key presented here, garbage, or nothing at all: a
         // shape refusal that never reaches the database — and byte-identical
@@ -376,14 +403,14 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       // NULL, or still in the FUTURE — a rotation's grace window keeps the
       // old secret working until the customer has redeployed their backend
       // with the new one (§9.17), decided on Postgres's clock.
-      const key = await options.db.selectFrom("api_keys")
+      const key = await options.db
+        .selectFrom("api_keys")
         .select(["id", "org_id"])
         .where("kind", "=", "secret")
         .where("secret_hash", "=", hashSecretKey(secretKey))
-        .where((eb) => eb.or([
-          eb("revoked_at", "is", null),
-          eb("revoked_at", ">", sql<Date>`NOW()`),
-        ]))
+        .where((eb) =>
+          eb.or([eb("revoked_at", "is", null), eb("revoked_at", ">", sql<Date>`NOW()`)]),
+        )
         .executeTakeFirst()
       if (!key) {
         res.status(401).json({ error: "invalid secret key" })
@@ -406,12 +433,14 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       if (typeof origin !== "string" || origin.length === 0) {
         res.status(400).json({
           error: "invalid origin",
-          detail: "origin is required: the exact origin your page runs on, e.g. https://app.example.com",
+          detail:
+            "origin is required: the exact origin your page runs on, e.g. https://app.example.com",
         })
         return
       }
 
-      const allowed = await options.db.selectFrom("allowed_origins")
+      const allowed = await options.db
+        .selectFrom("allowed_origins")
         .select("origin")
         .where("org_id", "=", key.org_id)
         .where("origin", "=", origin)
@@ -433,7 +462,8 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       // last_used_at, on the database's clock as above: for a retiring
       // secret key this is how the owner can see their OLD backend config
       // is still out there before revoking it early.
-      await options.db.updateTable("api_keys")
+      await options.db
+        .updateTable("api_keys")
         .set({ last_used_at: sql`NOW()` })
         .where("id", "=", key.id)
         .execute()
@@ -441,7 +471,10 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
 
       // The same response shape as the browser mint, so the customer's
       // endpoint can proxy it to the widget verbatim.
-      const minted = mintSessionToken({ org: key.org_id, origin, visitor: visitorId }, options.tokenSecret)
+      const minted = mintSessionToken(
+        { org: key.org_id, origin, visitor: visitorId },
+        options.tokenSecret,
+      )
       res.json({ token: minted.token, expiresAt: minted.expiresAt, visitorId })
     } catch (err) {
       console.error("[widget] server session mint failed:", err)
@@ -450,6 +483,7 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
   })
 
   // ── Chat: token-authenticated SSE ────────────────────────────────────────
+  // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
   app.post("/v1/widget/chat", async (req: Request, res: Response) => {
     try {
       const session = authenticate(req, res)
@@ -458,7 +492,10 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
 
       // Rate limits AFTER auth (so their 429s carry CORS headers and the
       // widget can render a "one moment" state) and BEFORE any real work.
-      if (!chatIpLimiter.take(req.ip ?? "unknown") || !chatVisitorLimiter.take(`${session.org}:${session.visitor}`)) {
+      if (
+        !chatIpLimiter.take(req.ip ?? "unknown") ||
+        !chatVisitorLimiter.take(`${session.org}:${session.visitor}`)
+      ) {
         res.status(429).json({ error: "too many requests" })
         return
       }
@@ -489,7 +526,10 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         return
       }
       const conversationId = body["conversationId"]
-      if (conversationId !== undefined && (typeof conversationId !== "string" || !isId("con", conversationId))) {
+      if (
+        conversationId !== undefined &&
+        (typeof conversationId !== "string" || !isId("con", conversationId))
+      ) {
         res.status(400).json({ error: "invalid conversationId" })
         return
       }
@@ -504,7 +544,7 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
         // the stream and turn token-by-token into all-at-once.
         "x-accel-buffering": "no",
         "access-control-allow-origin": origin,
-        "vary": "origin",
+        vary: "origin",
       })
 
       // A closed tab must stop the token spend mid-generation. Kept as the
@@ -548,9 +588,11 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
           orgId: session.org,
           visitorId: session.visitor,
           question,
-          ...(conversationId !== undefined ? { conversationId: conversationId as string } : {}),
+          ...(conversationId !== undefined ? { conversationId: conversationId } : {}),
           ...(options.maxDistance !== undefined ? { maxDistance: options.maxDistance } : {}),
-          ...(options.answerDeadlineMs !== undefined ? { deadlineMs: options.answerDeadlineMs } : {}),
+          ...(options.answerDeadlineMs !== undefined
+            ? { deadlineMs: options.answerDeadlineMs }
+            : {}),
           signal: aborter.signal,
           onEvent: (event) => sseWrite(res, event),
         })
@@ -583,7 +625,10 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
       const session = authenticate(req, res)
       if (session === null) return
 
-      if (!chatIpLimiter.take(req.ip ?? "unknown") || !chatVisitorLimiter.take(`${session.org}:${session.visitor}`)) {
+      if (
+        !chatIpLimiter.take(req.ip ?? "unknown") ||
+        !chatVisitorLimiter.take(`${session.org}:${session.visitor}`)
+      ) {
         res.status(429).json({ error: "too many requests" })
         return
       }

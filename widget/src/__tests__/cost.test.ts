@@ -43,7 +43,7 @@ let host: HTMLElement
  *  request the widget makes that this does not expect shows up as a
  *  recorded URL the assertions do not allow, which is the point. */
 const countingFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-  const url = String(input)
+  const url = input as string // the real ApiClient only ever fetches string URLs
   requests.push({ url, method: init?.method ?? "GET" })
   if (url.endsWith("/v1/widget/session")) {
     return new Response(JSON.stringify({ token: "tok_cost", visitorId: "vis_" + "a".repeat(32) }), {
@@ -135,8 +135,8 @@ describe("what the widget costs a host page", () => {
       if (requests.length === 0) throw new Error("no mint yet")
     })
     expect(requests).toHaveLength(1)
-    expect(requests[0]!.url).toBe("https://api.test/v1/widget/session")
-    expect(requests[0]!.method).toBe("POST")
+    expect(requests[0].url).toBe("https://api.test/v1/widget/session")
+    expect(requests[0].method).toBe("POST")
     // Opening again must not re-mint: the session is cached for its life,
     // so a visitor who fidgets with the panel costs nothing more.
     query<HTMLButtonElement>(".bubble").click()
@@ -160,8 +160,8 @@ describe("what the widget costs a host page", () => {
     })
 
     expect(requests).toHaveLength(2)
-    expect(requests[1]!.url).toBe("https://api.test/v1/widget/chat")
-    expect(requests[1]!.method).toBe("POST")
+    expect(requests[1].url).toBe("https://api.test/v1/widget/chat")
+    expect(requests[1].method).toBe("POST")
   })
 
   it("spends a mint and a ticket at mount ONLY when a handoff is live — the deliberate exception", async () => {

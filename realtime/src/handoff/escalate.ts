@@ -59,7 +59,9 @@ export type HandoffOutcome =
 /** Postgres unique-violation. Checked by code rather than message text: the
  *  message is localized and version-dependent, the SQLSTATE is neither. */
 function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505"
+  return (
+    typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505"
+  )
 }
 
 function toOpenHandoff(row: {

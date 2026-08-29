@@ -138,7 +138,10 @@ interface ProviderSummary {
  *  "—" rather than "0 ms", for histogram.ts's reason: zero reads as
  *  impossibly fast where an em dash reads as never measured. */
 function percentileOf(values: readonly number[], p: number): number {
-  return percentile([...values].sort((a, b) => a - b), p)
+  return percentile(
+    [...values].sort((a, b) => a - b),
+    p,
+  )
 }
 
 /**
@@ -154,7 +157,8 @@ function summarizeProvider(
   model: string,
   outcomes: readonly AnswerOutcome[],
 ): ProviderSummary {
-  if (outcomes.length === 0) throw new Error(`summarizeProvider(${provider}): no questions measured`)
+  if (outcomes.length === 0)
+    throw new Error(`summarizeProvider(${provider}): no questions measured`)
 
   const answered = outcomes.filter((o) => o.outcome === "answered")
   const contractFailures = outcomes.filter((o) => o.outcome === "contract_failure").length
@@ -188,8 +192,14 @@ function summarizeProvider(
     contractFailureRate: contractFailures / outcomes.length,
     ttftP50Ms: percentileOf(ttfts, 50),
     ttftP95Ms: percentileOf(ttfts, 95),
-    totalP50Ms: percentileOf(answered.map((o) => o.totalMs), 50),
-    totalP95Ms: percentileOf(answered.map((o) => o.totalMs), 95),
+    totalP50Ms: percentileOf(
+      answered.map((o) => o.totalMs),
+      50,
+    ),
+    totalP95Ms: percentileOf(
+      answered.map((o) => o.totalMs),
+      95,
+    ),
     inputTokens: answered.reduce((sum, o) => sum + (o.inputTokens ?? 0), 0),
     outputTokens: answered.reduce((sum, o) => sum + (o.outputTokens ?? 0), 0),
     // Per 1k answers, scaled from the answers that COULD be priced rather

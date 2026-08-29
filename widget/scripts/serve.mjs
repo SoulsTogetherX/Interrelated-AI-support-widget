@@ -54,7 +54,12 @@ const TYPES = {
 async function supportSession(res) {
   if (secretKey === null) {
     res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" })
-    res.end(JSON.stringify({ error: "INTERRELATED_SECRET_KEY is not set on the fixture server — generate a secret key on the dashboard overview and export it" }))
+    res.end(
+      JSON.stringify({
+        error:
+          "INTERRELATED_SECRET_KEY is not set on the fixture server — generate a secret key on the dashboard overview and export it",
+      }),
+    )
     return
   }
   try {
@@ -67,11 +72,18 @@ async function supportSession(res) {
     const body = await upstream.text()
     // Passed through verbatim — status included, so a 403 "origin not
     // allowed" from realtime reaches the browser console legibly.
-    res.writeHead(upstream.status, { "content-type": "application/json", "cache-control": "no-store" })
+    res.writeHead(upstream.status, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    })
     res.end(body)
   } catch (err) {
     res.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" })
-    res.end(JSON.stringify({ error: `could not reach ${apiBase}: ${err instanceof Error ? err.message : String(err)}` }))
+    res.end(
+      JSON.stringify({
+        error: `could not reach ${apiBase}: ${err instanceof Error ? err.message : String(err)}`,
+      }),
+    )
   }
 }
 
@@ -96,9 +108,13 @@ createServer(async (req, res) => {
     res.writeHead(404, { "content-type": "text/plain" }).end(`not found: ${path}`)
   }
 }).listen(port, () => {
-  console.log(`fixtures at http://localhost:${port}/fixtures/{tailwind,bootstrap,hostile,strong,measure}.html`)
+  console.log(
+    `fixtures at http://localhost:${port}/fixtures/{tailwind,bootstrap,hostile,strong,measure}.html`,
+  )
   console.log(`(build first: npm run build; seed the API: npm run seed-demo in realtime/)`)
-  console.log(secretKey
-    ? `strong mode: /api/support-session mints via ${apiBase}/v1/sessions for ${signedInUser} on ${pageOrigin}`
-    : "strong mode: INTERRELATED_SECRET_KEY unset — /api/support-session answers 503")
+  console.log(
+    secretKey
+      ? `strong mode: /api/support-session mints via ${apiBase}/v1/sessions for ${signedInUser} on ${pageOrigin}`
+      : "strong mode: INTERRELATED_SECRET_KEY unset — /api/support-session answers 503",
+  )
 })

@@ -59,7 +59,10 @@ const REQUEST_SMELLS = [
   { pattern: /url\(\s*['"]?[^)'"]/, what: "a url() in the styles — a font or image to fetch" },
   { pattern: /<link\b/i, what: "an injected <link> — a stylesheet or preload to fetch" },
   { pattern: /new\s+Image\s*\(/, what: "an injected image" },
-  { pattern: /https?:\/\/[a-z0-9]/i, what: "an absolute URL literal — only the tenant's configured API base may be dialed" },
+  {
+    pattern: /https?:\/\/[a-z0-9]/i,
+    what: "an absolute URL literal — only the tenant's configured API base may be dialed",
+  },
 ]
 
 const bundlePath = resolve(dirname(fileURLToPath(import.meta.url)), "../widget/dist/widget.js")
@@ -73,12 +76,16 @@ try {
 
 const gzipped = gzipSync(bundle, { level: 9 }).length
 const percent = ((gzipped / BUDGET_BYTES) * 100).toFixed(1)
-console.log(`widget bundle: ${bundle.length} bytes raw, ${gzipped} bytes gzipped (budget ${BUDGET_BYTES}, ${percent}% used)`)
+console.log(
+  `widget bundle: ${bundle.length} bytes raw, ${gzipped} bytes gzipped (budget ${BUDGET_BYTES}, ${percent}% used)`,
+)
 
 let failures = 0
 
 if (gzipped > BUDGET_BYTES) {
-  console.error(`FAIL: over the ${BUDGET_BYTES}-byte gzipped budget by ${gzipped - BUDGET_BYTES} bytes`)
+  console.error(
+    `FAIL: over the ${BUDGET_BYTES}-byte gzipped budget by ${gzipped - BUDGET_BYTES} bytes`,
+  )
   failures += 1
 } else {
   console.log("size budget ok")
@@ -93,8 +100,12 @@ for (const { what } of found) {
   failures += 1
 }
 if (found.length === 0) {
-  console.log(`host page cost: 1 request, ${gzipped} bytes gzipped — the bundle fetches nothing else`)
-  console.log("  (zero further requests until the visitor opens the bubble — widget/src/__tests__/cost.test.ts)")
+  console.log(
+    `host page cost: 1 request, ${gzipped} bytes gzipped — the bundle fetches nothing else`,
+  )
+  console.log(
+    "  (zero further requests until the visitor opens the bubble — widget/src/__tests__/cost.test.ts)",
+  )
 }
 
 process.exit(failures > 0 ? 1 : 0)

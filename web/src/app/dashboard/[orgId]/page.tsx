@@ -21,11 +21,8 @@ function utcMinute(at: Date): string {
   return at.toISOString().slice(0, 16).replace("T", " ")
 }
 
-export default async function OrgOverviewPage({
-  params,
-}: {
-  params: Promise<{ orgId: string }>
-}) {
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
+export default async function OrgOverviewPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params
   const { user, org } = await requireOrgMember(orgId)
   const [keys, secretKeys, orgs, usage, refused] = await Promise.all([
@@ -105,8 +102,8 @@ export default async function OrgOverviewPage({
           </div>
           <p className="orghome-cardnote">
             {usage.plan.name} allows {usage.limit.toLocaleString("en-US")} answers per UTC day,
-            counted per organization and checked before the model is called — a refusal counts
-            too, because it still costs a retrieval. The count resets at midnight UTC.
+            counted per organization and checked before the model is called — a refusal counts too,
+            because it still costs a retrieval. The count resets at midnight UTC.
           </p>
         </section>
       ) : null}
@@ -120,8 +117,8 @@ export default async function OrgOverviewPage({
           <strong>{refused.refused.toLocaleString("en-US")}</strong> widget{" "}
           {refused.refused === 1 ? "load was" : "loads were"} refused from{" "}
           {refused.origins === 1 ? "an origin" : `${refused.origins} origins`} you have not
-          allowlisted in the last {TRAFFIC_DAYS} days. If one is your own site, allow it; if
-          not, someone has a copy of your snippet and the allowlist is doing its job.{" "}
+          allowlisted in the last {TRAFFIC_DAYS} days. If one is your own site, allow it; if not,
+          someone has a copy of your snippet and the allowlist is doing its job.{" "}
           <Link href={`/dashboard/${org.id}/widget`}>See which origins</Link>
         </p>
       ) : null}
@@ -135,9 +132,9 @@ export default async function OrgOverviewPage({
           {currentKey?.publishableKey ?? "no live key — this org has no current key (unexpected)"}
         </code>
         <p className="orghome-cardnote">
-          This value goes in your site&apos;s widget snippet. It is safe to be
-          public: it only identifies this organization, and the widget refuses
-          to serve origins you haven&apos;t allowlisted.
+          This value goes in your site&apos;s widget snippet. It is safe to be public: it only
+          identifies this organization, and the widget refuses to serve origins you haven&apos;t
+          allowlisted.
         </p>
         {isOwner && currentKey ? (
           <RotateKeyForm orgId={org.id} keyId={currentKey.id} graceHours={ROTATION_GRACE_HOURS} />
@@ -158,7 +155,9 @@ export default async function OrgOverviewPage({
                     <code className="orghome-keyvalue">{k.publishableKey}</code>
                     <span className="orghome-keymeta">
                       accepted until {k.revokedAt ? utcMinute(k.revokedAt) : "—"} UTC ·{" "}
-                      {k.lastUsedAt ? `last used ${utcMinute(k.lastUsedAt)} UTC` : "not used since rotation"}
+                      {k.lastUsedAt
+                        ? `last used ${utcMinute(k.lastUsedAt)} UTC`
+                        : "not used since rotation"}
                     </span>
                   </div>
                   {isOwner ? (
@@ -174,10 +173,9 @@ export default async function OrgOverviewPage({
               ))}
             </ul>
             <p className="orghome-cardnote">
-              Revoking now stops new widget sessions on that key immediately; a
-              visitor already chatting keeps their session (up to 30 minutes),
-              because a session is bound to this organization, not to the key
-              that opened it.
+              Revoking now stops new widget sessions on that key immediately; a visitor already
+              chatting keeps their session (up to 30 minutes), because a session is bound to this
+              organization, not to the key that opened it.
             </p>
           </>
         ) : null}
@@ -208,7 +206,8 @@ export default async function OrgOverviewPage({
           <p className="orghome-secret">
             <code className="orghome-keyvalue">sk_live_…{currentSecret.suffix}</code>
             <span className="orghome-keymeta">
-              {" "}issued {utcMinute(currentSecret.createdAt)} UTC ·{" "}
+              {" "}
+              issued {utcMinute(currentSecret.createdAt)} UTC ·{" "}
               {currentSecret.lastUsedAt
                 ? `last used ${utcMinute(currentSecret.lastUsedAt)} UTC`
                 : "not used yet"}
@@ -250,7 +249,9 @@ export default async function OrgOverviewPage({
                     <code className="orghome-keyvalue">sk_live_…{k.suffix}</code>
                     <span className="orghome-keymeta">
                       accepted until {k.revokedAt ? utcMinute(k.revokedAt) : "—"} UTC ·{" "}
-                      {k.lastUsedAt ? `last used ${utcMinute(k.lastUsedAt)} UTC` : "not used since rotation"}
+                      {k.lastUsedAt
+                        ? `last used ${utcMinute(k.lastUsedAt)} UTC`
+                        : "not used since rotation"}
                     </span>
                   </div>
                   {isOwner ? (
@@ -274,7 +275,9 @@ export default async function OrgOverviewPage({
 
         {revokedSecrets.length > 0 ? (
           <p className="orghome-cardnote">
-            {revokedSecrets.length === 1 ? "One earlier secret key" : `${revokedSecrets.length} earlier secret keys`}{" "}
+            {revokedSecrets.length === 1
+              ? "One earlier secret key"
+              : `${revokedSecrets.length} earlier secret keys`}{" "}
             revoked. A revoked key is refused exactly like one that never existed.
           </p>
         ) : null}
@@ -285,20 +288,15 @@ export default async function OrgOverviewPage({
         <ol className="orghome-steps">
           <li>
             <strong>
-              <Link href={`/dashboard/${org.id}/providers`}>
-                Connect an AI provider
-              </Link>
+              <Link href={`/dashboard/${org.id}/providers`}>Connect an AI provider</Link>
             </strong>{" "}
             — bring your own Groq, Gemini, Ollama, or OpenAI-compatible key.
           </li>
           <li>
             <strong>
-              <Link href={`/dashboard/${org.id}/sources`}>
-                Index your documentation
-              </Link>
+              <Link href={`/dashboard/${org.id}/sources`}>Index your documentation</Link>
             </strong>{" "}
-            — point a crawler at your docs site and watch it become
-            citable.
+            — point a crawler at your docs site and watch it become citable.
           </li>
           <li>
             <strong>

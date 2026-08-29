@@ -49,8 +49,9 @@ describe("handoff tickets", () => {
     const [payload, signature] = ticket.split(".")
 
     // A payload edited to name another conversation.
-    const forged = Buffer.from(JSON.stringify({ ...FIELDS, exp: Date.now() + 60_000, jti: "x" }))
-      .toString("base64url")
+    const forged = Buffer.from(
+      JSON.stringify({ ...FIELDS, exp: Date.now() + 60_000, jti: "x" }),
+    ).toString("base64url")
     expect(verifyHandoffTicket(`${forged}.${signature}`, SECRET)).toBeNull()
     // A flipped signature character — in the MIDDLE. The last base64url
     // character of a 32-byte MAC carries two padding bits, so replacing it
@@ -70,7 +71,9 @@ describe("handoff tickets", () => {
     // Signed with the real key, but missing role/sub — the check that stops
     // a future refactor from admitting a half-populated payload.
     const key = createHmac("sha256", SECRET).update("interrelated/handoff-ticket/v1").digest()
-    const encoded = Buffer.from(JSON.stringify({ con: "con_x", exp: Date.now() + 60_000 })).toString("base64url")
+    const encoded = Buffer.from(
+      JSON.stringify({ con: "con_x", exp: Date.now() + 60_000 }),
+    ).toString("base64url")
     const signature = createHmac("sha256", key).update(encoded).digest("base64url")
     expect(verifyHandoffTicket(`${encoded}.${signature}`, SECRET)).toBeNull()
   })
@@ -79,7 +82,10 @@ describe("handoff tickets", () => {
     // Same env secret, two token types. Derivation is what keeps a
     // 30-minute session token from ever being spendable as an upgrade
     // ticket (and vice versa) regardless of payload shape.
-    const session = mintSessionToken({ org: "org_y", origin: "https://a.test", visitor: "vis_z" }, SECRET)
+    const session = mintSessionToken(
+      { org: "org_y", origin: "https://a.test", visitor: "vis_z" },
+      SECRET,
+    )
     expect(verifyHandoffTicket(session.token, SECRET)).toBeNull()
 
     const { ticket } = mintHandoffTicket(FIELDS, SECRET)

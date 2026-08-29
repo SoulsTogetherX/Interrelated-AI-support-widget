@@ -25,13 +25,9 @@ import { closeHandoff, mintHandoffTicket } from "@/lib/realtime"
 //#endregion
 
 //#region Types
-export type TicketResult =
-  | { ok: true; ticket: string }
-  | { ok: false; error: string }
+export type TicketResult = { ok: true; ticket: string } | { ok: false; error: string }
 
-export type CloseResult =
-  | { ok: true; closed: boolean }
-  | { ok: false; error: string }
+export type CloseResult = { ok: true; closed: boolean } | { ok: false; error: string }
 //#endregion
 
 //#region Actions

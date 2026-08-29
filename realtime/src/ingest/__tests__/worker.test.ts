@@ -41,21 +41,28 @@ function serveSite(path: string): { status: number; body: string } {
     case "/docs/index.html":
       return {
         status: 200,
-        body: page("Docs Home", `
+        body: page(
+          "Docs Home",
+          `
           <h1>Docs Home</h1>
           <p>Welcome to the fixture documentation.</p>
           <a href="/docs/a.html">a</a>
-          ${siteVersion === 1 ? '<a href="/docs/gone.html">gone</a>' : ""}`),
+          ${siteVersion === 1 ? '<a href="/docs/gone.html">gone</a>' : ""}`,
+        ),
       }
     case "/docs/a.html":
       return {
         status: 200,
-        body: page("A Guide", `
+        body: page(
+          "A Guide",
+          `
           <h1>A Guide</h1>
-          <p>${siteVersion === 1 ? "Refunds take five business days." : "Refunds take ten business days now."}</p>`),
+          <p>${siteVersion === 1 ? "Refunds take five business days." : "Refunds take ten business days now."}</p>`,
+        ),
       }
     case "/docs/gone.html":
-      if (siteVersion === 1) return { status: 200, body: page("Gone", "<h1>Gone</h1><p>Soon removed.</p>") }
+      if (siteVersion === 1)
+        return { status: 200, body: page("Gone", "<h1>Gone</h1><p>Soon removed.</p>") }
       return { status: 404, body: "removed" }
     default:
       return { status: 404, body: "not found" }
@@ -78,11 +85,14 @@ const countingEmbedder: EmbeddingProvider = {
 }
 
 /** Worker under test: real crawler pointed at the loopback fixture. */
-function makeWorker(overrides: Partial<ConstructorParameters<typeof IngestWorker>[0]> = {}): IngestWorker {
+function makeWorker(
+  overrides: Partial<ConstructorParameters<typeof IngestWorker>[0]> = {},
+): IngestWorker {
   return new IngestWorker({
     db,
     embedder: countingEmbedder,
-    crawler: (source: CrawlSource) => crawl(source, { fetchDelayMs: 0, fetchOptions: { hostGuard: () => {} } }),
+    crawler: (source: CrawlSource) =>
+      crawl(source, { fetchDelayMs: 0, fetchOptions: { hostGuard: () => {} } }),
     ...overrides,
   })
 }
@@ -93,23 +103,47 @@ async function makeOrg(name: string): Promise<string> {
   return id
 }
 
-async function enqueue(orgId: string, source: { kind?: "url" | "sitemap" | "upload"; location: string; crawl_depth?: number; sourceId?: string }): Promise<{ sourceId: string; jobId: string }> {
+async function enqueue(
+  orgId: string,
+  source: {
+    kind?: "url" | "sitemap" | "upload"
+    location: string
+    crawl_depth?: number
+    sourceId?: string
+  },
+): Promise<{ sourceId: string; jobId: string }> {
   const sourceId = source.sourceId ?? newId("src")
   if (!source.sourceId) {
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: orgId, kind: source.kind ?? "url",
-      location: source.location, crawl_depth: source.crawl_depth ?? 1,
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: orgId,
+        kind: source.kind ?? "url",
+        location: source.location,
+        crawl_depth: source.crawl_depth ?? 1,
+      })
+      .execute()
   }
   const jobId = newId("job")
-  await db.insertInto("ingest_jobs").values({ id: jobId, org_id: orgId, source_id: sourceId }).execute()
+  await db
+    .insertInto("ingest_jobs")
+    .values({ id: jobId, org_id: orgId, source_id: sourceId })
+    .execute()
   return { sourceId, jobId }
 }
 
-const job = (id: string) => db.selectFrom("ingest_jobs").selectAll().where("id", "=", id).executeTakeFirstOrThrow()
-const source = (id: string) => db.selectFrom("sources").selectAll().where("id", "=", id).executeTakeFirstOrThrow()
+const job = (id: string) =>
+  db.selectFrom("ingest_jobs").selectAll().where("id", "=", id).executeTakeFirstOrThrow()
+const source = (id: string) =>
+  db.selectFrom("sources").selectAll().where("id", "=", id).executeTakeFirstOrThrow()
 const liveDocs = (sourceId: string) =>
-  db.selectFrom("documents").selectAll().where("source_id", "=", sourceId).where("deleted_at", "is", null).execute()
+  db
+    .selectFrom("documents")
+    .selectAll()
+    .where("source_id", "=", sourceId)
+    .where("deleted_at", "is", null)
+    .execute()
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -120,7 +154,9 @@ function gatedCrawler(pages: Array<{ url: string; markdown: string }>): {
   release: () => void
 } {
   let release!: () => void
-  const gate = new Promise<void>((resolve) => { release = resolve })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
   const factory = async function* (): AsyncGenerator<CrawlEvent> {
     for (const p of pages) {
       await gate
@@ -183,15 +219,27 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     expect(docs.map((d) => d.title).sort()).toEqual(["A Guide", "Docs Home", "Gone"])
     const aDoc = docs.find((d) => d.title === "A Guide") as (typeof docs)[number]
 
-    const chunks = await db.selectFrom("chunks").selectAll().where("document_id", "=", aDoc.id).execute()
+    const chunks = await db
+      .selectFrom("chunks")
+      .selectAll()
+      .where("document_id", "=", aDoc.id)
+      .execute()
     expect(chunks.length).toBeGreaterThan(0)
     expect(chunks[0]?.heading_path).toBe("A Guide")
     expect(chunks[0]?.text).toContain("five business days")
 
     // Every chunk carries an embedding under the worker's model, and the
     // embedded text was the chunk PREFIXED with its heading trail.
-    const embeddings = await db.selectFrom("chunk_embeddings").selectAll().where("org_id", "=", orgId).execute()
-    const allChunks = await db.selectFrom("chunks").selectAll().where("org_id", "=", orgId).execute()
+    const embeddings = await db
+      .selectFrom("chunk_embeddings")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .execute()
+    const allChunks = await db
+      .selectFrom("chunks")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .execute()
     expect(embeddings).toHaveLength(allChunks.length)
     expect(embeddings.every((e) => e.model === "mock-384" && e.dim === 384)).toBe(true)
     expect(embedCalls.flat().some((t) => t.startsWith("A Guide\n"))).toBe(true)
@@ -199,14 +247,22 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
 
   it("skips re-embedding when a recrawl finds identical content", async () => {
     const { jobId } = await enqueue(orgId, { sourceId: mainSourceId, location: "" })
-    const chunksBefore = await db.selectFrom("chunks").selectAll().where("org_id", "=", orgId).execute()
+    const chunksBefore = await db
+      .selectFrom("chunks")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .execute()
     embedCalls.length = 0
 
     expect(await makeWorker().tick()).toBe(true)
 
     expect((await job(jobId)).state).toBe("done")
     expect(embedCalls).toHaveLength(0) // the whole point of content_hash
-    const chunksAfter = await db.selectFrom("chunks").selectAll().where("org_id", "=", orgId).execute()
+    const chunksAfter = await db
+      .selectFrom("chunks")
+      .selectAll()
+      .where("org_id", "=", orgId)
+      .execute()
     expect(chunksAfter.map((c) => c.id).sort()).toEqual(chunksBefore.map((c) => c.id).sort())
   })
 
@@ -221,15 +277,21 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     const docs = await liveDocs(mainSourceId)
     expect(docs.map((d) => d.title).sort()).toEqual(["A Guide", "Docs Home"])
     const aDoc = docs.find((d) => d.title === "A Guide") as (typeof docs)[number]
-    const aChunks = await db.selectFrom("chunks").selectAll().where("document_id", "=", aDoc.id).execute()
+    const aChunks = await db
+      .selectFrom("chunks")
+      .selectAll()
+      .where("document_id", "=", aDoc.id)
+      .execute()
     expect(aChunks.some((c) => c.text.includes("ten business days"))).toBe(true)
     expect(aChunks.some((c) => c.text.includes("five business days"))).toBe(false)
     expect(embedCalls.length).toBeGreaterThan(0)
 
     // The removed page survives as a tombstone, not as retrievable content.
     const tombstone = await db
-      .selectFrom("documents").selectAll()
-      .where("source_id", "=", mainSourceId).where("deleted_at", "is not", null)
+      .selectFrom("documents")
+      .selectAll()
+      .where("source_id", "=", mainSourceId)
+      .where("deleted_at", "is not", null)
       .executeTakeFirst()
     expect(tombstone?.title).toBe("Gone")
 
@@ -250,7 +312,11 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     const org = await makeOrg("Model Switch Co")
     const { sourceId } = await enqueue(org, { location: `${base}/docs/a.html`, crawl_depth: 0 })
     expect(await makeWorker().tick()).toBe(true)
-    const before = await db.selectFrom("chunk_embeddings").selectAll().where("org_id", "=", org).execute()
+    const before = await db
+      .selectFrom("chunk_embeddings")
+      .selectAll()
+      .where("org_id", "=", org)
+      .execute()
     expect(before.length).toBeGreaterThan(0)
     expect(before.every((e) => e.model === "mock-384")).toBe(true)
 
@@ -260,7 +326,8 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     const alt: EmbeddingProvider = {
       model: "alt-embed-8",
       dim: 8,
-      embed: async (texts) => texts.map((_, i) => Array.from({ length: 8 }, (_, j) => (j === i % 8 ? 1 : 0))),
+      embed: async (texts) =>
+        texts.map((_, i) => Array.from({ length: 8 }, (_, j) => (j === i % 8 ? 1 : 0))),
     }
     await enqueue(org, { sourceId, location: "" })
     embedCalls.length = 0
@@ -278,7 +345,11 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     // Identical text, and yet the vectors moved: every chunk now lives in
     // the tenant's space, and the superseded ones are gone rather than
     // lingering as a second copy of the corpus.
-    const after = await db.selectFrom("chunk_embeddings").selectAll().where("org_id", "=", org).execute()
+    const after = await db
+      .selectFrom("chunk_embeddings")
+      .selectAll()
+      .where("org_id", "=", org)
+      .execute()
     expect(after.length).toBeGreaterThan(0)
     expect(after.every((e) => e.model === "alt-embed-8" && e.dim === 8)).toBe(true)
     // The counting embedder (the app-level fallback) was NOT used.
@@ -302,9 +373,15 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     // working as designed. Poll rather than sleep-and-hope.
     let owners: Array<string | null> = []
     for (let i = 0; i < 100; i++) {
-      const rows = await db.selectFrom("ingest_jobs").select(["locked_by", "state"])
-        .where("id", "in", [a.jobId, b.jobId]).execute()
-      if (rows.every((r) => r.state === "running")) { owners = rows.map((r) => r.locked_by); break }
+      const rows = await db
+        .selectFrom("ingest_jobs")
+        .select(["locked_by", "state"])
+        .where("id", "in", [a.jobId, b.jobId])
+        .execute()
+      if (rows.every((r) => r.state === "running")) {
+        owners = rows.map((r) => r.locked_by)
+        break
+      }
       await sleep(20)
     }
     expect(owners.sort()).toEqual(["worker-A", "worker-B"])
@@ -321,14 +398,18 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     const twentyMinAgo = new Date(Date.now() - 20 * 60 * 1000)
 
     const fresh = await enqueue(org3, { location: "https://stale.test" })
-    await db.updateTable("ingest_jobs")
+    await db
+      .updateTable("ingest_jobs")
       .set({ state: "running", locked_by: "worker-dead", locked_at: twentyMinAgo, attempts: 1 })
-      .where("id", "=", fresh.jobId).execute()
+      .where("id", "=", fresh.jobId)
+      .execute()
 
     const spent = await enqueue(org3, { location: "https://spent.test" })
-    await db.updateTable("ingest_jobs")
+    await db
+      .updateTable("ingest_jobs")
       .set({ state: "running", locked_by: "worker-dead", locked_at: twentyMinAgo, attempts: 3 })
-      .where("id", "=", spent.jobId).execute()
+      .where("id", "=", spent.jobId)
+      .execute()
 
     // Empty crawl: this test is about lease bookkeeping, not ingestion.
     const emptyCrawler = async function* (): AsyncGenerator<CrawlEvent> {}
@@ -403,7 +484,9 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
       url: "https://skip.test/private/0",
       reason: "disallowed by robots.txt (User-agent: *, Disallow: /private/)",
     })
-    expect(j.skipped_pages[MAX_RECORDED_SKIPPED_PAGES - 1]?.url).toBe(`https://skip.test/private/${MAX_RECORDED_SKIPPED_PAGES - 2}`)
+    expect(j.skipped_pages[MAX_RECORDED_SKIPPED_PAGES - 1]?.url).toBe(
+      `https://skip.test/private/${MAX_RECORDED_SKIPPED_PAGES - 2}`,
+    )
   })
 
   it("stop() requeues the in-flight job between pages", async () => {
@@ -412,11 +495,21 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     // the worker while it sits between the two — the only ordering in which
     // "requeue between pages" is observable deterministically.
     let release!: () => void
-    const gate = new Promise<void>((resolve) => { release = resolve })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const factory = async function* (): AsyncGenerator<CrawlEvent> {
-      yield { kind: "page", url: "https://stop.test/one", doc: parseMarkdown("# One\n\nfirst page") }
+      yield {
+        kind: "page",
+        url: "https://stop.test/one",
+        doc: parseMarkdown("# One\n\nfirst page"),
+      }
       await gate
-      yield { kind: "page", url: "https://stop.test/two", doc: parseMarkdown("# Two\n\nsecond page") }
+      yield {
+        kind: "page",
+        url: "https://stop.test/two",
+        doc: parseMarkdown("# Two\n\nsecond page"),
+      }
     }
     const { sourceId, jobId } = await enqueue(org4, { location: "https://stop.test" })
     const worker = makeWorker({ crawler: factory })
@@ -445,6 +538,7 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
   //#region Failure paths
   it("fails the job and the source when the crawl is unrunnable", async () => {
     const org5 = await makeOrg("Broken Co")
+    // eslint-disable-next-line require-yield -- throws before ever yielding: the fixture IS the failure
     const boom = async function* (): AsyncGenerator<CrawlEvent> {
       throw new CrawlError("root fetch failed: HTTP 500")
     }
@@ -460,33 +554,52 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
 
   it("ingests an UPLOAD from its stored extraction, with no network at all (M7.6b)", async () => {
     const org6 = await makeOrg("Upload Co")
-    const text = "# Handbook\n\nRefunds are issued within 14 days.\n\n## Returns\n\nShip returns to the depot.\n"
+    const text =
+      "# Handbook\n\nRefunds are issued within 14 days.\n\n## Returns\n\nShip returns to the depot.\n"
     const sourceId = newId("src")
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: org6, kind: "upload", location: "handbook.md", crawl_depth: 0,
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: org6,
+        kind: "upload",
+        location: "handbook.md",
+        crawl_depth: 0,
+      })
+      .execute()
     // Written exactly as the upload route writes it: the real parser's
     // blocks, reduced to spans. Hand-computed offsets would be a second,
     // wronger parser (the first attempt at this fixture put the "# " marker
     // inside the heading, which the markdown parser excludes by design).
     const parsedUpload = parseMarkdown(text)
-    await db.insertInto("source_uploads").values({
-      source_id: sourceId, filename: "handbook.md", format: "markdown",
-      byte_size: Buffer.byteLength(text), title: parsedUpload.title, text: parsedUpload.text,
-      blocks: JSON.stringify(parsedUpload.blocks.map((b) => ({
-        kind: b.kind,
-        ...(b.level !== undefined ? { level: b.level } : {}),
-        charStart: b.charStart,
-        charEnd: b.charEnd,
-      }))),
-    }).execute()
+    await db
+      .insertInto("source_uploads")
+      .values({
+        source_id: sourceId,
+        filename: "handbook.md",
+        format: "markdown",
+        byte_size: Buffer.byteLength(text),
+        title: parsedUpload.title,
+        text: parsedUpload.text,
+        blocks: JSON.stringify(
+          parsedUpload.blocks.map((b) => ({
+            kind: b.kind,
+            ...(b.level !== undefined ? { level: b.level } : {}),
+            charStart: b.charStart,
+            charEnd: b.charEnd,
+          })),
+        ),
+      })
+      .execute()
     const { jobId } = await enqueue(org6, { location: "handbook.md", sourceId })
 
     // A crawler that would THROW if it were called: an upload must never
     // reach the network, and the only proof of that is a crawler which
     // cannot be used silently.
     const worker = makeWorker({
-      crawler: () => { throw new Error("an upload must not be crawled") },
+      crawler: () => {
+        throw new Error("an upload must not be crawled")
+      },
     })
     expect(await worker.tick()).toBe(true)
 
@@ -505,16 +618,23 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     // The chunks carry the heading trail the stored spans reconstructed —
     // proof the blocks survived the round trip as structure and not just as
     // text, which is what separates an upload from a flat paste.
-    const chunks = await db.selectFrom("chunks").selectAll()
-      .where("document_id", "=", docs[0]!.id).orderBy("ord").execute()
+    const chunks = await db
+      .selectFrom("chunks")
+      .selectAll()
+      .where("document_id", "=", docs[0].id)
+      .orderBy("ord")
+      .execute()
     expect(chunks.length).toBeGreaterThan(0)
     expect(chunks.map((c) => c.heading_path)).toContain("Handbook > Returns")
     // And every chunk's text really is a slice of the stored text — the
     // parser contract, checked at the far end of the pipeline.
     for (const c of chunks) expect(text).toContain(c.text)
 
-    const embeddings = await db.selectFrom("chunk_embeddings").select("chunk_id")
-      .where("org_id", "=", org6).execute()
+    const embeddings = await db
+      .selectFrom("chunk_embeddings")
+      .select("chunk_id")
+      .where("org_id", "=", org6)
+      .execute()
     expect(embeddings).toHaveLength(chunks.length)
   })
 
@@ -538,13 +658,18 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
       embed: (texts) => {
         if (refusals === 0) {
           refusals++
-          return Promise.reject(new LLMHttpError({ provider: "gemini", status: 429, detail: "quota" }))
+          return Promise.reject(
+            new LLMHttpError({ provider: "gemini", status: 429, detail: "quota" }),
+          )
         }
         return mockEmbedder.embed(texts)
       },
     }
 
-    const { sourceId, jobId } = await enqueue(org8, { location: `${base}/docs/a.html`, crawl_depth: 0 })
+    const { sourceId, jobId } = await enqueue(org8, {
+      location: `${base}/docs/a.html`,
+      crawl_depth: 0,
+    })
     const worker = makeWorker({ embedder: flakyEmbedder, embedBatchSize: 1 })
     expect(await worker.tick()).toBe(true)
 
@@ -556,8 +681,11 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
     expect(refusals).toBe(1)
     const docs = await liveDocs(sourceId)
     expect(docs).toHaveLength(1)
-    const embeddings = await db.selectFrom("chunk_embeddings").select("chunk_id")
-      .where("org_id", "=", org8).execute()
+    const embeddings = await db
+      .selectFrom("chunk_embeddings")
+      .select("chunk_id")
+      .where("org_id", "=", org8)
+      .execute()
     expect(embeddings.length).toBeGreaterThan(0)
   }, 30_000)
 

@@ -18,7 +18,7 @@ function lcgVector(seed: number, dim: number): number[] {
   return out
 }
 
-const dot = (a: number[], b: number[]): number => a.reduce((acc, v, i) => acc + v * (b[i] as number), 0)
+const dot = (a: number[], b: number[]): number => a.reduce((acc, v, i) => acc + v * b[i], 0)
 const norm = (a: number[]): number => Math.sqrt(dot(a, a))
 //#endregion
 
@@ -40,7 +40,7 @@ describe("padVector", () => {
 
   it("handles the boundaries: exact fit passes, oversize and empty throw", () => {
     const exact = lcgVector(7, PADDED_DIM)
-    expect(padVector(exact)).toEqual(exact)              // 1024 → unchanged
+    expect(padVector(exact)).toEqual(exact) // 1024 → unchanged
     expect(() => padVector(lcgVector(7, PADDED_DIM + 1))).toThrow(/exceeding/) // 1025
     expect(() => padVector([])).toThrow(/empty/)
   })

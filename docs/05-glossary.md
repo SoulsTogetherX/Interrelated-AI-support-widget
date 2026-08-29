@@ -24,14 +24,14 @@ smallest thing that can be verified is the smallest thing a visitor may see.
 boot to serve a request (~tens of seconds for Render's container; Neon's
 database has its own, hidden by the bubble-open handshake).
 
-**CORS** — the browser mechanism deciding which origins may *read* a
+**CORS** — the browser mechanism deciding which origins may _read_ a
 cross-origin response. Here it is allowlist-scoped: refused origins get no
 CORS headers, so their pages cannot even read the error.
 
 **Deflection rate** — the product metric: the share of conversations the
 bot handled without a human. Counted per conversation, not per message.
 
-**Dense retrieval** — finding passages by *meaning*: embed the question,
+**Dense retrieval** — finding passages by _meaning_: embed the question,
 find the nearest chunk vectors by cosine distance via the HNSW index.
 Catches paraphrases the words don't share.
 
@@ -62,7 +62,7 @@ their rankings; beats either alone on every measured metric.
 crawl → parse → chunk → embed → store.
 
 **Iterative scans** — a pgvector 0.8 setting (`hnsw.iterative_scan`) that
-keeps scanning the index until enough *post-filter* results are found.
+keeps scanning the index until enough _post-filter_ results are found.
 Without it, a small tenant inside a shared index silently gets fewer than k
 results. Measured value: 52.5 recall points at 16 tenants.
 
@@ -73,7 +73,7 @@ error strings that embeddings blur.
 **Mock (providers)** — deterministic stand-ins: the embedding mock hashes
 text to a vector; the LLM mock either replays a script or answers by
 quoting the retrieved context verbatim (grounded by construction). They are
-what let CI and the playground run the *entire* real pipeline with zero API
+what let CI and the playground run the _entire_ real pipeline with zero API
 keys — and the LLM mock doubles as the 0%-strip control that makes the real
 model's 23.8% strip rate meaningful.
 
@@ -85,7 +85,7 @@ model's first layer stands on.
 operators, and ANN indexes. The reason retrieval needs no second database.
 
 **Publishable key (`pk_live_…`)** — the org identifier in the public
-snippet. Public *by design* (same category as a Stripe publishable key);
+snippet. Public _by design_ (same category as a Stripe publishable key);
 everything protecting the tenant is the six-layer trust model, not secrecy.
 
 **Quote (in a claim)** — the verbatim span the model must copy from the
@@ -110,7 +110,7 @@ answerable questions) is measured too.
 — incomparable numbers — never need calibrating against each other.
 
 **Secret key (`sk_live_…`) / strong mode** — the optional server-held
-credential: the customer's backend mints widget sessions for users *it* has
+credential: the customer's backend mints widget sessions for users _it_ has
 authenticated, so nothing on the page is worth copying and only signed-in
 users can chat. Shown once at creation; stored only as a hash.
 
@@ -136,7 +136,7 @@ published share of claims so deleted. The thesis as a number.
 WebSocket upgrade, bought with the real credential over ordinary HTTPS.
 
 **TTFT** — time to first token: how long a visitor waits before the first
-piece of the answer appears. Measured to the first *content* event, not the
+piece of the answer appears. Measured to the first _content_ event, not the
 first byte.
 
 **Vault** — the encrypted store for tenant provider keys: AES-256-GCM under

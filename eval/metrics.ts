@@ -31,7 +31,7 @@ function recallAtK(judgment: QueryJudgment, k: number): number {
   assertJudgment(judgment, k)
   let found = 0
   for (let i = 0; i < Math.min(k, judgment.ranked.length); i++) {
-    if (judgment.relevant.has(judgment.ranked[i] as string)) found++
+    if (judgment.relevant.has(judgment.ranked[i])) found++
   }
   return found / judgment.relevant.size
 }
@@ -43,7 +43,7 @@ function recallAtK(judgment: QueryJudgment, k: number): number {
 function mrrAtK(judgment: QueryJudgment, k: number): number {
   assertJudgment(judgment, k)
   for (let i = 0; i < Math.min(k, judgment.ranked.length); i++) {
-    if (judgment.relevant.has(judgment.ranked[i] as string)) return 1 / (i + 1)
+    if (judgment.relevant.has(judgment.ranked[i])) return 1 / (i + 1)
   }
   return 0
 }
@@ -59,7 +59,7 @@ function ndcgAtK(judgment: QueryJudgment, k: number): number {
   assertJudgment(judgment, k)
   let dcg = 0
   for (let i = 0; i < Math.min(k, judgment.ranked.length); i++) {
-    if (judgment.relevant.has(judgment.ranked[i] as string)) dcg += 1 / Math.log2(i + 2)
+    if (judgment.relevant.has(judgment.ranked[i])) dcg += 1 / Math.log2(i + 2)
   }
   let idcg = 0
   for (let i = 0; i < Math.min(k, judgment.relevant.size); i++) {
@@ -73,7 +73,10 @@ function ndcgAtK(judgment: QueryJudgment, k: number): number {
 /** Scores a full run. ks are the recall cutoffs (the report uses 1/5/10);
  *  MRR and nDCG are fixed at 10 — the deepest cut the product will ever
  *  put in front of a model in M2. */
-function scoreRun(judgments: readonly QueryJudgment[], ks: readonly number[] = [1, 5, 10]): RunScore {
+function scoreRun(
+  judgments: readonly QueryJudgment[],
+  ks: readonly number[] = [1, 5, 10],
+): RunScore {
   if (judgments.length === 0) throw new Error("cannot score an empty run")
   const recall: Record<number, number> = {}
   for (const k of ks) {

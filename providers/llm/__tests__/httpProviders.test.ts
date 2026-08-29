@@ -96,12 +96,22 @@ describe("OpenAICompatibleProvider", () => {
   })
 
   it("streams deltas, maps the finish, reads usage, and sends the right request", async () => {
-    const { baseUrl, captured } = await boot((_, res) => sse(res, [chunk("Hel"), chunk("lo"), finish, "[DONE]"]))
-    const provider = new OpenAICompatibleProvider({ baseUrl, model: "test-model", apiKey: "sk-test" })
+    const { baseUrl, captured } = await boot((_, res) =>
+      sse(res, [chunk("Hel"), chunk("lo"), finish, "[DONE]"]),
+    )
+    const provider = new OpenAICompatibleProvider({
+      baseUrl,
+      model: "test-model",
+      apiKey: "sk-test",
+    })
     const { text, done } = await collect(provider.stream(request))
 
     expect(text).toBe("Hello")
-    expect(done).toEqual({ type: "done", finishReason: "stop", usage: { inputTokens: 40, outputTokens: 12 } })
+    expect(done).toEqual({
+      type: "done",
+      finishReason: "stop",
+      usage: { inputTokens: 40, outputTokens: 12 },
+    })
 
     const sent = captured()
     expect(sent.url).toBe("/chat/completions")
@@ -126,7 +136,10 @@ describe("OpenAICompatibleProvider", () => {
       res.writeHead(200, { "content-type": "text/event-stream" })
       res.write(bytes.subarray(0, splitAt))
       // Flush the second half on the next tick so two real TCP writes land.
-      setTimeout(() => { res.write(bytes.subarray(splitAt)); res.end() }, 5)
+      setTimeout(() => {
+        res.write(bytes.subarray(splitAt))
+        res.end()
+      }, 5)
     })
     const provider = new OpenAICompatibleProvider({ baseUrl, model: "m" })
     const { text } = await collect(provider.stream(request))
@@ -138,10 +151,16 @@ describe("OpenAICompatibleProvider", () => {
       choices: [{ delta: {}, finish_reason: "length" }],
       x_groq: { usage: { prompt_tokens: 9, completion_tokens: 256 } },
     })
-    const { baseUrl } = await boot((_, res) => sse(res, [chunk("truncated {"), groqFinal, "[DONE]"]))
+    const { baseUrl } = await boot((_, res) =>
+      sse(res, [chunk("truncated {"), groqFinal, "[DONE]"]),
+    )
     const provider = new OpenAICompatibleProvider({ baseUrl, model: "m" })
     const { done } = await collect(provider.stream(request))
-    expect(done).toEqual({ type: "done", finishReason: "length", usage: { inputTokens: 9, outputTokens: 256 } })
+    expect(done).toEqual({
+      type: "done",
+      finishReason: "length",
+      usage: { inputTokens: 9, outputTokens: 256 },
+    })
   })
 
   it("omits authorization when keyless and response_format when jsonMode is none", async () => {
@@ -158,7 +177,10 @@ describe("OpenAICompatibleProvider", () => {
       res.end(JSON.stringify({ error: { message: "rate limit exceeded" } }))
     })
     const provider = new OpenAICompatibleProvider({ baseUrl, model: "m", apiKey: "sk-SECRET" })
-    const failure = await collect(provider.stream(request)).then(() => null, (e: unknown) => e)
+    const failure = await collect(provider.stream(request)).then(
+      () => null,
+      (e: unknown) => e,
+    )
     expect(failure).toBeInstanceOf(LLMHttpError)
     const error = failure as LLMHttpError
     expect(error.status).toBe(429)
@@ -175,7 +197,8 @@ describe("OpenAICompatibleProvider", () => {
     })
     const controller = new AbortController()
     const provider = new OpenAICompatibleProvider({ baseUrl, model: "m" })
-    const iterator = provider.stream({ ...request, signal: controller.signal })[Symbol.asyncIterator]()
+    const stream = provider.stream({ ...request, signal: controller.signal })
+    const iterator = stream[Symbol.asyncIterator]()
     const first = await iterator.next()
     expect(first.value).toEqual({ type: "delta", text: "first" })
     controller.abort()
@@ -195,7 +218,8 @@ describe("GroqProvider", () => {
 })
 
 describe("GeminiProvider", () => {
-  const part = (text: string) => JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })
+  const part = (text: string) =>
+    JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })
   const final = JSON.stringify({
     candidates: [{ content: { parts: [{ text: "!" }] }, finishReason: "STOP" }],
     usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20 },
@@ -207,7 +231,11 @@ describe("GeminiProvider", () => {
     const { text, done } = await collect(provider.stream(request))
 
     expect(text).toBe("Hello!")
-    expect(done).toEqual({ type: "done", finishReason: "stop", usage: { inputTokens: 100, outputTokens: 20 } })
+    expect(done).toEqual({
+      type: "done",
+      finishReason: "stop",
+      usage: { inputTokens: 100, outputTokens: 20 },
+    })
 
     const sent = captured()
     expect(sent.url).toBe("/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse")
@@ -261,19 +289,25 @@ describe("GeminiProvider", () => {
   it("renames assistant turns to model turns", async () => {
     const { baseUrl, captured } = await boot((_, res) => sse(res, [final]))
     const provider = new GeminiProvider({ apiKey: "k", baseUrl })
-    await collect(provider.stream({
-      messages: [
-        { role: "user", content: "q1" },
-        { role: "assistant", content: "a1" },
-        { role: "user", content: "q2" },
-      ],
-    }))
-    const contents = (captured().body as Record<string, unknown>)["contents"] as Array<{ role: string }>
+    await collect(
+      provider.stream({
+        messages: [
+          { role: "user", content: "q1" },
+          { role: "assistant", content: "a1" },
+          { role: "user", content: "q2" },
+        ],
+      }),
+    )
+    const contents = (captured().body as Record<string, unknown>)["contents"] as Array<{
+      role: string
+    }>
     expect(contents.map((c) => c.role)).toEqual(["user", "model", "user"])
   })
 
   it("maps MAX_TOKENS to length", async () => {
-    const cutoff = JSON.stringify({ candidates: [{ content: { parts: [] }, finishReason: "MAX_TOKENS" }] })
+    const cutoff = JSON.stringify({
+      candidates: [{ content: { parts: [] }, finishReason: "MAX_TOKENS" }],
+    })
     const { baseUrl } = await boot((_, res) => sse(res, [part("x"), cutoff]))
     const provider = new GeminiProvider({ apiKey: "k", baseUrl })
     const { done } = await collect(provider.stream(request))
@@ -284,8 +318,11 @@ describe("GeminiProvider", () => {
 describe("OllamaProvider", () => {
   const line = (content: string) => JSON.stringify({ message: { content }, done: false })
   const final = JSON.stringify({
-    message: { content: "" }, done: true, done_reason: "stop",
-    prompt_eval_count: 33, eval_count: 11,
+    message: { content: "" },
+    done: true,
+    done_reason: "stop",
+    prompt_eval_count: 33,
+    eval_count: 11,
   })
 
   it("streams NDJSON, maps done_reason, reads eval counts, and sends format", async () => {
@@ -297,7 +334,11 @@ describe("OllamaProvider", () => {
     const { text, done } = await collect(provider.stream(request))
 
     expect(text).toBe("Hello")
-    expect(done).toEqual({ type: "done", finishReason: "stop", usage: { inputTokens: 33, outputTokens: 11 } })
+    expect(done).toEqual({
+      type: "done",
+      finishReason: "stop",
+      usage: { inputTokens: 33, outputTokens: 11 },
+    })
 
     const sent = captured()
     expect(sent.url).toBe("/api/chat")
@@ -347,13 +388,21 @@ describe("AnthropicProvider", () => {
     type: "message_start",
     message: { usage: { input_tokens: 120, output_tokens: 1 } },
   }
-  const toolStart = { type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "emit_answer" } }
+  const toolStart = {
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "tool_use", name: "emit_answer" },
+  }
   const json = (partial_json: string) => ({
-    type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json },
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "input_json_delta", partial_json },
   })
   const blockStop = { type: "content_block_stop", index: 0 }
   const messageDelta = (stopReason: string) => ({
-    type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 34 },
+    type: "message_delta",
+    delta: { stop_reason: stopReason },
+    usage: { output_tokens: 34 },
   })
   const messageStop = { type: "message_stop" }
 
@@ -380,7 +429,11 @@ describe("AnthropicProvider", () => {
     // stop_reason "tool_use" is a NORMAL completion under a forced tool.
     // Input tokens come from message_start, output from message_delta;
     // neither event carries both.
-    expect(done).toEqual({ type: "done", finishReason: "stop", usage: { inputTokens: 120, outputTokens: 34 } })
+    expect(done).toEqual({
+      type: "done",
+      finishReason: "stop",
+      usage: { inputTokens: 120, outputTokens: 34 },
+    })
 
     const sent = captured()
     expect(sent.url).toBe("/v1/messages")
@@ -411,15 +464,19 @@ describe("AnthropicProvider", () => {
   it("keeps assistant turns and sends max_tokens even when the caller omits one", async () => {
     // max_tokens is REQUIRED by the Messages API — the one provider here
     // where omitting it is a 400 rather than "use your default".
-    const { baseUrl, captured } = await boot((_, res) => events(res, [start, messageDelta("end_turn"), messageStop]))
+    const { baseUrl, captured } = await boot((_, res) =>
+      events(res, [start, messageDelta("end_turn"), messageStop]),
+    )
     const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
-    await collect(provider.stream({
-      messages: [
-        { role: "user", content: "q1" },
-        { role: "assistant", content: "a1" },
-        { role: "user", content: "q2" },
-      ],
-    }))
+    await collect(
+      provider.stream({
+        messages: [
+          { role: "user", content: "q1" },
+          { role: "assistant", content: "a1" },
+          { role: "user", content: "q2" },
+        ],
+      }),
+    )
     const body = captured().body as Record<string, unknown>
     expect(body["max_tokens"]).toBe(1024)
     expect(body["messages"]).toEqual([
@@ -434,17 +491,26 @@ describe("AnthropicProvider", () => {
   })
 
   it("streams ordinary text deltas when no schema is requested", async () => {
-    const text = (t: string) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } })
+    const text = (t: string) => ({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: t },
+    })
     const { baseUrl } = await boot((_, res) =>
       events(res, [
         start,
         { type: "content_block_start", index: 0, content_block: { type: "text" } },
-        text("Hel"), text("lo"),
-        blockStop, messageDelta("end_turn"), messageStop,
+        text("Hel"),
+        text("lo"),
+        blockStop,
+        messageDelta("end_turn"),
+        messageStop,
       ]),
     )
     const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
-    const { text: answer, done } = await collect(provider.stream({ messages: [{ role: "user", content: "hi" }] }))
+    const { text: answer, done } = await collect(
+      provider.stream({ messages: [{ role: "user", content: "hi" }] }),
+    )
     expect(answer).toBe("Hello")
     expect(done!.finishReason).toBe("stop")
   })
@@ -454,17 +520,26 @@ describe("AnthropicProvider", () => {
     // Concatenating that would hand parseAnswerText "Let me check…{claims"
     // — valid-looking output that fails the contract for a reason nobody
     // could diagnose from the error.
-    const text = (t: string) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } })
+    const text = (t: string) => ({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: t },
+    })
     const { baseUrl } = await boot((_, res) =>
       events(res, [
         start,
         { type: "content_block_start", index: 0, content_block: { type: "text" } },
         text("Let me check the docs. "),
         { type: "content_block_stop", index: 0 },
-        { type: "content_block_start", index: 1, content_block: { type: "tool_use", name: "emit_answer" } },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", name: "emit_answer" },
+        },
         json('{"claims":[]}'),
         { type: "content_block_stop", index: 1 },
-        messageDelta("tool_use"), messageStop,
+        messageDelta("tool_use"),
+        messageStop,
       ]),
     )
     const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
@@ -487,12 +562,17 @@ describe("AnthropicProvider", () => {
     // to happen here — 529 overloaded is worth retrying, 401 never is.
     const { baseUrl } = await boot((_, res) =>
       events(res, [
-        start, toolStart, json('{"cla'),
+        start,
+        toolStart,
+        json('{"cla'),
         { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
       ]),
     )
     const provider = new AnthropicProvider({ apiKey: "sk-ant-SECRET", baseUrl })
-    const failure = await collect(provider.stream(request)).then(() => null, (e: unknown) => e)
+    const failure = await collect(provider.stream(request)).then(
+      () => null,
+      (e: unknown) => e,
+    )
     expect(failure).toBeInstanceOf(LLMHttpError)
     const error = failure as LLMHttpError
     expect(error.status).toBe(529)
@@ -503,10 +583,16 @@ describe("AnthropicProvider", () => {
 
   it("classifies a mid-stream auth failure as 401 — a wait cannot fix a wrong key", async () => {
     const { baseUrl } = await boot((_, res) =>
-      events(res, [start, { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }]),
+      events(res, [
+        start,
+        { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } },
+      ]),
     )
     const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
-    const failure = await collect(provider.stream(request)).then(() => null, (e: unknown) => e)
+    const failure = await collect(provider.stream(request)).then(
+      () => null,
+      (e: unknown) => e,
+    )
     expect((failure as LLMHttpError).status).toBe(401)
   })
 
@@ -514,7 +600,13 @@ describe("AnthropicProvider", () => {
     // Null means "not reported" and 0 would mean "a model ran and consumed
     // nothing" — the distinction the cost metric is built on (§2.4.8).
     const { baseUrl } = await boot((_, res) =>
-      events(res, [{ type: "message_start", message: {} }, toolStart, json("{}"), blockStop, messageStop]),
+      events(res, [
+        { type: "message_start", message: {} },
+        toolStart,
+        json("{}"),
+        blockStop,
+        messageStop,
+      ]),
     )
     const provider = new AnthropicProvider({ apiKey: "k", baseUrl })
     const { done } = await collect(provider.stream(request))
@@ -524,10 +616,18 @@ describe("AnthropicProvider", () => {
   it("throws LLMHttpError with the retry delay and no credentials on 429", async () => {
     const { baseUrl } = await boot((_, res) => {
       res.writeHead(429, { "retry-after": "12" })
-      res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }))
+      res.end(
+        JSON.stringify({
+          type: "error",
+          error: { type: "rate_limit_error", message: "slow down" },
+        }),
+      )
     })
     const provider = new AnthropicProvider({ apiKey: "sk-ant-SECRET", baseUrl })
-    const failure = await collect(provider.stream(request)).then(() => null, (e: unknown) => e)
+    const failure = await collect(provider.stream(request)).then(
+      () => null,
+      (e: unknown) => e,
+    )
     const error = failure as LLMHttpError
     expect(error.status).toBe(429)
     expect(error.retryAfterMs).toBe(12_000)

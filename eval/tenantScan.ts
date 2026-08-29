@@ -67,7 +67,7 @@ interface ScanSummary {
 function percentile(sorted: readonly number[], p: number): number {
   if (sorted.length === 0) return NaN
   const rank = Math.ceil((p / 100) * sorted.length)
-  return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1] as number
+  return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1]
 }
 
 /**
@@ -78,12 +78,10 @@ function percentile(sorted: readonly number[], p: number): number {
  * silently produced the first from the second would be a published lie.
  * Same stance as eval/metrics.ts's guards.
  */
-function summarizeScan(
-  outcomes: readonly TenantOutcome[],
-  k: number,
-): ScanSummary {
+function summarizeScan(outcomes: readonly TenantOutcome[], k: number): ScanSummary {
   if (outcomes.length === 0) throw new Error("summarizeScan: no tenants measured")
-  if (!Number.isInteger(k) || k < 1) throw new Error(`summarizeScan: k must be a positive integer, got ${k}`)
+  if (!Number.isInteger(k) || k < 1)
+    throw new Error(`summarizeScan: k must be a positive integer, got ${k}`)
 
   const starved = outcomes.filter((o) => o.returned < k).length
   const totalReturned = outcomes.reduce((sum, o) => sum + o.returned, 0)

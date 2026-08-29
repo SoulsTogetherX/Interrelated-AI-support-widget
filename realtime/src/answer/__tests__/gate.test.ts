@@ -9,10 +9,19 @@ import type { RetrievedChunk } from "@/retrieval/search"
 /** A RetrievedChunk with only the fields the gate reads set meaningfully. */
 function hit(denseDistance: number | null): RetrievedChunk {
   return {
-    chunkId: "chk_test", documentId: "doc_test", url: "https://example.com",
-    title: null, headingPath: null, text: "text", charStart: null, charEnd: null,
-    score: 0.03, denseRank: denseDistance === null ? null : 1, denseDistance,
-    lexicalRank: denseDistance === null ? 1 : null, lexicalScore: denseDistance === null ? 0.5 : null,
+    chunkId: "chk_test",
+    documentId: "doc_test",
+    url: "https://example.com",
+    title: null,
+    headingPath: null,
+    text: "text",
+    charStart: null,
+    charEnd: null,
+    score: 0.03,
+    denseRank: denseDistance === null ? null : 1,
+    denseDistance,
+    lexicalRank: denseDistance === null ? 1 : null,
+    lexicalScore: denseDistance === null ? 0.5 : null,
   }
 }
 //#endregion
@@ -23,8 +32,11 @@ describe("evaluateGroundedness", () => {
   })
 
   it("refuses when every hit is lexical-only — unknown similarity fails closed", () => {
-    expect(evaluateGroundedness([hit(null), hit(null)]))
-      .toEqual({ refuse: true, signal: null, reason: "no_dense_evidence" })
+    expect(evaluateGroundedness([hit(null), hit(null)])).toEqual({
+      refuse: true,
+      signal: null,
+      reason: "no_dense_evidence",
+    })
   })
 
   it("refuses when the closest dense evidence is beyond the threshold", () => {

@@ -73,7 +73,9 @@ class MockLLMProvider implements LLMProvider {
     } else {
       response = this.#script[this.#next]
       if (response === undefined) {
-        throw new Error(`MockLLMProvider: script exhausted (call ${this.#next + 1} of ${this.#script.length})`)
+        throw new Error(
+          `MockLLMProvider: script exhausted (call ${this.#next + 1} of ${this.#script.length})`,
+        )
       }
     }
     this.#next += 1

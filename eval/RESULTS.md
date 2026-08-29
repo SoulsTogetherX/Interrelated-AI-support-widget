@@ -18,18 +18,18 @@ production claim.
 
 ## Strategy comparison
 
-| Strategy | recall@1 | recall@5 | recall@10 | MRR@10 | nDCG@10 | p50 | p95 |
-|---|---|---|---|---|---|---|---|
-| dense only | 35.6 | 72.5 | 81.3 | 51.4 | 58.1 | 62 ms | 92 ms |
-| lexical only | 6.9 | 13.8 | 13.8 | 10.4 | 11.3 | 2 ms | 5 ms |
-| **hybrid (RRF)** | **35.6** | **75.0** | **83.8** | **52.6** | **59.7** | 70 ms | 107 ms |
+| Strategy         | recall@1 | recall@5 | recall@10 | MRR@10   | nDCG@10  | p50   | p95    |
+| ---------------- | -------- | -------- | --------- | -------- | -------- | ----- | ------ |
+| dense only       | 35.6     | 72.5     | 81.3      | 51.4     | 58.1     | 62 ms | 92 ms  |
+| lexical only     | 6.9      | 13.8     | 13.8      | 10.4     | 11.3     | 2 ms  | 5 ms   |
+| **hybrid (RRF)** | **35.6** | **75.0** | **83.8**  | **52.6** | **59.7** | 70 ms | 107 ms |
 
 Hybrid beats dense-only by +2.5 recall@5, +2.5 recall@10, +1.2 MRR@10 —
 every gain, no metric regresses. The delta is modest, and the reason is
 worth stating precisely: the golden questions are full natural-language
 sentences, and `websearch_to_tsquery` requires (in effect) all meaningful
 terms to match, so the lexical arm alone answers almost nothing (13.8
-recall@5). It still helps the fusion because *when* it fires, it is very
+recall@5). It still helps the fusion because _when_ it fires, it is very
 precise — exact API names and error codes — and RRF only needs its ranks.
 Real widget traffic will include short keyword queries ("bodyLimit",
 "FSTWRN003") where the lexical arm is at its best; the M2 conversation logs
@@ -38,19 +38,19 @@ will show the real query mix, and this table should be re-read then.
 ## recall vs ef_search
 
 | ef_search | dense @5 | dense @10 | hybrid @5 | hybrid @10 |
-|---|---|---|---|---|
-| 10 | 72.5 | 81.3 | 75.0 | 83.8 |
-| 20 | 72.5 | 81.3 | 75.0 | 83.8 |
-| 40 | 72.5 | 81.3 | 75.0 | 83.8 |
-| 80 | 72.5 | 81.3 | 75.0 | 83.8 |
-| 120 | 72.5 | 81.3 | 75.0 | 83.8 |
-| 200 | 72.5 | 81.3 | 75.0 | 83.8 |
+| --------- | -------- | --------- | --------- | ---------- |
+| 10        | 72.5     | 81.3      | 75.0      | 83.8       |
+| 20        | 72.5     | 81.3      | 75.0      | 83.8       |
+| 40        | 72.5     | 81.3      | 75.0      | 83.8       |
+| 80        | 72.5     | 81.3      | 75.0      | 83.8       |
+| 120       | 72.5     | 81.3      | 75.0      | 83.8       |
+| 200       | 72.5     | 81.3      | 75.0      | 83.8       |
 
 Flat, and honestly so: at ~380 vectors the HNSW graph is small enough that
 every ef_search returns effectively exact neighbors, and iterative scans
 top up anything the filter discards. This knob starts to matter at
 production index sizes (tens of thousands of vectors); the sweep exists so
-that the day the curve stops being flat is *observed*, not guessed.
+that the day the curve stops being flat is _observed_, not guessed.
 
 ## Iterative scans under tenant filtering
 
@@ -60,16 +60,16 @@ filtering", and this is the number that justifies
 `npm run tenant-scan` (realtime/), which seeds N tenants of 30 chunks each
 into ONE shared index and asks each of them for its own five nearest rows.
 
-| tenants | vectors | plan | starved (on) | recall (on) | starved (off) | recall (off) | p50 on | p50 off |
-|---|---|---|---|---|---|---|---|---|
-| 2 | 60 | HNSW | 0/2 | 100.0% | 0/2 | 100.0% | 50 ms | 48 ms |
-| 4 | 120 | HNSW | 0/4 | 100.0% | 0/4 | 100.0% | 49 ms | 49 ms |
-| 8 | 240 | HNSW | 0/8 | 100.0% | **5/8** | **77.5%** | 48 ms | 55 ms |
-| 16 | 480 | HNSW | 0/16 | 100.0% | **15/16** | **47.5%** | 49 ms | 49 ms |
-| 32 | 960 | exact — unmeasured | — | — | — | — | — | — |
+| tenants | vectors | plan               | starved (on) | recall (on) | starved (off) | recall (off) | p50 on | p50 off |
+| ------- | ------- | ------------------ | ------------ | ----------- | ------------- | ------------ | ------ | ------- |
+| 2       | 60      | HNSW               | 0/2          | 100.0%      | 0/2           | 100.0%       | 50 ms  | 48 ms   |
+| 4       | 120     | HNSW               | 0/4          | 100.0%      | 0/4           | 100.0%       | 49 ms  | 49 ms   |
+| 8       | 240     | HNSW               | 0/8          | 100.0%      | **5/8**       | **77.5%**    | 48 ms  | 55 ms   |
+| 16      | 480     | HNSW               | 0/16         | 100.0%      | **15/16**     | **47.5%**    | 49 ms  | 49 ms   |
+| 32      | 960     | exact — unmeasured | —            | —           | —             | —            | —      | —       |
 
-*Starved* means a tenant asked for k=5 rows of its own corpus and got fewer.
-*Recall* is rows delivered over rows asked for. `ef_search = 40` throughout.
+_Starved_ means a tenant asked for k=5 rows of its own corpus and got fewer.
+_Recall_ is rows delivered over rows asked for. `ef_search = 40` throughout.
 
 **The finding: with iterative scans off, starvation begins at 8 tenants and
 by 16 tenants 15 of 16 lose more than half their own corpus — a 52.5-point
@@ -80,7 +80,7 @@ free; that is not a promise about a 100k-vector index, which is why the
 harness sweeps rather than asserting a constant.
 
 Two things about the method, because both are ways this measurement could
-have been wrong and one of them *was*:
+have been wrong and one of them _was_:
 
 - **The plan is verified per row, and a row that left the index is reported
   as unmeasured rather than as a finding.** An exact plan sorts every
@@ -96,13 +96,13 @@ have been wrong and one of them *was*:
 
 ## Chunk size ablation (400 vs 800 target tokens)
 
-| Target | hybrid @5 | hybrid @10 | MRR@10 | nDCG@10 |
-|---|---|---|---|---|
-| **400 (default)** | **75.0** | **83.8** | 52.6 | 59.7 |
-| 800 | 73.8 | 82.5 | 53.2 | 59.8 |
+| Target            | hybrid @5 | hybrid @10 | MRR@10 | nDCG@10 |
+| ----------------- | --------- | ---------- | ------ | ------- |
+| **400 (default)** | **75.0**  | **83.8**   | 52.6   | 59.7    |
+| 800               | 73.8      | 82.5       | 53.2   | 59.8    |
 
 400 wins on recall; 800's slightly better MRR says bigger chunks
-occasionally rank the right *page region* higher while containing the
+occasionally rank the right _page region_ higher while containing the
 target passage less often. 400 stays the default — it also gives M2's
 span-level citations tighter quotes to verify against.
 
@@ -114,7 +114,7 @@ question succeeds. The misses split into three honest categories:
 **1. Right page, wrong chunk (3: q008, q019, q077).** The top hit is the
 correct document, but the golden chunk lost to a sibling chunk of the same
 page. A page-level citation would be right; the chunk-level metric is
-deliberately stricter because M2 quotes *chunks*, not pages.
+deliberately stricter because M2 quotes _chunks_, not pages.
 
 **2. Plausible sibling page (5: q032, q037, q044, q064, q033).** The
 question is genuinely answerable from the page retrieval chose — e.g. "How
@@ -123,7 +123,7 @@ global `bodyLimit` option; the golden anchor is `Routes.md`'s per-route
 version. The golden set was NOT padded after the fact to bless these: an
 eval whose relevant sets grow whenever retrieval disagrees stops being a
 measurement. If M2 answer quality shows these are true product successes,
-the fix is adding the second anchor at *question-authoring* time with a
+the fix is adding the second anchor at _question-authoring_ time with a
 review note, not silently.
 
 **3. True semantic misses (4: q029, q030, q034, q079).** The clearest
@@ -154,22 +154,22 @@ curve: `results/threshold-sweep.csv`.
 
 **Signal distributions:**
 
-| Set | n | min | p25 | median | p75 | max |
-|---|---|---|---|---|---|---|
-| golden (answerable) | 80 | 0.084 | 0.155 | 0.201 | 0.240 | **0.304** |
-| off_topic (refuse) | 12 | **0.386** | 0.403 | 0.462 | 0.521 | 0.562 |
-| adjacent (refuse) | 14 | 0.260 | 0.269 | 0.303 | 0.323 | 0.406 |
-| absent_detail (refuse) | 14 | 0.217 | 0.259 | 0.267 | 0.300 | 0.342 |
+| Set                    | n   | min       | p25   | median | p75   | max       |
+| ---------------------- | --- | --------- | ----- | ------ | ----- | --------- |
+| golden (answerable)    | 80  | 0.084     | 0.155 | 0.201  | 0.240 | **0.304** |
+| off_topic (refuse)     | 12  | **0.386** | 0.403 | 0.462  | 0.521 | 0.562     |
+| adjacent (refuse)      | 14  | 0.260     | 0.269 | 0.303  | 0.323 | 0.406     |
+| absent_detail (refuse) | 14  | 0.217     | 0.259 | 0.267  | 0.300 | 0.342     |
 
 **The chosen operating point is 0.34** (correct-refusal vs false-refusal
 at selected thresholds):
 
 | threshold | false refusal | correct refusal | off_topic | adjacent | absent_detail |
-|---|---|---|---|---|---|
-| 0.30 | 1.3% | 57.5% | 100% | 57% | 21% |
-| 0.31 | 0% | 50.0% | 100% | 43% | 14% |
-| **0.34** | **0%** | **40.0%** | **100%** | 21% | 7% |
-| 0.39 | 0% | 30.0% | 92% | 7% | 0% |
+| --------- | ------------- | --------------- | --------- | -------- | ------------- |
+| 0.30      | 1.3%          | 57.5%           | 100%      | 57%      | 21%           |
+| 0.31      | 0%            | 50.0%           | 100%      | 43%      | 14%           |
+| **0.34**  | **0%**        | **40.0%**       | **100%**  | 21%      | 7%            |
+| 0.39      | 0%            | 30.0%           | 92%       | 7%       | 0%            |
 
 Three findings, stated in the order they matter:
 
@@ -227,13 +227,13 @@ docker compose up -d database
 cd realtime && npm run eval && npm run compare -- --questions 20
 ```
 
-| provider | model | answered | refused | failed | citation ✓ | strip | violations/answer | TTFT p50 | TTFT p95 | $/1k answers |
-|---|---|---|---|---|---|---|---|---|---|---|
-| mock | `mock-llm` | 20 | 0 | 0 | 100.0% | 0.0% | 0.00 | 313 ms | 344 ms | $0.0000 |
-| gemini | `gemini-3.6-flash` | 19 | 0 | 1 | **76.2%** | **23.8%** | **0.05** | 6,938 ms | 309,743 ms | — |
-| groq | *skipped — no `GROQ_API_KEY`* | | | | | | | | | |
-| ollama | *skipped — no `OLLAMA_MODEL`* | | | | | | | | | |
-| anthropic | *skipped — no `ANTHROPIC_API_KEY`* | | | | | | | | | |
+| provider  | model                              | answered | refused | failed | citation ✓ | strip     | violations/answer | TTFT p50 | TTFT p95   | $/1k answers |
+| --------- | ---------------------------------- | -------- | ------- | ------ | ---------- | --------- | ----------------- | -------- | ---------- | ------------ |
+| mock      | `mock-llm`                         | 20       | 0       | 0      | 100.0%     | 0.0%      | 0.00              | 313 ms   | 344 ms     | $0.0000      |
+| gemini    | `gemini-3.6-flash`                 | 19       | 0       | 1      | **76.2%**  | **23.8%** | **0.05**          | 6,938 ms | 309,743 ms | —            |
+| groq      | _skipped — no `GROQ_API_KEY`_      |          |         |        |            |           |                   |          |            |              |
+| ollama    | _skipped — no `OLLAMA_MODEL`_      |          |         |        |            |           |                   |          |            |              |
+| anthropic | _skipped — no `ANTHROPIC_API_KEY`_ |          |         |        |            |           |                   |          |            |              |
 
 Blank rows are **skipped, not zero**: `groq` and `anthropic` have no key in
 this environment and `ollama` no local model, and the harness prints each
@@ -295,7 +295,7 @@ Four more readings, and the last two are limits rather than results:
 no paid account — the plan's `$0` constraint), Ollama (no local model on
 this machine). The key-gated suite covers each the moment its key is in
 `.env`, with no code change. An xAI (Grok) key was available for this
-session and is *not* in the table: xAI is not one of the product's five
+session and is _not_ in the table: xAI is not one of the product's five
 providers, and the key's team carried no credits, so an adapter written for
 it could not have been exercised — adding an unverifiable provider is the
 one thing this repo's provider table exists to not do.
@@ -312,20 +312,20 @@ thing that changes is which model turns text into vectors. Reproduce with:
 cd realtime && npm run eval -- --embedder gemini
 ```
 
-| strategy | metric | `bge-small-en-v1.5` (384-d, local) | `gemini-embedding-001` (768-d) | delta |
-|---|---|---|---|---|
-| dense | recall@1 | 35.6 | **58.8** | +23.2 |
-| dense | recall@5 | 72.5 | **87.5** | +15.0 |
-| dense | recall@10 | 81.3 | **95.6** | +14.3 |
-| dense | MRR@10 | 51.4 | **73.1** | +21.7 |
-| dense | nDCG@10 | 58.1 | **78.0** | +19.9 |
-| hybrid | recall@1 | 35.6 | **57.5** | +21.9 |
-| hybrid | recall@5 | 75.0 | **90.0** | +15.0 |
-| hybrid | recall@10 | 83.8 | **96.9** | +13.1 |
-| hybrid | MRR@10 | 52.6 | **73.1** | +20.5 |
-| hybrid | nDCG@10 | 59.7 | **78.4** | +18.7 |
-| hybrid | misses at k=10 | 12 / 80 | **2 / 80** | −10 |
-| lexical | recall@5 | 13.8 | 13.8 | 0.0 |
+| strategy | metric         | `bge-small-en-v1.5` (384-d, local) | `gemini-embedding-001` (768-d) | delta |
+| -------- | -------------- | ---------------------------------- | ------------------------------ | ----- |
+| dense    | recall@1       | 35.6                               | **58.8**                       | +23.2 |
+| dense    | recall@5       | 72.5                               | **87.5**                       | +15.0 |
+| dense    | recall@10      | 81.3                               | **95.6**                       | +14.3 |
+| dense    | MRR@10         | 51.4                               | **73.1**                       | +21.7 |
+| dense    | nDCG@10        | 58.1                               | **78.0**                       | +19.9 |
+| hybrid   | recall@1       | 35.6                               | **57.5**                       | +21.9 |
+| hybrid   | recall@5       | 75.0                               | **90.0**                       | +15.0 |
+| hybrid   | recall@10      | 83.8                               | **96.9**                       | +13.1 |
+| hybrid   | MRR@10         | 52.6                               | **73.1**                       | +20.5 |
+| hybrid   | nDCG@10        | 59.7                               | **78.4**                       | +18.7 |
+| hybrid   | misses at k=10 | 12 / 80                            | **2 / 80**                     | −10   |
+| lexical  | recall@5       | 13.8                               | 13.8                           | 0.0   |
 
 **The hosted model is worth 15 points of recall@5 and drops the failure list
 from twelve questions to two.** Both surviving misses are paraphrase
@@ -342,7 +342,7 @@ Three things about the method:
   A lexical row that had drifted would mean the corpus or the chunking had
   changed underneath the comparison and neither column meant anything.
 - **Fusion costs a little at rank 1 and pays at rank 5.** Under Gemini,
-  hybrid recall@1 (57.5) is *below* dense recall@1 (58.8): RRF damps a
+  hybrid recall@1 (57.5) is _below_ dense recall@1 (58.8): RRF damps a
   strong dense rank-1 by consensus with a weak lexical arm. It is a real
   cost, it is small, and it buys +2.5 points at k=5 and +1.3 at k=10 — the
   trade RRF exists to make, visible here because a better dense arm is what
@@ -370,7 +370,7 @@ pull request from a fork.
 One practical note for anyone reproducing this: **the two embedded corpora do
 not coexist.** Re-ingesting a document deletes and recreates its chunks, and
 `chunk_embeddings` cascades from chunks, so switching `--embedder` drops the
-previous model's vectors with the rows they hung on. Nothing is left *wrong*
+previous model's vectors with the rows they hung on. Nothing is left _wrong_
 — the per-(chunk, model) property still holds, and the model-aware
 short-circuit added at M7.12 is what makes the switch back re-embed instead
 of skipping — but each direction of this comparison costs a full re-embed of
@@ -392,11 +392,11 @@ only the network made free. Reproduce with:
 cd realtime && npm run ingest-bench       # -- --mock-only skips the local model
 ```
 
-| configuration | pages | chunks | texts embedded | wall | pages/s | chunks/s |
-|---|---|---|---|---|---|---|
-| cold, mock embedder (everything but embedding) | 31 | 661 | 661 | 4.60 s | 6.7 | 144 |
-| cold, local `bge-small-en-v1.5` (the CI model, CPU) | 31 | 661 | 661 | 214.7 s | 0.1 | 3 |
-| unchanged re-crawl (content-hash short-circuit) | 31 | 661 | **0** | 1.00 s | 31.1 | — |
+| configuration                                       | pages | chunks | texts embedded | wall    | pages/s | chunks/s |
+| --------------------------------------------------- | ----- | ------ | -------------- | ------- | ------- | -------- |
+| cold, mock embedder (everything but embedding)      | 31    | 661    | 661            | 4.60 s  | 6.7     | 144      |
+| cold, local `bge-small-en-v1.5` (the CI model, CPU) | 31    | 661    | 661            | 214.7 s | 0.1     | 3        |
+| unchanged re-crawl (content-hash short-circuit)     | 31    | 661    | **0**          | 1.00 s  | 31.1    | —        |
 
 Three findings, in decreasing order of how much they matter:
 

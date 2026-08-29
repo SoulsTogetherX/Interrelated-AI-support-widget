@@ -10,10 +10,7 @@ import type { AnswerOutcome } from "../providerComparison"
  *  can redo — the standard eval/metrics.ts and eval/tenantScan.ts hold
  *  themselves to, and the reason it matters is that these numbers get
  *  published in a comparison table someone will quote. */
-function answered(
-  questionId: string,
-  fields: Partial<AnswerOutcome> = {},
-): AnswerOutcome {
+function answered(questionId: string, fields: Partial<AnswerOutcome> = {}): AnswerOutcome {
   return {
     questionId,
     outcome: "answered",
@@ -102,10 +99,7 @@ describe("summarizeProvider", () => {
   it("reports a rate of null, never zero, when no claim was ever emitted", () => {
     // A provider that refused everything has no verification rate. 0% would
     // read as "it cited and every citation was fake" — the opposite finding.
-    const s = summarizeProvider("gemini", "gemini-3.6-flash", [
-      refused("q1"),
-      refused("q2"),
-    ])
+    const s = summarizeProvider("gemini", "gemini-3.6-flash", [refused("q1"), refused("q2")])
     expect(s.citationVerificationRate).toBeNull()
     expect(s.claimStripRate).toBeNull()
     expect(s.schemaViolationRate).toBeNull()
@@ -201,7 +195,9 @@ describe("summarizeProvider", () => {
   it("throws on an empty run rather than reporting a flawless one", () => {
     // eval/metrics.ts's and eval/tenantScan.ts's stance: "made no mistakes"
     // and "was never asked" are opposite findings.
-    expect(() => summarizeProvider("gemini", "gemini-3.6-flash", [])).toThrow(/no questions measured/)
+    expect(() => summarizeProvider("gemini", "gemini-3.6-flash", [])).toThrow(
+      /no questions measured/,
+    )
   })
 })
 

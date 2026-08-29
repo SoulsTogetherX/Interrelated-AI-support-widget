@@ -54,9 +54,7 @@ interface VerifiedClaim {
 function findQuote(haystack: string, quote: string): { start: number; end: number } | null {
   const trimmed = quote.trim()
   if (trimmed.length === 0) return null
-  const pattern = trimmed
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\s+/g, "\\s+")
+  const pattern = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")
   const match = new RegExp(pattern).exec(haystack)
   if (match === null) return null
   return { start: match.index, end: match.index + match[0].length }
@@ -77,7 +75,10 @@ function findQuote(haystack: string, quote: string): { start: number; end: numbe
  * Order is preserved so the widget renders claims in the model's intended
  * sequence.
  */
-function verifyClaims(claims: readonly Claim[], chunks: readonly VerifiableChunk[]): VerifiedClaim[] {
+function verifyClaims(
+  claims: readonly Claim[],
+  chunks: readonly VerifiableChunk[],
+): VerifiedClaim[] {
   const chunkById = new Map(chunks.map((chunk) => [chunk.id, chunk]))
   return claims.map((claim) => {
     const chunk = chunkById.get(claim.chunkId)

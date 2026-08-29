@@ -73,7 +73,9 @@ async function up(db: Kysely<unknown>): Promise<void> {
 async function down(db: Kysely<unknown>): Promise<void> {
   await sql`DROP INDEX IF EXISTS api_keys_one_current_secret_per_org`.execute(db)
   await sql`DROP INDEX IF EXISTS api_keys_secret_hash`.execute(db)
-  await sql`ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_secret_suffix_pairs_kind`.execute(db)
+  await sql`ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_secret_suffix_pairs_kind`.execute(
+    db,
+  )
   await sql`ALTER TABLE api_keys DROP COLUMN IF EXISTS secret_suffix`.execute(db)
 }
 //#endregion

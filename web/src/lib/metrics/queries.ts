@@ -211,10 +211,26 @@ async function answerMetrics(orgId: string, since: Date): Promise<AnswerMetrics>
     .select([
       sql<string>`count(*)`.as("answers"),
       sql<string>`count(*) filter (where refused)`.as("refusals"),
-      sql<number | null>`percentile_cont(0.5) within group (order by ttft_ms) filter (where not refused)`.as("ttft_p50"),
-      sql<number | null>`percentile_cont(0.95) within group (order by ttft_ms) filter (where not refused)`.as("ttft_p95"),
-      sql<number | null>`percentile_cont(0.5) within group (order by total_ms) filter (where not refused)`.as("total_p50"),
-      sql<number | null>`percentile_cont(0.95) within group (order by total_ms) filter (where not refused)`.as("total_p95"),
+      sql<
+        number | null
+      >`percentile_cont(0.5) within group (order by ttft_ms) filter (where not refused)`.as(
+        "ttft_p50",
+      ),
+      sql<
+        number | null
+      >`percentile_cont(0.95) within group (order by ttft_ms) filter (where not refused)`.as(
+        "ttft_p95",
+      ),
+      sql<
+        number | null
+      >`percentile_cont(0.5) within group (order by total_ms) filter (where not refused)`.as(
+        "total_p50",
+      ),
+      sql<
+        number | null
+      >`percentile_cont(0.95) within group (order by total_ms) filter (where not refused)`.as(
+        "total_p95",
+      ),
     ])
     .where("org_id", "=", orgId)
     .where("role", "=", "assistant")
@@ -259,8 +275,12 @@ async function groundingMetrics(orgId: string, since: Date): Promise<GroundingMe
     .select([
       sql<string>`count(*)`.as("claims"),
       sql<string>`count(*) filter (where message_citations.verdict <> 'verified')`.as("stripped"),
-      sql<string>`count(*) filter (where message_citations.verdict = 'unknown_chunk')`.as("unknown_chunk"),
-      sql<string>`count(*) filter (where message_citations.verdict = 'quote_not_found')`.as("quote_not_found"),
+      sql<string>`count(*) filter (where message_citations.verdict = 'unknown_chunk')`.as(
+        "unknown_chunk",
+      ),
+      sql<string>`count(*) filter (where message_citations.verdict = 'quote_not_found')`.as(
+        "quote_not_found",
+      ),
     ])
     .where("messages.org_id", "=", orgId)
     .where("messages.created_at", ">=", since)
@@ -293,12 +313,15 @@ async function deflectionMetrics(orgId: string, since: Date): Promise<Deflection
     ])
     .where("org_id", "=", orgId)
     .where("created_at", ">=", since)
-    .where((eb) => eb.exists(
-      eb.selectFrom("messages")
-        .select("messages.id")
-        .whereRef("messages.conversation_id", "=", "conversations.id")
-        .where("messages.role", "=", "assistant"),
-    ))
+    .where((eb) =>
+      eb.exists(
+        eb
+          .selectFrom("messages")
+          .select("messages.id")
+          .whereRef("messages.conversation_id", "=", "conversations.id")
+          .where("messages.role", "=", "assistant"),
+      ),
+    )
     .executeTakeFirst()
 
   // Time-to-first-human-response, the plan's product metric. Measured to
@@ -307,9 +330,11 @@ async function deflectionMetrics(orgId: string, since: Date): Promise<Deflection
   // and answer slowly would look perfect measured the easy way.
   const response = await db
     .selectFrom("handoff_sessions")
-    .innerJoin("messages", (join) => join
-      .onRef("messages.conversation_id", "=", "handoff_sessions.conversation_id")
-      .on("messages.role", "=", "agent"))
+    .innerJoin("messages", (join) =>
+      join
+        .onRef("messages.conversation_id", "=", "handoff_sessions.conversation_id")
+        .on("messages.role", "=", "agent"),
+    )
     .select([
       sql<string>`count(distinct handoff_sessions.id)`.as("answered"),
       sql<number | null>`percentile_cont(0.5) within group (
@@ -324,14 +349,19 @@ async function deflectionMetrics(orgId: string, since: Date): Promise<Deflection
     // Only the FIRST agent turn per handoff: later replies are the same
     // person still talking, and averaging them in would measure
     // conversation length rather than response time.
-    .where((eb) => eb.not(eb.exists(
-      eb.selectFrom("messages as earlier")
-        .select("earlier.id")
-        .whereRef("earlier.conversation_id", "=", "handoff_sessions.conversation_id")
-        .where("earlier.role", "=", "agent")
-        .whereRef("earlier.created_at", "<", "messages.created_at")
-        .whereRef("earlier.created_at", ">=", "handoff_sessions.requested_at"),
-    )))
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("messages as earlier")
+            .select("earlier.id")
+            .whereRef("earlier.conversation_id", "=", "handoff_sessions.conversation_id")
+            .where("earlier.role", "=", "agent")
+            .whereRef("earlier.created_at", "<", "messages.created_at")
+            .whereRef("earlier.created_at", ">=", "handoff_sessions.requested_at"),
+        ),
+      ),
+    )
     .whereRef("messages.created_at", ">=", "handoff_sessions.requested_at")
     .executeTakeFirst()
 

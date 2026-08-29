@@ -49,6 +49,7 @@ class OllamaProvider implements LLMProvider {
     this.#baseUrl = (options.baseUrl ?? OLLAMA_DEFAULT_BASE_URL).replace(/\/$/, "")
   }
 
+  // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     const body = {
       model: this.model,
@@ -74,7 +75,11 @@ class OllamaProvider implements LLMProvider {
     let usage: LLMUsage | null = null
     for await (const parsed of ndjsonObjects(stream)) {
       if (typeof parsed !== "object" || parsed === null) {
-        throw new LLMHttpError({ provider: "ollama", status: 200, detail: "stream carried a non-object line" })
+        throw new LLMHttpError({
+          provider: "ollama",
+          status: 200,
+          detail: "stream carried a non-object line",
+        })
       }
       const chunk = parsed as OllamaStreamChunk
       const content = chunk.message?.content

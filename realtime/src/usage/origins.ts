@@ -105,7 +105,7 @@ function normalizeRefusedOrigin(origin: string): string {
 async function recordOriginMint(db: DbOrTrx, entry: OriginMintEntry): Promise<void> {
   const day = utcDay(entry.now)
   if (entry.outcome === "minted") {
-    await upsert(db, entry.orgId, day, entry.origin, { minted: 1, refused: 0 })
+    await upsert(db, { orgId: entry.orgId, day, origin: entry.origin }, { minted: 1, refused: 0 })
     return
   }
 
@@ -128,26 +128,32 @@ async function recordOriginMint(db: DbOrTrx, entry: OriginMintEntry): Promise<vo
   `.execute(db)
   const distinct = Number(rows[0]?.n ?? 0)
   const target = distinct >= MAX_DISTINCT_REFUSED_ORIGINS_PER_DAY ? OTHER_ORIGIN : origin
-  await upsert(db, entry.orgId, day, target, { minted: 0, refused: 1 })
+  await upsert(db, { orgId: entry.orgId, day, origin: target }, { minted: 0, refused: 1 })
 }
 
 /** The insert-or-add, usage_daily's shape: amounts travel in VALUES and the
  *  conflict branch adds `excluded`, so each number appears once. */
 async function upsert(
   db: DbOrTrx,
-  orgId: string,
-  day: string,
-  origin: string,
+  key: { orgId: string; day: string; origin: string },
   amounts: { minted: number; refused: number },
 ): Promise<void> {
   await db
     .insertInto("origin_daily")
-    .values({ org_id: orgId, day, origin, minted: amounts.minted, refused: amounts.refused })
-    .onConflict((oc) => oc.columns(["org_id", "day", "origin"]).doUpdateSet({
-      minted: sql`origin_daily.minted + excluded.minted`,
-      refused: sql`origin_daily.refused + excluded.refused`,
-      updated_at: sql`NOW()`,
-    }))
+    .values({
+      org_id: key.orgId,
+      day: key.day,
+      origin: key.origin,
+      minted: amounts.minted,
+      refused: amounts.refused,
+    })
+    .onConflict((oc) =>
+      oc.columns(["org_id", "day", "origin"]).doUpdateSet({
+        minted: sql`origin_daily.minted + excluded.minted`,
+        refused: sql`origin_daily.refused + excluded.refused`,
+        updated_at: sql`NOW()`,
+      }),
+    )
     .execute()
 }
 //#endregion

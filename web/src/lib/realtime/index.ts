@@ -22,9 +22,7 @@ export interface CredentialPayload {
   model?: string
 }
 
-export type InternalResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: string }
+export type InternalResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
 export interface SaveOutcome {
   saved: boolean
@@ -240,7 +238,9 @@ export async function createSource(
 export async function uploadSource(
   orgId: string,
   file: { name: string; type: string; bytes: ArrayBuffer },
-): Promise<InternalResult<{ sourceId: string; filename: string; format: string; charCount: number }>> {
+): Promise<
+  InternalResult<{ sourceId: string; filename: string; format: string; charCount: number }>
+> {
   const cfg = config()
   if (!cfg) {
     return { ok: false, error: NOT_CONNECTED }
@@ -296,7 +296,9 @@ export async function recrawlSource(
   orgId: string,
   sourceId: string,
 ): Promise<InternalResult<{ queued: boolean }>> {
-  const result = await call(`/internal/orgs/${orgId}/sources/${sourceId}/recrawl`, { method: "POST" })
+  const result = await call(`/internal/orgs/${orgId}/sources/${sourceId}/recrawl`, {
+    method: "POST",
+  })
   if (!result.ok) {
     return result
   }

@@ -24,11 +24,11 @@ describe("plan catalog", () => {
     // ticket, and the quota check would happily enforce it.
     const caps = PLAN_ORDER.map((id) => PLANS[id].dailyAnswers)
     for (let i = 1; i < caps.length; i++) {
-      expect(caps[i]!).toBeGreaterThan(caps[i - 1]!)
+      expect(caps[i]).toBeGreaterThan(caps[i - 1])
     }
     const sources = PLAN_ORDER.map((id) => PLANS[id].sources)
     for (let i = 1; i < sources.length; i++) {
-      expect(sources[i]!).toBeGreaterThan(sources[i - 1]!)
+      expect(sources[i]).toBeGreaterThan(sources[i - 1])
     }
   })
 

@@ -10,13 +10,29 @@
     "typecheck:providers": "tsc -p providers/tsconfig.json",
     "typecheck:eval": "tsc -p eval/tsconfig.json",
     "typecheck:loadtest": "tsc -p loadtest/tsconfig.json",
-    "playground": "node scripts/playground.mjs"
+    "playground": "node scripts/playground.mjs",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check --cache",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "depcruise": "depcruise realtime/src realtime/scripts shared providers widget/src eval loadtest scripts --config .dependency-cruiser.cjs && depcruise web/src --config .dependency-cruiser.cjs --ts-config tsconfig.depcruise-web.json",
+    "knip": "knip"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.10.1",
+    "@vitest/eslint-plugin": "^1.6.27",
+    "dependency-cruiser": "^18.2.0",
+    "eslint": "^10.9.1",
+    "eslint-plugin-sonarjs": "^4.2.0",
     "fastembed": "^1.14.4",
+    "globals": "^17.11.0",
+    "knip": "^6.33.0",
     "kysely": "^0.28.17",
+    "lefthook": "^2.1.12",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^3.2.4"
   }
 }

@@ -20,7 +20,10 @@ const conversations: Record<string, string> = {}
 
 async function seedOrg(name: string): Promise<string> {
   const id = newId("org")
-  await db.insertInto("organizations").values({ id, name: `${name} ${RUN}` }).execute()
+  await db
+    .insertInto("organizations")
+    .values({ id, name: `${name} ${RUN}` })
+    .execute()
   return id
 }
 
@@ -39,36 +42,47 @@ async function seedConversation(options: {
 }): Promise<string> {
   const id = newId("con")
   conversations[options.key] = id
-  await db.insertInto("conversations").values({
-    id,
-    org_id: options.org,
-    visitor_id: options.visitor,
-    ...(options.handoff && options.handoff.status !== "closed" ? { status: "escalated" as const } : {}),
-  }).execute()
-  if (options.message !== undefined) {
-    await db.insertInto("messages").values({
-      id: newId("msg"),
-      conversation_id: id,
+  await db
+    .insertInto("conversations")
+    .values({
+      id,
       org_id: options.org,
-      role: "visitor",
-      content: options.message,
-    }).execute()
+      visitor_id: options.visitor,
+      ...(options.handoff && options.handoff.status !== "closed"
+        ? { status: "escalated" as const }
+        : {}),
+    })
+    .execute()
+  if (options.message !== undefined) {
+    await db
+      .insertInto("messages")
+      .values({
+        id: newId("msg"),
+        conversation_id: id,
+        org_id: options.org,
+        role: "visitor",
+        content: options.message,
+      })
+      .execute()
   }
   if (options.handoff) {
-    await db.insertInto("handoff_sessions").values({
-      id: newId("hnd"),
-      conversation_id: id,
-      org_id: options.org,
-      status: options.handoff.status,
-      reason: "visitor_request",
-      requested_at: new Date(options.handoff.requestedAt),
-      ...(options.handoff.claimedAt !== undefined
-        ? { claimed_at: new Date(options.handoff.claimedAt) }
-        : {}),
-      ...(options.handoff.closedAt !== undefined
-        ? { closed_at: new Date(options.handoff.closedAt) }
-        : {}),
-    }).execute()
+    await db
+      .insertInto("handoff_sessions")
+      .values({
+        id: newId("hnd"),
+        conversation_id: id,
+        org_id: options.org,
+        status: options.handoff.status,
+        reason: "visitor_request",
+        requested_at: new Date(options.handoff.requestedAt),
+        ...(options.handoff.claimedAt !== undefined
+          ? { claimed_at: new Date(options.handoff.claimedAt) }
+          : {}),
+        ...(options.handoff.closedAt !== undefined
+          ? { closed_at: new Date(options.handoff.closedAt) }
+          : {}),
+      })
+      .execute()
   }
   return id
 }
@@ -81,30 +95,51 @@ describe.skipIf(!hasDb)("handoff inbox queries (integration)", () => {
     // Deliberately seeded out of order, so passing cannot be an accident of
     // insertion order.
     await seedConversation({
-      key: "claimed", org: orgId, visitor: "vis_claimed",
+      key: "claimed",
+      org: orgId,
+      visitor: "vis_claimed",
       message: "already being helped",
-      handoff: { status: "active", requestedAt: "2026-01-01T09:00:00Z", claimedAt: "2026-01-01T09:01:00Z" },
+      handoff: {
+        status: "active",
+        requestedAt: "2026-01-01T09:00:00Z",
+        claimedAt: "2026-01-01T09:01:00Z",
+      },
     })
     await seedConversation({
-      key: "newest", org: orgId, visitor: "vis_newest",
+      key: "newest",
+      org: orgId,
+      visitor: "vis_newest",
       message: "just asked for a person",
       handoff: { status: "pending", requestedAt: "2026-01-01T11:00:00Z" },
     })
     await seedConversation({
-      key: "longest", org: orgId, visitor: "vis_longest",
+      key: "longest",
+      org: orgId,
+      visitor: "vis_longest",
       message: "has been waiting since breakfast",
       handoff: { status: "pending", requestedAt: "2026-01-01T08:00:00Z" },
     })
     await seedConversation({
-      key: "resolved", org: orgId, visitor: "vis_resolved",
+      key: "resolved",
+      org: orgId,
+      visitor: "vis_resolved",
       message: "sorted out yesterday",
-      handoff: { status: "closed", requestedAt: "2025-12-31T08:00:00Z", closedAt: "2025-12-31T08:30:00Z" },
+      handoff: {
+        status: "closed",
+        requestedAt: "2025-12-31T08:00:00Z",
+        closedAt: "2025-12-31T08:30:00Z",
+      },
     })
     await seedConversation({
-      key: "never", org: orgId, visitor: "vis_never", message: "the bot handled it",
+      key: "never",
+      org: orgId,
+      visitor: "vis_never",
+      message: "the bot handled it",
     })
     await seedConversation({
-      key: "foreign", org: otherOrgId, visitor: "vis_foreign",
+      key: "foreign",
+      org: otherOrgId,
+      visitor: "vis_foreign",
       message: "another tenant's problem",
       handoff: { status: "pending", requestedAt: "2026-01-01T07:00:00Z" },
     })
@@ -129,7 +164,7 @@ describe.skipIf(!hasDb)("handoff inbox queries (integration)", () => {
     // waited longer than anyone here.
     expect(waiting.map((h) => h.conversationId)).not.toContain(conversations["foreign"])
 
-    const longest = waiting[0]!
+    const longest = waiting[0]
     expect(longest.status).toBe("pending")
     expect(longest.claimedAt).toBeNull()
     expect(longest.preview).toBe("has been waiting since breakfast")
@@ -144,14 +179,14 @@ describe.skipIf(!hasDb)("handoff inbox queries (integration)", () => {
   })
 
   it("scopes a single lookup by org, and treats every miss the same way", async () => {
-    const found = await getOpenHandoff(orgId, conversations["longest"]!)
+    const found = await getOpenHandoff(orgId, conversations["longest"])
     expect(found?.visitorId).toBe("vis_longest")
 
     // Another tenant's conversation, a closed handoff, one that was never
     // escalated, and a fabricated id: all null, all indistinguishable.
-    expect(await getOpenHandoff(orgId, conversations["foreign"]!)).toBeNull()
-    expect(await getOpenHandoff(orgId, conversations["resolved"]!)).toBeNull()
-    expect(await getOpenHandoff(orgId, conversations["never"]!)).toBeNull()
+    expect(await getOpenHandoff(orgId, conversations["foreign"])).toBeNull()
+    expect(await getOpenHandoff(orgId, conversations["resolved"])).toBeNull()
+    expect(await getOpenHandoff(orgId, conversations["never"])).toBeNull()
     expect(await getOpenHandoff(orgId, newId("con"))).toBeNull()
     // A malformed id short-circuits before any query runs.
     expect(await getOpenHandoff(orgId, "not-an-id")).toBeNull()

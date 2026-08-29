@@ -1,0 +1,18 @@
+# Generated / vendored / frozen content the formatter must never touch.
+node_modules
+**/dist
+web/.next
+local_cache
+.probe
+.playground
+package-lock.json
+
+# Frozen third-party docs snapshot: bytes are load-bearing (content hashes,
+# golden-set anchors, provenance) - see eval/corpus/PROVENANCE.md
+eval/corpus
+
+# Per-run measurement droppings
+eval/results
+
+# Fixture host pages with deliberate quirks (hostile CSP page etc.)
+widget/fixtures

@@ -29,8 +29,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -51,29 +51,51 @@ const FIXTURE_ORIGINS = ["http://localhost:4400", "http://127.0.0.1:4400"]
 /** A tiny support corpus. With mock embeddings only EXACT chunk text
  *  retrieves densely (ask the refunds sentence verbatim); run with
  *  EMBEDDING_PROVIDER=local for paraphrase-friendly retrieval. */
-const PAGES: ReadonlyArray<{ url: string; title: string; chunks: ReadonlyArray<{ heading: string; text: string }> }> = [
+const PAGES: ReadonlyArray<{
+  url: string
+  title: string
+  chunks: ReadonlyArray<{ heading: string; text: string }>
+}> = [
   {
     url: "https://demo.interrelated.example/billing",
     title: "Billing",
     chunks: [
-      { heading: "Billing > Refunds", text: "Refunds are processed within five business days of the request." },
-      { heading: "Billing > Invoices", text: "Invoices can be downloaded as PDF from the billing tab of the dashboard." },
+      {
+        heading: "Billing > Refunds",
+        text: "Refunds are processed within five business days of the request.",
+      },
+      {
+        heading: "Billing > Invoices",
+        text: "Invoices can be downloaded as PDF from the billing tab of the dashboard.",
+      },
     ],
   },
   {
     url: "https://demo.interrelated.example/shipping",
     title: "Shipping",
     chunks: [
-      { heading: "Shipping > International", text: "International shipping takes up to two weeks after dispatch." },
-      { heading: "Shipping > Tracking", text: "A tracking link is emailed as soon as the carrier scans the parcel." },
+      {
+        heading: "Shipping > International",
+        text: "International shipping takes up to two weeks after dispatch.",
+      },
+      {
+        heading: "Shipping > Tracking",
+        text: "A tracking link is emailed as soon as the carrier scans the parcel.",
+      },
     ],
   },
   {
     url: "https://demo.interrelated.example/account",
     title: "Account",
     chunks: [
-      { heading: "Account > Password", text: "Reset your password from the account settings page." },
-      { heading: "Account > Deletion", text: "Account deletion is permanent and completes within thirty days." },
+      {
+        heading: "Account > Password",
+        text: "Reset your password from the account settings page.",
+      },
+      {
+        heading: "Account > Deletion",
+        text: "Account deletion is permanent and completes within thirty days.",
+      },
     ],
   },
 ]
@@ -94,21 +116,31 @@ async function main(): Promise<void> {
   const { padVector, toPgvector } = await import("@shared/utils/vectors")
   const { MockEmbeddingProvider } = await import("@providers/embedding/mock")
 
-  const embedder = process.env.EMBEDDING_PROVIDER === "local"
-    ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
-    : new MockEmbeddingProvider()
+  const embedder =
+    process.env.EMBEDDING_PROVIDER === "local"
+      ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
+      : new MockEmbeddingProvider()
 
   if (corpus === "fastify" && embedder.model === "mock-384") {
     // Not refused (unlike the eval — this seeds a dev loop, not a
     // measurement), but said loudly: paraphrase retrieval needs semantics.
-    console.warn("warning: --corpus fastify with MOCK embeddings — only questions that exactly match chunk text will retrieve. Use EMBEDDING_PROVIDER=local.")
+    console.warn(
+      "warning: --corpus fastify with MOCK embeddings — only questions that exactly match chunk text will retrieve. Use EMBEDDING_PROVIDER=local.",
+    )
   }
 
   // ── Org ──────────────────────────────────────────────────────────────────
-  let org = await db.selectFrom("organizations").select(["id"]).where("name", "=", ORG_NAME).executeTakeFirst()
+  let org = await db
+    .selectFrom("organizations")
+    .select(["id"])
+    .where("name", "=", ORG_NAME)
+    .executeTakeFirst()
   if (!org) {
     org = { id: newId("org") }
-    await db.insertInto("organizations").values({ id: org.id, name: ORG_NAME, plan: "pro" }).execute()
+    await db
+      .insertInto("organizations")
+      .values({ id: org.id, name: ORG_NAME, plan: "pro" })
+      .execute()
     console.log(`created ${ORG_NAME} (${org.id})`)
   }
   // Pro, asserted on every seed rather than only at creation, because the
@@ -120,26 +152,41 @@ async function main(): Promise<void> {
   await db.updateTable("organizations").set({ plan: "pro" }).where("id", "=", org.id).execute()
 
   // ── Publishable key ──────────────────────────────────────────────────────
-  const key = await db.selectFrom("api_keys").select(["org_id"])
-    .where("kind", "=", "public").where("public_id", "=", PUBLISHABLE_KEY)
-    .where("revoked_at", "is", null).executeTakeFirst()
+  const key = await db
+    .selectFrom("api_keys")
+    .select(["org_id"])
+    .where("kind", "=", "public")
+    .where("public_id", "=", PUBLISHABLE_KEY)
+    .where("revoked_at", "is", null)
+    .executeTakeFirst()
   if (key && key.org_id !== org.id) {
     console.error(`FATAL: ${PUBLISHABLE_KEY} exists under a different org — refusing to reassign`)
     process.exit(1)
   }
   if (!key) {
-    await db.insertInto("api_keys").values({
-      id: newId("key"), org_id: org.id, kind: "public",
-      public_id: PUBLISHABLE_KEY, secret_hash: null, secret_suffix: null,
-    }).execute()
+    await db
+      .insertInto("api_keys")
+      .values({
+        id: newId("key"),
+        org_id: org.id,
+        kind: "public",
+        public_id: PUBLISHABLE_KEY,
+        secret_hash: null,
+        secret_suffix: null,
+      })
+      .execute()
     console.log(`created publishable key ${PUBLISHABLE_KEY}`)
   }
 
   // ── Fixture origins (+ optional deployment origin) ──────────────────────
   const origins = extraOrigin !== undefined ? [...FIXTURE_ORIGINS, extraOrigin] : FIXTURE_ORIGINS
   for (const origin of origins) {
-    const existing = await db.selectFrom("allowed_origins").select("origin")
-      .where("org_id", "=", org.id).where("origin", "=", origin).executeTakeFirst()
+    const existing = await db
+      .selectFrom("allowed_origins")
+      .select("origin")
+      .where("org_id", "=", org.id)
+      .where("origin", "=", origin)
+      .executeTakeFirst()
     if (!existing) {
       await db.insertInto("allowed_origins").values({ org_id: org.id, origin }).execute()
       console.log(`allowlisted ${origin}`)
@@ -149,11 +196,19 @@ async function main(): Promise<void> {
   // ── Corpus: replace wholesale ────────────────────────────────────────────
   await db.deleteFrom("sources").where("org_id", "=", org.id).execute() // cascades docs → chunks → embeddings
   const sourceId = newId("src")
-  await db.insertInto("sources").values({
-    id: sourceId, org_id: org.id, kind: "url",
-    location: corpus === "fastify" ? "https://fastify.dev/docs/latest" : "https://demo.interrelated.example",
-    status: "ready",
-  }).execute()
+  await db
+    .insertInto("sources")
+    .values({
+      id: sourceId,
+      org_id: org.id,
+      kind: "url",
+      location:
+        corpus === "fastify"
+          ? "https://fastify.dev/docs/latest"
+          : "https://demo.interrelated.example",
+      status: "ready",
+    })
+    .execute()
 
   //#region Fastify corpus mode
   // The real demo content: eval/corpus/ through parse → chunk → embed, the
@@ -172,34 +227,56 @@ async function main(): Promise<void> {
       for (const name of readdirSync(join(corpusDir, section)).sort()) {
         if (!name.endsWith(".md")) continue
         const raw = readFileSync(join(corpusDir, section, name), "utf8")
-        const text = raw.replace(/^﻿/, "").replace(/\r\n/g, "\n")
+        const text = raw.replace(/^ /, "").replace(/\r\n/g, "\n")
         const doc = parseMarkdown(text)
         const chunks = chunkBlocks(doc.blocks)
         const documentId = newId("doc")
-        await db.insertInto("documents").values({
-          id: documentId, org_id: org.id, source_id: sourceId,
-          url: `${urlBase}/${section}/${name.replace(/\.md$/, "")}/`,
-          title: doc.title, content_hash: createHash("sha256").update(text, "utf8").digest("hex"),
-        }).execute()
+        await db
+          .insertInto("documents")
+          .values({
+            id: documentId,
+            org_id: org.id,
+            source_id: sourceId,
+            url: `${urlBase}/${section}/${name.replace(/\.md$/, "")}/`,
+            title: doc.title,
+            content_hash: createHash("sha256").update(text, "utf8").digest("hex"),
+          })
+          .execute()
 
         // Real embedders get the production representation (trail
         // prepended); the mock stays trail-free for the reason in the toy
         // path below.
         const embedTexts = chunks.map((c) =>
-          embedder.model === "mock-384" || !c.headingPath ? c.text : `${c.headingPath}\n${c.text}`)
+          embedder.model === "mock-384" || !c.headingPath ? c.text : `${c.headingPath}\n${c.text}`,
+        )
         for (let i = 0; i < chunks.length; i += 32) {
           const vectors = await embedder.embed(embedTexts.slice(i, i + 32))
           for (const [j, chunk] of chunks.slice(i, i + 32).entries()) {
             const chunkId = newId("chk")
-            await db.insertInto("chunks").values({
-              id: chunkId, org_id: org.id, document_id: documentId, ord: chunk.ord,
-              heading_path: chunk.headingPath, text: chunk.text, token_count: chunk.tokenCount,
-              char_start: chunk.charStart, char_end: chunk.charEnd,
-            }).execute()
-            await db.insertInto("chunk_embeddings").values({
-              chunk_id: chunkId, org_id: org.id, model: embedder.model, dim: embedder.dim,
-              embedding: toPgvector(padVector(vectors[j] as number[])),
-            }).execute()
+            await db
+              .insertInto("chunks")
+              .values({
+                id: chunkId,
+                org_id: org.id,
+                document_id: documentId,
+                ord: chunk.ord,
+                heading_path: chunk.headingPath,
+                text: chunk.text,
+                token_count: chunk.tokenCount,
+                char_start: chunk.charStart,
+                char_end: chunk.charEnd,
+              })
+              .execute()
+            await db
+              .insertInto("chunk_embeddings")
+              .values({
+                chunk_id: chunkId,
+                org_id: org.id,
+                model: embedder.model,
+                dim: embedder.dim,
+                embedding: toPgvector(padVector(vectors[j])),
+              })
+              .execute()
             totalChunks++
           }
         }
@@ -215,10 +292,17 @@ async function main(): Promise<void> {
   for (const page of PAGES) {
     const documentId = newId("doc")
     const fullText = page.chunks.map((c) => c.text).join("\n\n")
-    await db.insertInto("documents").values({
-      id: documentId, org_id: org.id, source_id: sourceId, url: page.url, title: page.title,
-      content_hash: createHash("sha256").update(fullText).digest("hex"),
-    }).execute()
+    await db
+      .insertInto("documents")
+      .values({
+        id: documentId,
+        org_id: org.id,
+        source_id: sourceId,
+        url: page.url,
+        title: page.title,
+        content_hash: createHash("sha256").update(fullText).digest("hex"),
+      })
+      .execute()
 
     // Embedding input depends on the provider, and the difference is the
     // mock's whole nature. LOCAL (real) embeddings get the heading trail
@@ -234,19 +318,35 @@ async function main(): Promise<void> {
     const vectors = await embedder.embed(page.chunks.map(embedInput))
     for (const [i, chunk] of page.chunks.entries()) {
       const chunkId = newId("chk")
-      await db.insertInto("chunks").values({
-        id: chunkId, org_id: org.id, document_id: documentId, ord: i,
-        heading_path: chunk.heading, text: chunk.text,
-        token_count: Math.max(1, Math.ceil(chunk.text.length / 4)),
-        char_start: null, char_end: null,
-      }).execute()
-      await db.insertInto("chunk_embeddings").values({
-        chunk_id: chunkId, org_id: org.id, model: embedder.model, dim: embedder.dim,
-        embedding: toPgvector(padVector(vectors[i] as number[])),
-      }).execute()
+      await db
+        .insertInto("chunks")
+        .values({
+          id: chunkId,
+          org_id: org.id,
+          document_id: documentId,
+          ord: i,
+          heading_path: chunk.heading,
+          text: chunk.text,
+          token_count: Math.max(1, Math.ceil(chunk.text.length / 4)),
+          char_start: null,
+          char_end: null,
+        })
+        .execute()
+      await db
+        .insertInto("chunk_embeddings")
+        .values({
+          chunk_id: chunkId,
+          org_id: org.id,
+          model: embedder.model,
+          dim: embedder.dim,
+          embedding: toPgvector(padVector(vectors[i])),
+        })
+        .execute()
     }
   }
-  console.log(`seeded ${PAGES.length} documents / ${PAGES.reduce((n, p) => n + p.chunks.length, 0)} chunks under model ${embedder.model}`)
+  console.log(
+    `seeded ${PAGES.length} documents / ${PAGES.reduce((n, p) => n + p.chunks.length, 0)} chunks under model ${embedder.model}`,
+  )
   console.log(`\nsnippet:\n<script src="http://localhost:4400/dist/widget.js" async`)
   console.log(`        data-key="${PUBLISHABLE_KEY}" data-api="http://localhost:3000"></script>`)
   await db.destroy()

@@ -74,7 +74,11 @@ import type { UrlVet } from "@/credentials/validate"
  * on their first typo.
  */
 class SourceLimitError extends Error {
-  constructor(readonly used: number, readonly limit: number, readonly planName: string) {
+  constructor(
+    readonly used: number,
+    readonly limit: number,
+    readonly planName: string,
+  ) {
     super(`source limit reached: ${used}/${limit} on ${planName}`)
     this.name = "SourceLimitError"
   }
@@ -87,10 +91,15 @@ async function assertSourceCapacity(
   db: Kysely<Database> | Transaction<Database>,
   orgId: string,
 ): Promise<void> {
-  const org = await db.selectFrom("organizations").select("plan")
-    .where("id", "=", orgId).forUpdate().executeTakeFirstOrThrow()
+  const org = await db
+    .selectFrom("organizations")
+    .select("plan")
+    .where("id", "=", orgId)
+    .forUpdate()
+    .executeTakeFirstOrThrow()
   const plan = planFor(org.plan)
-  const counted = await db.selectFrom("sources")
+  const counted = await db
+    .selectFrom("sources")
     .select(({ fn }) => fn.countAll<string>().as("n"))
     .where("org_id", "=", orgId)
     .executeTakeFirst()
@@ -191,10 +200,7 @@ function constantTimeEquals(a: string, b: string): boolean {
  * NOTHING: a Re-crawl click landing between the read and the insert must not
  * turn a unique violation into a rolled-back credential save.
  */
-async function enqueueReindex(
-  trx: Transaction<Database>,
-  orgId: string,
-): Promise<number> {
+async function enqueueReindex(trx: Transaction<Database>, orgId: string): Promise<number> {
   const { rows } = await sql<{ id: string }>`
     SELECT s.id FROM sources s
     WHERE s.org_id = ${orgId}
@@ -208,7 +214,9 @@ async function enqueueReindex(
   const inserted = await trx
     .insertInto("ingest_jobs")
     .values(rows.map((row) => ({ id: newId("job"), org_id: orgId, source_id: row.id })))
-    .onConflict((oc) => oc.column("source_id").where("state", "in", ["queued", "running"]).doNothing())
+    .onConflict((oc) =>
+      oc.column("source_id").where("state", "in", ["queued", "running"]).doNothing(),
+    )
     .returning("id")
     .execute()
   return inserted.length
@@ -287,7 +295,10 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
           : `${trip.model}, ${trip.latencyMs}ms`
       if (body.save === false) {
         res.json({
-          ok: true, saved: false, model: trip.model, latencyMs: trip.latencyMs,
+          ok: true,
+          saved: false,
+          model: trip.model,
+          latencyMs: trip.latencyMs,
           ...(trip.dim !== undefined ? { dim: trip.dim } : {}),
         })
         return
@@ -320,7 +331,8 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
             model: input.model ?? null,
             base_url: input.baseUrl ?? null,
             dim: trip.dim ?? null,
-            key_ciphertext: input.apiKey !== undefined ? encryptProviderKey(input.apiKey, id) : null,
+            key_ciphertext:
+              input.apiKey !== undefined ? encryptProviderKey(input.apiKey, id) : null,
             key_suffix: input.apiKey !== undefined ? keySuffix(input.apiKey) : null,
             last_validated_at: new Date(),
             last_validation: summary,
@@ -393,6 +405,7 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
     "/internal/orgs/:orgId/sources",
     requireSecret,
     requireOrg,
+    // eslint-disable-next-line complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
     async (req: Request, res: Response) => {
       const b = (req.body ?? {}) as Record<string, unknown>
 
@@ -427,7 +440,12 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       if (b.crawlDepth !== undefined) {
         // Mirrors the schema CHECK (≤ 3) so the tenant sees a sentence, not
         // a constraint violation.
-        if (typeof b.crawlDepth !== "number" || !Number.isInteger(b.crawlDepth) || b.crawlDepth < 0 || b.crawlDepth > 3) {
+        if (
+          typeof b.crawlDepth !== "number" ||
+          !Number.isInteger(b.crawlDepth) ||
+          b.crawlDepth < 0 ||
+          b.crawlDepth > 3
+        ) {
           res.status(422).json({ ok: false, error: "crawlDepth must be an integer from 0 to 3." })
           return
         }
@@ -442,18 +460,24 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
           // concurrent creates cannot both count below it (M8.5 region
           // above). Throwing rolls the whole transaction back.
           await assertSourceCapacity(trx, res.locals.orgId as string)
-          await trx.insertInto("sources").values({
-            id: sourceId,
-            org_id: res.locals.orgId as string,
-            kind: b.kind as "url" | "sitemap",
-            location: parsed.href,
-            ...(crawlDepth !== undefined ? { crawl_depth: crawlDepth } : {}),
-          }).execute()
-          await trx.insertInto("ingest_jobs").values({
-            id: jobId,
-            org_id: res.locals.orgId as string,
-            source_id: sourceId,
-          }).execute()
+          await trx
+            .insertInto("sources")
+            .values({
+              id: sourceId,
+              org_id: res.locals.orgId as string,
+              kind: b.kind as "url" | "sitemap",
+              location: parsed.href,
+              ...(crawlDepth !== undefined ? { crawl_depth: crawlDepth } : {}),
+            })
+            .execute()
+          await trx
+            .insertInto("ingest_jobs")
+            .values({
+              id: jobId,
+              org_id: res.locals.orgId as string,
+              source_id: sourceId,
+            })
+            .execute()
         })
       } catch (err) {
         if (err instanceof SourceLimitError) {
@@ -512,6 +536,7 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         next()
       })
     },
+    // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
     async (req: Request, res: Response) => {
       const rawName = req.header("x-upload-filename") ?? ""
       let filename = ""
@@ -579,10 +604,10 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         // A parser that throws has a reason a tenant can act on — every
         // PdfParseError message is written to be read by one. Anything else
         // is a bug, and says only that.
-        const message = err instanceof PdfParseError
-          ? err.message
-          : "The file could not be read."
-        res.status(422).json({ ok: false, error: message[0]?.toUpperCase() + message.slice(1) + "." })
+        const message = err instanceof PdfParseError ? err.message : "The file could not be read."
+        res
+          .status(422)
+          .json({ ok: false, error: message[0]?.toUpperCase() + message.slice(1) + "." })
         return
       }
 
@@ -601,35 +626,46 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         await db.transaction().execute(async (trx) => {
           // The authoritative half of the ceiling check above.
           await assertSourceCapacity(trx, res.locals.orgId as string)
-          await trx.insertInto("sources").values({
-            id: sourceId,
-            org_id: res.locals.orgId as string,
-            kind: "upload",
-            location: filename,
-            // A file has no links to follow. The column defaults to 1, and a
-            // depth on an upload would be a number that means nothing.
-            crawl_depth: 0,
-          }).execute()
-          await trx.insertInto("source_uploads").values({
-            source_id: sourceId,
-            filename,
-            format: detectFormat(resource),
-            byte_size: body.byteLength,
-            title: parsed.title,
-            text: parsed.text,
-            // Spans only — the text is not stored twice (migration 009).
-            blocks: JSON.stringify(parsed.blocks.map((b) => ({
-              kind: b.kind,
-              ...(b.level !== undefined ? { level: b.level } : {}),
-              charStart: b.charStart,
-              charEnd: b.charEnd,
-            }))),
-          }).execute()
-          await trx.insertInto("ingest_jobs").values({
-            id: jobId,
-            org_id: res.locals.orgId as string,
-            source_id: sourceId,
-          }).execute()
+          await trx
+            .insertInto("sources")
+            .values({
+              id: sourceId,
+              org_id: res.locals.orgId as string,
+              kind: "upload",
+              location: filename,
+              // A file has no links to follow. The column defaults to 1, and a
+              // depth on an upload would be a number that means nothing.
+              crawl_depth: 0,
+            })
+            .execute()
+          await trx
+            .insertInto("source_uploads")
+            .values({
+              source_id: sourceId,
+              filename,
+              format: detectFormat(resource),
+              byte_size: body.byteLength,
+              title: parsed.title,
+              text: parsed.text,
+              // Spans only — the text is not stored twice (migration 009).
+              blocks: JSON.stringify(
+                parsed.blocks.map((b) => ({
+                  kind: b.kind,
+                  ...(b.level !== undefined ? { level: b.level } : {}),
+                  charStart: b.charStart,
+                  charEnd: b.charEnd,
+                })),
+              ),
+            })
+            .execute()
+          await trx
+            .insertInto("ingest_jobs")
+            .values({
+              id: jobId,
+              org_id: res.locals.orgId as string,
+              source_id: sourceId,
+            })
+            .execute()
         })
       } catch (err) {
         if (err instanceof SourceLimitError) {
@@ -709,7 +745,9 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       const inserted = await db
         .insertInto("ingest_jobs")
         .values({ id: jobId, org_id: res.locals.orgId as string, source_id: source.id })
-        .onConflict((oc) => oc.column("source_id").where("state", "in", ["queued", "running"]).doNothing())
+        .onConflict((oc) =>
+          oc.column("source_id").where("state", "in", ["queued", "running"]).doNothing(),
+        )
         .returning("id")
         .executeTakeFirst()
       if (inserted) options.onEnqueue?.()
@@ -766,18 +804,23 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
       let found = false
       try {
         await db.transaction().execute(async (trx) => {
-          const source = await trx.selectFrom("sources").select("id")
+          const source = await trx
+            .selectFrom("sources")
+            .select("id")
             .where("id", "=", sourceId)
             .where("org_id", "=", res.locals.orgId as string)
             .forUpdate()
             .executeTakeFirst()
           if (!source) return
           found = true
-          await trx.deleteFrom("ingest_jobs")
+          await trx
+            .deleteFrom("ingest_jobs")
             .where("source_id", "=", sourceId)
             .where("state", "=", "queued")
             .execute()
-          const running = await trx.selectFrom("ingest_jobs").select("id")
+          const running = await trx
+            .selectFrom("ingest_jobs")
+            .select("id")
             .where("source_id", "=", sourceId)
             .where("state", "=", "running")
             .executeTakeFirst()
@@ -786,7 +829,10 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         })
       } catch (err) {
         if (err instanceof SourceBusyError) {
-          res.status(409).json({ ok: false, error: "A crawl of this source is running — try again when it finishes." })
+          res.status(409).json({
+            ok: false,
+            error: "A crawl of this source is running — try again when it finishes.",
+          })
           return
         }
         throw err
@@ -820,9 +866,8 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
     async (req: Request, res: Response) => {
       // Same stance as the role param below: a path segment is untrusted
       // input until isId has looked at it, and Express 5 types it wide.
-      const conversationId = typeof req.params.conversationId === "string"
-        ? req.params.conversationId
-        : ""
+      const conversationId =
+        typeof req.params.conversationId === "string" ? req.params.conversationId : ""
       const b = (req.body ?? {}) as Record<string, unknown>
       const userId = typeof b.userId === "string" ? b.userId : ""
       if (!isId("con", conversationId) || !isId("usr", userId)) {

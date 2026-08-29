@@ -18,10 +18,13 @@ describe.skipIf(!hasDb)("origin allowlist (integration)", () => {
   beforeAll(async () => {
     orgId = newId("org")
     otherOrgId = newId("org")
-    await db.insertInto("organizations").values([
-      { id: orgId, name: `Origins Co ${RUN}` },
-      { id: otherOrgId, name: `Other Origins Co ${RUN}` },
-    ]).execute()
+    await db
+      .insertInto("organizations")
+      .values([
+        { id: orgId, name: `Origins Co ${RUN}` },
+        { id: otherOrgId, name: `Other Origins Co ${RUN}` },
+      ])
+      .execute()
   })
 
   afterAll(async () => {
@@ -38,9 +41,7 @@ describe.skipIf(!hasDb)("origin allowlist (integration)", () => {
     ])
 
     await removeOrigin(orgId, "https://first.example")
-    expect((await listOrigins(orgId)).map((o) => o.origin)).toEqual([
-      "https://second.example",
-    ])
+    expect((await listOrigins(orgId)).map((o) => o.origin)).toEqual(["https://second.example"])
   })
 
   it("is idempotent: re-adding an existing origin is a no-op success", async () => {
@@ -58,9 +59,7 @@ describe.skipIf(!hasDb)("origin allowlist (integration)", () => {
 
   it("scopes every operation to the org", async () => {
     await addOrigin(otherOrgId, "https://tenant-b.example")
-    expect((await listOrigins(orgId)).map((o) => o.origin)).toEqual([
-      "https://second.example",
-    ])
+    expect((await listOrigins(orgId)).map((o) => o.origin)).toEqual(["https://second.example"])
     expect((await listOrigins(otherOrgId)).map((o) => o.origin)).toEqual([
       "https://tenant-b.example",
     ])

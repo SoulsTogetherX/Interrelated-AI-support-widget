@@ -100,10 +100,11 @@ function productToken(value: string): string {
  * conflated. Applied identically to both sides, so the two can only agree
  * on what they mean.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function normalizeForMatch(input: string): string {
   let out = ""
   for (let i = 0; i < input.length; i++) {
-    const ch = input[i] as string
+    const ch = input[i]
     if (ch === "%") {
       const hex = input.slice(i + 1, i + 3)
       if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
@@ -134,7 +135,10 @@ function isUnreserved(code: number): boolean {
     (code >= 0x41 && code <= 0x5a) || // A-Z
     (code >= 0x61 && code <= 0x7a) || // a-z
     (code >= 0x30 && code <= 0x39) || // 0-9
-    code === 0x2d || code === 0x2e || code === 0x5f || code === 0x7e // - . _ ~
+    code === 0x2d ||
+    code === 0x2e ||
+    code === 0x5f ||
+    code === 0x7e // - . _ ~
   )
 }
 
@@ -153,6 +157,7 @@ function isUnreserved(code: number): boolean {
  *   - Crawl-delay attaches to the current group; a value that is not a
  *     non-negative number is ignored.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function parseRobotsTxt(text: string): RobotsFile {
   const groups: RobotsGroup[] = []
   let current: RobotsGroup | null = null
@@ -181,7 +186,11 @@ function parseRobotsTxt(text: string): RobotsFile {
     if (current === null) continue // no group yet: nothing to attach to (§2.2.1)
     if (field === "allow" || field === "disallow") {
       if (value === "") continue
-      current.rules.push({ allow: field === "allow", pattern: value, normalized: normalizeForMatch(value) })
+      current.rules.push({
+        allow: field === "allow",
+        pattern: value,
+        normalized: normalizeForMatch(value),
+      })
     } else if (field === "crawl-delay") {
       const seconds = Number(value)
       if (Number.isFinite(seconds) && seconds >= 0) current.crawlDelaySeconds = seconds
@@ -252,7 +261,10 @@ function evaluate(rules: RobotsRule[], url: URL, agentLabel: string): RobotsVerd
     }
   }
   if (best === null || best.allow) return { allowed: true }
-  return { allowed: false, reason: `disallowed by robots.txt (User-agent: ${agentLabel}, Disallow: ${best.pattern})` }
+  return {
+    allowed: false,
+    reason: `disallowed by robots.txt (User-agent: ${agentLabel}, Disallow: ${best.pattern})`,
+  }
 }
 //#endregion
 
@@ -277,7 +289,8 @@ function robotsPolicy(file: RobotsFile, agent: string, source: string): RobotsPo
     label = WILDCARD_AGENT
   }
   const rules = matched.flatMap((group) => group.rules)
-  const crawlDelaySeconds = matched.map((group) => group.crawlDelaySeconds).find((d) => d !== null) ?? null
+  const crawlDelaySeconds =
+    matched.map((group) => group.crawlDelaySeconds).find((d) => d !== null) ?? null
   return {
     source,
     crawlDelaySeconds,
@@ -338,16 +351,29 @@ async function fetchRobotsPolicy(
     return disallowAll(`robots.txt unreachable (${detail}), which RFC 9309 says means disallow-all`)
   }
   if (res.status >= 200 && res.status < 300) {
-    return robotsPolicy(parseRobotsTxt(res.body.toString("utf8")), agent, `robots.txt (HTTP ${res.status})`)
+    return robotsPolicy(
+      parseRobotsTxt(res.body.toString("utf8")),
+      agent,
+      `robots.txt (HTTP ${res.status})`,
+    )
   }
   if (res.status >= 500) {
-    return disallowAll(`robots.txt returned HTTP ${res.status}, which RFC 9309 says means disallow-all`)
+    return disallowAll(
+      `robots.txt returned HTTP ${res.status}, which RFC 9309 says means disallow-all`,
+    )
   }
   return allowAll(`no robots.txt (HTTP ${res.status})`)
 }
 //#endregion
 
 //#region Exports
-export { parseRobotsTxt, robotsPolicy, matchesPattern, normalizeForMatch, fetchRobotsPolicy, ROBOTS_MAX_BYTES }
+export {
+  parseRobotsTxt,
+  robotsPolicy,
+  matchesPattern,
+  normalizeForMatch,
+  fetchRobotsPolicy,
+  ROBOTS_MAX_BYTES,
+}
 export type { RobotsFile, RobotsGroup, RobotsRule, RobotsPolicy, RobotsVerdict }
 //#endregion

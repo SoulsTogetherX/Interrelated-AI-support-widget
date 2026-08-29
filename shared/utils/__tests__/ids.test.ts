@@ -2,7 +2,14 @@
 import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
 
-import { hashSecretKey, isId, newId, newPublishableKey, newSecretKey, secretKeySuffix } from "../ids"
+import {
+  hashSecretKey,
+  isId,
+  newId,
+  newPublishableKey,
+  newSecretKey,
+  secretKeySuffix,
+} from "../ids"
 //#endregion
 
 //#region Constants
@@ -96,10 +103,10 @@ describe("isId", () => {
   it("rejects malformed bodies at and around the length boundary", () => {
     const good = newId("org")
     expect(isId("org", good.slice(0, -1))).toBe(false) // 31 chars
-    expect(isId("org", `${good}0`)).toBe(false)        // 33 chars
-    expect(isId("org", "org_")).toBe(false)            // empty body
-    expect(isId("org", "org")).toBe(false)             // no underscore
-    expect(isId("org", "")).toBe(false)                // empty string
+    expect(isId("org", `${good}0`)).toBe(false) // 33 chars
+    expect(isId("org", "org_")).toBe(false) // empty body
+    expect(isId("org", "org")).toBe(false) // no underscore
+    expect(isId("org", "")).toBe(false) // empty string
   })
 
   it("rejects characters outside the Crockford alphabet", () => {

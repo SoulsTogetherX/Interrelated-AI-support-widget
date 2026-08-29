@@ -47,13 +47,10 @@ export interface CredentialInput {
   model?: string
 }
 
-export type CredentialCheck =
-  | { ok: true; value: CredentialInput }
-  | { ok: false; error: string }
+export type CredentialCheck = { ok: true; value: CredentialInput } | { ok: false; error: string }
 
 export type RoundTrip =
-  | { ok: true; model: string; latencyMs: number; dim?: number }
-  | { ok: false; error: string }
+  { ok: true; model: string; latencyMs: number; dim?: number } | { ok: false; error: string }
 
 /** The URL vet, injectable for tests (which must reach loopback fakes that
  *  the production default rightly refuses) — the same seam shape as
@@ -69,6 +66,7 @@ const PROVIDERS = new Set(["groq", "gemini", "ollama", "openai_compatible", "ant
 const KEY_MIN = 8
 const KEY_MAX = 512
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export async function checkCredentialInput(
   body: unknown,
   vetUrl: UrlVet = (url) => assertPublicUrl(url),
@@ -100,14 +98,19 @@ export async function checkCredentialInput(
     }
   }
 
-  const apiKey = typeof b.apiKey === "string" && b.apiKey.trim() !== "" ? b.apiKey.trim() : undefined
-  const baseUrl = typeof b.baseUrl === "string" && b.baseUrl.trim() !== "" ? b.baseUrl.trim() : undefined
+  const apiKey =
+    typeof b.apiKey === "string" && b.apiKey.trim() !== "" ? b.apiKey.trim() : undefined
+  const baseUrl =
+    typeof b.baseUrl === "string" && b.baseUrl.trim() !== "" ? b.baseUrl.trim() : undefined
   const model = typeof b.model === "string" && b.model.trim() !== "" ? b.model.trim() : undefined
 
   if (provider === "ollama" && apiKey !== undefined) {
     return { ok: false, error: "Ollama is unauthenticated — remove the API key." }
   }
-  if ((provider === "groq" || provider === "gemini" || provider === "anthropic") && apiKey === undefined) {
+  if (
+    (provider === "groq" || provider === "gemini" || provider === "anthropic") &&
+    apiKey === undefined
+  ) {
     return { ok: false, error: "An API key is required for this provider." }
   }
   if (apiKey !== undefined && (apiKey.length < KEY_MIN || apiKey.length > KEY_MAX)) {
@@ -196,10 +199,7 @@ export function effectiveEmbeddingModel(
  *  (§3.3.3) on every construction AFTER the first Test, which is
  *  what turns each response into an assertion instead of a discovery —
  *  omit it exactly once, during validation, and the adapter learns it. */
-export function buildEmbeddingProvider(
-  input: CredentialInput,
-  dim?: number,
-): EmbeddingProvider {
+export function buildEmbeddingProvider(input: CredentialInput, dim?: number): EmbeddingProvider {
   switch (input.provider) {
     case "gemini":
       return new GeminiEmbeddingProvider({
@@ -288,6 +288,7 @@ function isTransient(error: unknown): boolean {
  *  the tenant will feel, not TTFT of a 16-token reply). Errors surface as
  *  human sentences — LLMHttpError's message already excludes the key and
  *  headers by construction (§2.4.5f), and that guarantee has its own test. */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export async function testGenerationRoundTrip(
   provider: LLMProvider,
   timeoutMs = TEST_TIMEOUT_MS,
@@ -327,9 +328,10 @@ export async function testGenerationRoundTrip(
             "Free tiers are often slow — try again before assuming the key is wrong.",
         }
       }
-      last = error instanceof LLMHttpError
-        ? { ok: false, error: `The provider rejected the request: ${error.message}` }
-        : { ok: false, error: "Could not reach the provider." }
+      last =
+        error instanceof LLMHttpError
+          ? { ok: false, error: `The provider rejected the request: ${error.message}` }
+          : { ok: false, error: "Could not reach the provider." }
       if (!isTransient(error)) return last
     } finally {
       clearTimeout(timer)
@@ -357,6 +359,7 @@ export async function testGenerationRoundTrip(
  * error vocabulary, so the internal API tests and saves both roles through
  * one branch.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export async function testEmbeddingRoundTrip(
   provider: EmbeddingProvider,
   timeoutMs = TEST_TIMEOUT_MS,

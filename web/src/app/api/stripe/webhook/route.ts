@@ -60,7 +60,9 @@ export async function POST(req: Request): Promise<Response> {
   try {
     const outcome = await applyStripeEvent(verified.event)
     if (outcome.applied) {
-      console.log(`[stripe] ${verified.event.type} → org ${outcome.orgId} is ${outcome.plan} (${outcome.status})`)
+      console.log(
+        `[stripe] ${verified.event.type} → org ${outcome.orgId} is ${outcome.plan} (${outcome.status})`,
+      )
     } else if (outcome.reason !== "ignored_type") {
       // Duplicates, unknown orgs, malformed payloads and terminal-state
       // events are all NORMAL and all answer 2xx — but they are worth a log

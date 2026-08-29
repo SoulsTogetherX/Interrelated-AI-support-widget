@@ -49,30 +49,66 @@ let plainOrgId: string
 async function seedOrg(name: string, pk: string): Promise<string> {
   const orgId = newId("org")
   await db.insertInto("organizations").values({ id: orgId, name }).execute()
-  await db.insertInto("api_keys").values({
-    id: newId("key"), org_id: orgId, kind: "public", public_id: pk, secret_hash: null, secret_suffix: null,
-  }).execute()
+  await db
+    .insertInto("api_keys")
+    .values({
+      id: newId("key"),
+      org_id: orgId,
+      kind: "public",
+      public_id: pk,
+      secret_hash: null,
+      secret_suffix: null,
+    })
+    .execute()
   await db.insertInto("allowed_origins").values({ org_id: orgId, origin: ORIGIN }).execute()
   const sourceId = newId("src")
-  await db.insertInto("sources").values({
-    id: sourceId, org_id: orgId, kind: "url", location: ORIGIN,
-  }).execute()
+  await db
+    .insertInto("sources")
+    .values({
+      id: sourceId,
+      org_id: orgId,
+      kind: "url",
+      location: ORIGIN,
+    })
+    .execute()
   const documentId = newId("doc")
-  await db.insertInto("documents").values({
-    id: documentId, org_id: orgId, source_id: sourceId,
-    url: `${ORIGIN}/exchanges`, title: "Exchanges", content_hash: "f".repeat(64),
-  }).execute()
+  await db
+    .insertInto("documents")
+    .values({
+      id: documentId,
+      org_id: orgId,
+      source_id: sourceId,
+      url: `${ORIGIN}/exchanges`,
+      title: "Exchanges",
+      content_hash: "f".repeat(64),
+    })
+    .execute()
   const chunkId = newId("chk")
   const [vector] = await embedder.embed([CHUNK_TEXT])
-  await db.insertInto("chunks").values({
-    id: chunkId, org_id: orgId, document_id: documentId, ord: 0,
-    heading_path: "Exchanges", text: CHUNK_TEXT,
-    token_count: Math.ceil(CHUNK_TEXT.length / 4), char_start: null, char_end: null,
-  }).execute()
-  await db.insertInto("chunk_embeddings").values({
-    chunk_id: chunkId, org_id: orgId, model: embedder.model, dim: embedder.dim,
-    embedding: toPgvector(padVector(vector)),
-  }).execute()
+  await db
+    .insertInto("chunks")
+    .values({
+      id: chunkId,
+      org_id: orgId,
+      document_id: documentId,
+      ord: 0,
+      heading_path: "Exchanges",
+      text: CHUNK_TEXT,
+      token_count: Math.ceil(CHUNK_TEXT.length / 4),
+      char_start: null,
+      char_end: null,
+    })
+    .execute()
+  await db
+    .insertInto("chunk_embeddings")
+    .values({
+      chunk_id: chunkId,
+      org_id: orgId,
+      model: embedder.model,
+      dim: embedder.dim,
+      embedding: toPgvector(padVector(vector)),
+    })
+    .execute()
   return orgId
 }
 
@@ -86,12 +122,17 @@ async function mintAndChat(pk: string, question: string): Promise<AnswerEvent[]>
   const { token } = (await mint.json()) as { token: string }
   const res = await fetch(`${baseUrl}/v1/widget/chat`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: ORIGIN, authorization: `Bearer ${token}` },
+    headers: {
+      "content-type": "application/json",
+      origin: ORIGIN,
+      authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify({ question }),
   })
   expect(res.status).toBe(200)
   const text = await res.text()
-  return text.split("\n\n")
+  return text
+    .split("\n\n")
     .filter((frame) => frame.startsWith("data: "))
     .map((frame) => JSON.parse(frame.slice(6)) as AnswerEvent)
 }
@@ -137,18 +178,21 @@ describe.skipIf(!DB_CONFIGURED)("widget chat with per-org BYO generation", () =>
     // The BYO org's credential, encrypted exactly as the internal API
     // would store it.
     const credId = newId("prv")
-    await db.insertInto("org_provider_credentials").values({
-      id: credId,
-      org_id: byoOrgId,
-      role: "generation",
-      provider: "openai_compatible",
-      model: "byo-test-model",
-      base_url: `http://127.0.0.1:${fp.port}/v1`,
-      key_ciphertext: encryptProviderKey(TENANT_KEY, credId),
-      key_suffix: keySuffix(TENANT_KEY),
-      last_validated_at: new Date(),
-      last_validation: "byo-test-model, 1ms",
-    }).execute()
+    await db
+      .insertInto("org_provider_credentials")
+      .values({
+        id: credId,
+        org_id: byoOrgId,
+        role: "generation",
+        provider: "openai_compatible",
+        model: "byo-test-model",
+        base_url: `http://127.0.0.1:${fp.port}/v1`,
+        key_ciphertext: encryptProviderKey(TENANT_KEY, credId),
+        key_suffix: keySuffix(TENANT_KEY),
+        last_validated_at: new Date(),
+        last_validation: "byo-test-model, 1ms",
+      })
+      .execute()
 
     // A configured PLATFORM fallback (M7.7). Its whole job in this suite is
     // to stay untouched: it must never answer for an org that brought its
@@ -156,7 +200,8 @@ describe.skipIf(!DB_CONFIGURED)("widget chat with per-org BYO generation", () =>
     platformFallback = new MockLLMProvider(groundedMockResponder())
     const app = createApp({
       widget: {
-        db, embedder,
+        db,
+        embedder,
         llm: new MockLLMProvider(groundedMockResponder()),
         llmFallback: platformFallback,
         tokenSecret: SECRET,
@@ -240,9 +285,12 @@ describe.skipIf(!DB_CONFIGURED)("widget chat with per-org BYO generation", () =>
       expect(platformFallback.calls.length).toBe(fallbackCallsBefore)
       // Nothing was persisted as an answer that never happened.
       const assistant = await db
-        .selectFrom("messages").select("id")
-        .where("org_id", "=", byoOrgId).where("role", "=", "assistant")
-        .where("model", "=", "mock-llm").executeTakeFirst()
+        .selectFrom("messages")
+        .select("id")
+        .where("org_id", "=", byoOrgId)
+        .where("role", "=", "assistant")
+        .where("model", "=", "mock-llm")
+        .executeTakeFirst()
       expect(assistant).toBeUndefined()
     } finally {
       tenantProviderStatus = 200

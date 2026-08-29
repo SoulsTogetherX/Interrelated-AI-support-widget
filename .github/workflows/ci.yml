@@ -1,5 +1,9 @@
-# CI — three jobs, same shape as OnlineWhiteboard's:
+# CI — four jobs, same shape as OnlineWhiteboard's plus a conventions gate:
 #
+#   quality the conventions gate (2026-08 org overhaul): prettier --check,
+#           eslint (type-aware, 0 errors; warnings are visible budgets),
+#           and dependency-cruiser - the architecture rules that used to be
+#           prose, now failing checks. Keyless, no database, fastest job.
 #   verify  fast feedback: per-package typecheck + unit/integration tests,
 #           with a real pgvector Postgres as a service container so the
 #           DB-gated suites actually run (they self-skip without a password).
@@ -38,6 +42,32 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            realtime/package-lock.json
+            web/package-lock.json
+            widget/package-lock.json
+      # The toolchain lives in root devDependencies, but eslint's type-aware
+      # rules resolve each package's imports through its OWN node_modules
+      # (typescript-eslint projectService) - so all four installs are needed
+      # for the lint to see the same types it sees locally.
+      - run: npm ci
+      - run: npm ci --prefix realtime
+      - run: npm ci --prefix web
+      - run: npm ci --prefix widget
+      - run: npx prettier . --check
+      - run: npx eslint .
+      - run: npm run depcruise
+
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10

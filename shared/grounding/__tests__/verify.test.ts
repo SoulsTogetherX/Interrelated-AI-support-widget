@@ -61,7 +61,8 @@ describe("findQuote", () => {
   })
 
   it("treats regex metacharacters as literals", () => {
-    const haystack = "Use route.setNotFoundHandler({ preValidation: [fn] }) to override (per prefix)."
+    const haystack =
+      "Use route.setNotFoundHandler({ preValidation: [fn] }) to override (per prefix)."
     const quote = "setNotFoundHandler({ preValidation: [fn] })"
     const span = findQuote(haystack, quote)
     expect(span).not.toBeNull()
@@ -86,12 +87,12 @@ describe("findQuote", () => {
 describe("verifyClaims", () => {
   it("verifies a claim whose quote occurs in its named chunk", () => {
     const [result] = verifyClaims([claim("chk_b", "runs first in the lifecycle")], chunks)
-    expect(result!.verdict.status).toBe("verified")
+    expect(result.verdict.status).toBe("verified")
   })
 
   it("rejects a citation to a chunk the model was never shown", () => {
     const [result] = verifyClaims([claim("chk_fabricated", "runs first in the lifecycle")], chunks)
-    expect(result!.verdict).toEqual({ status: "unknown_chunk" })
+    expect(result.verdict).toEqual({ status: "unknown_chunk" })
   })
 
   it("rejects a quote that exists — but in a different chunk than the one named", () => {
@@ -99,50 +100,64 @@ describe("verifyClaims", () => {
     // the mislabeling the per-chunk check exists to catch; a corpus-wide
     // search would wave it through.
     const [result] = verifyClaims([claim("chk_a", "runs first in the lifecycle")], chunks)
-    expect(result!.verdict).toEqual({ status: "quote_not_found" })
+    expect(result.verdict).toEqual({ status: "quote_not_found" })
   })
 
   it("rejects an invented quote against a real chunk", () => {
-    const [result] = verifyClaims([claim("chk_a", "HTTP/2 is fully stable and enabled by default")], chunks)
-    expect(result!.verdict).toEqual({ status: "quote_not_found" })
+    const [result] = verifyClaims(
+      [claim("chk_a", "HTTP/2 is fully stable and enabled by default")],
+      chunks,
+    )
+    expect(result.verdict).toEqual({ status: "quote_not_found" })
   })
 
   it("returns empty for no claims and unknown_chunk for every claim when no chunks were retrieved", () => {
     expect(verifyClaims([], chunks)).toEqual([])
     const [result] = verifyClaims([claim("chk_a", "anything")], [])
-    expect(result!.verdict).toEqual({ status: "unknown_chunk" })
+    expect(result.verdict).toEqual({ status: "unknown_chunk" })
   })
 
   it("preserves claim order and mixes verdicts independently", () => {
-    const results = verifyClaims([
-      claim("chk_a", "experimental support for HTTP/2", "First."),
-      claim("chk_missing", "whatever", "Second."),
-      claim("chk_b", "visible to every later hook", "Third."),
-      claim("chk_b", "not in this chunk at all", "Fourth."),
-    ], chunks)
+    const results = verifyClaims(
+      [
+        claim("chk_a", "experimental support for HTTP/2", "First."),
+        claim("chk_missing", "whatever", "Second."),
+        claim("chk_b", "visible to every later hook", "Third."),
+        claim("chk_b", "not in this chunk at all", "Fourth."),
+      ],
+      chunks,
+    )
     expect(results.map((r) => r.verdict.status)).toEqual([
-      "verified", "unknown_chunk", "verified", "quote_not_found",
+      "verified",
+      "unknown_chunk",
+      "verified",
+      "quote_not_found",
     ])
     expect(results.map((r) => r.claim.text)).toEqual(["First.", "Second.", "Third.", "Fourth."])
   })
 
   it("verified offsets point into the NAMED chunk's text", () => {
     const [result] = verifyClaims([claim("chk_b", "Decorators added there")], chunks)
-    expect(result!.verdict.status).toBe("verified")
-    if (result!.verdict.status === "verified") {
-      expect(chunkB.text.slice(result!.verdict.start, result!.verdict.end)).toBe("Decorators added there")
+    expect(result.verdict.status).toBe("verified")
+    if (result.verdict.status === "verified") {
+      expect(chunkB.text.slice(result.verdict.start, result.verdict.end)).toBe(
+        "Decorators added there",
+      )
     }
   })
 })
 
 describe("displayableClaims", () => {
   it("strips everything unverified and preserves order — the product's core promise", () => {
-    const verified = verifyClaims([
-      claim("chk_a", "experimental support for HTTP/2", "Keep me."),
-      claim("chk_ghost", "anything", "Strip me — fabricated chunk."),
-      claim("chk_b", "The onRequest hook runs first", "Keep me too."),
-      claim("chk_b", "totally invented sentence", "Strip me — bad quote."),
-    ], chunks)
+    const verified = verifyClaims(
+      [
+        claim("chk_a", "experimental support for HTTP/2", "Keep me."),
+        claim("chk_ghost", "anything", "Strip me — fabricated chunk."),
+        claim("chk_b", "The onRequest hook runs first", "Keep me too."),
+        claim("chk_b", "totally invented sentence", "Strip me — bad quote."),
+      ],
+      chunks,
+    )
     expect(displayableClaims(verified).map((c) => c.text)).toEqual(["Keep me.", "Keep me too."])
   })
 

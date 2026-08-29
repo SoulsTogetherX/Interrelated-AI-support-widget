@@ -1,0 +1,12 @@
+{
+  "//": "Alias shim for dependency-cruiser ONLY (it resolves tsconfig include paths from the CWD, so the packages own tsconfigs cannot be used directly). files:[] keeps tsc from treating this as a project.",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["realtime/src/*"],
+      "@shared/*": ["shared/*"],
+      "@providers/*": ["providers/*"]
+    }
+  },
+  "include": ["shared/utils/ids.ts"]
+}

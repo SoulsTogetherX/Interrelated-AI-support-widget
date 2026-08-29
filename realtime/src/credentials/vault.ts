@@ -83,11 +83,7 @@ export function decryptProviderKey(payload: string, credentialId: string): strin
     throw new Error("Unrecognised credential ciphertext format.")
   }
   const [, ivB64, tagB64, dataB64] = parts
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    loadMasterKey(),
-    Buffer.from(ivB64, "base64"),
-  )
+  const decipher = createDecipheriv("aes-256-gcm", loadMasterKey(), Buffer.from(ivB64, "base64"))
   decipher.setAAD(Buffer.from(credentialId, "utf8"))
   decipher.setAuthTag(Buffer.from(tagB64, "base64"))
   return Buffer.concat([

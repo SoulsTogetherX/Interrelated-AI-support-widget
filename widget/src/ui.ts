@@ -40,7 +40,9 @@ const REJOIN_TIMEOUT_MS = 60_000
  * on someone else's site.
  */
 function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, className?: string, text?: string,
+  tag: K,
+  className?: string,
+  text?: string,
 ): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
   if (className !== undefined) node.className = className
@@ -204,7 +206,10 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
   /** The bubble's badge: an agent wrote while the panel was closed. */
   function markUnread(unread: boolean): void {
     bubble.classList.toggle("unread", unread)
-    bubble.setAttribute("aria-label", unread ? "Open support chat — new message" : "Open support chat")
+    bubble.setAttribute(
+      "aria-label",
+      unread ? "Open support chat — new message" : "Open support chat",
+    )
   }
 
   bubble.addEventListener("click", () => {
@@ -234,7 +239,8 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
     // A rejoin still probing does not count as a person owning the thread:
     // if it confirms, the replayed backlog wipes the offer with the rest of
     // the log; if it was stale, the visitor still has their button.
-    if ((handoff !== null && rejoining === null) || offer !== null || conversationId === undefined) return
+    if ((handoff !== null && rejoining === null) || offer !== null || conversationId === undefined)
+      return
     const wrap = el("div", "offer")
     const button = el("button", "escalate", "Talk to a person")
     button.type = "button"

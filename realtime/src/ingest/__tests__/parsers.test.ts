@@ -90,7 +90,9 @@ describe("parseMarkdown", () => {
 
   it("runs an unterminated fence to EOF and drops an empty fence", () => {
     const unterminated = parseMarkdown("```\nline one\nline two")
-    expect(unterminated.blocks.map((b) => [b.kind, b.text])).toEqual([["code", "line one\nline two"]])
+    expect(unterminated.blocks.map((b) => [b.kind, b.text])).toEqual([
+      ["code", "line one\nline two"],
+    ])
     assertOffsetContract(unterminated)
     expect(parseMarkdown("```\n```").blocks).toEqual([])
   })
@@ -212,27 +214,41 @@ describe("detectFormat / parseResource", () => {
   })
 
   it("falls back to URL extension, then a content sniff, then markdown", () => {
-    expect(detectFormat(raw({ url: "https://x.test/readme.md", contentType: "application/octet-stream" }))).toBe("markdown")
+    expect(
+      detectFormat(
+        raw({ url: "https://x.test/readme.md", contentType: "application/octet-stream" }),
+      ),
+    ).toBe("markdown")
     expect(detectFormat(raw({ body: Buffer.from("  <!DOCTYPE HTML><html>") }))).toBe("html")
     expect(detectFormat(raw({}))).toBe("markdown")
   })
 
   it("decodes the declared charset and survives unknown labels", async () => {
-    const latin1 = await parseResource(raw({
-      contentType: "text/markdown", charset: "iso-8859-1", body: Buffer.from("caf\xe9", "latin1"),
-    }))
+    const latin1 = await parseResource(
+      raw({
+        contentType: "text/markdown",
+        charset: "iso-8859-1",
+        body: Buffer.from("caf\xe9", "latin1"),
+      }),
+    )
     expect(latin1.text).toBe("café")
-    const unknown = await parseResource(raw({
-      contentType: "text/markdown", charset: "no-such-charset", body: Buffer.from("plain"),
-    }))
+    const unknown = await parseResource(
+      raw({
+        contentType: "text/markdown",
+        charset: "no-such-charset",
+        body: Buffer.from("plain"),
+      }),
+    )
     expect(unknown.text).toBe("plain")
   })
 
   it("strips a BOM and normalizes CRLF before parsing, keeping the contract", async () => {
-    const parsed = await parseResource(raw({
-      contentType: "text/markdown",
-      body: Buffer.from("﻿# Title\r\n\r\nBody line.\r\n", "utf8"),
-    }))
+    const parsed = await parseResource(
+      raw({
+        contentType: "text/markdown",
+        body: Buffer.from("﻿# Title\r\n\r\nBody line.\r\n", "utf8"),
+      }),
+    )
     expect(parsed.text).toBe("# Title\n\nBody line.\n")
     expect(parsed.title).toBe("Title")
     assertOffsetContract(parsed)

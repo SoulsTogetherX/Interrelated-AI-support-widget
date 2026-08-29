@@ -24,7 +24,7 @@ function padVector(values: readonly number[], target: number = PADDED_DIM): numb
     throw new Error(`vector has ${values.length} dims, exceeding the ${target}-dim column`)
   }
   const out = new Array<number>(target).fill(0)
-  for (let i = 0; i < values.length; i++) out[i] = values[i] as number
+  for (let i = 0; i < values.length; i++) out[i] = values[i]
   return out
 }
 

@@ -23,10 +23,7 @@ export const SESSION_COOKIE = IS_PROD ? "__Host-sid" : "sid"
 //#endregion
 
 //#region Cookie jar helpers
-export async function setSessionCookie(
-  token: string,
-  expiresAt: Date,
-): Promise<void> {
+export async function setSessionCookie(token: string, expiresAt: Date): Promise<void> {
   const jar = await cookies()
   jar.set(SESSION_COOKIE, token, {
     httpOnly: true, // unreadable from JS — blunts XSS session theft

@@ -32,11 +32,32 @@ export function validateEmail(input: unknown): Validated<string> {
 // breachedPassword.ts — kept because that check fails open on network
 // trouble and these should never pass even then.
 const COMMON_PASSWORDS = new Set([
-  "password", "password1", "password123", "12345678", "123456789", "1234567890",
-  "qwerty123", "qwertyuiop", "1q2w3e4r", "iloveyou", "admin123", "letmein",
-  "welcome1", "monkey123", "abc12345", "111111111", "000000000", "sunshine",
-  "princess", "football", "baseball", "trustno1", "dragon123", "passw0rd",
-  "changeme", "interrelated",
+  "password",
+  "password1",
+  "password123",
+  "12345678",
+  "123456789",
+  "1234567890",
+  "qwerty123",
+  "qwertyuiop",
+  "1q2w3e4r",
+  "iloveyou",
+  "admin123",
+  "letmein",
+  "welcome1",
+  "monkey123",
+  "abc12345",
+  "111111111",
+  "000000000",
+  "sunshine",
+  "princess",
+  "football",
+  "baseball",
+  "trustno1",
+  "dragon123",
+  "passw0rd",
+  "changeme",
+  "interrelated",
 ])
 
 export function validatePassword(input: unknown): Validated<string> {
