@@ -34,7 +34,9 @@ let raw
 try {
   raw = readFileSync(envPath, "utf8")
 } catch {
-  console.error(`could not read ${envPath}\nFill in .env.neon at the repo root first (see its comments).`)
+  console.error(
+    `could not read ${envPath}\nFill in .env.neon at the repo root first (see its comments).`,
+  )
   process.exit(1)
 }
 
@@ -51,7 +53,9 @@ for (const line of raw.split("\n")) {
   // Whitespace that trim() removed is EXACTLY the class of invisible bug
   // that produces 28P01 with a "correct" password — surface it loudly.
   if (value !== rawValue) {
-    warnings.push(`${key}: had leading/trailing whitespace (removed here — if you pasted the same value into Render, re-paste it without the space)`)
+    warnings.push(
+      `${key}: had leading/trailing whitespace (removed here — if you pasted the same value into Render, re-paste it without the space)`,
+    )
   }
   values[key] = value
 }
@@ -63,28 +67,50 @@ const database = values.POSTGRES_DB
 
 //#region Sanity checks before touching the network
 const fatals = []
-for (const [key, v] of Object.entries({ POSTGRES_HOST: host, POSTGRES_USER: user, POSTGRES_PASSWORD: password, POSTGRES_DB: database })) {
+for (const [key, v] of Object.entries({
+  POSTGRES_HOST: host,
+  POSTGRES_USER: user,
+  POSTGRES_PASSWORD: password,
+  POSTGRES_DB: database,
+})) {
   if (!v || v.startsWith("paste-")) fatals.push(`${key}: still the placeholder — fill it in`)
 }
 if (password) {
-  if (password.startsWith("postgresql://")) fatals.push("POSTGRES_PASSWORD: you pasted the WHOLE connection string — the password is only the part between ':' and '@'")
-  if (/^["'].*["']$/.test(password)) fatals.push("POSTGRES_PASSWORD: wrapped in quotes — remove them; the quotes became part of the password")
-  if (password.includes("@") || password.includes(":")) fatals.push("POSTGRES_PASSWORD: contains ':' or '@' — looks like a fragment of the connection string, not the bare password")
+  if (password.startsWith("postgresql://"))
+    fatals.push(
+      "POSTGRES_PASSWORD: you pasted the WHOLE connection string — the password is only the part between ':' and '@'",
+    )
+  if (/^["'].*["']$/.test(password))
+    fatals.push(
+      "POSTGRES_PASSWORD: wrapped in quotes — remove them; the quotes became part of the password",
+    )
+  if (password.includes("@") || password.includes(":"))
+    fatals.push(
+      "POSTGRES_PASSWORD: contains ':' or '@' — looks like a fragment of the connection string, not the bare password",
+    )
 }
 if (host && (host.includes("@") || host.includes("/") || host.startsWith("postgresql"))) {
-  fatals.push("POSTGRES_HOST: should be ONLY the hostname (ep-…aws.neon.tech) — no protocol, no '@', no '/'")
+  fatals.push(
+    "POSTGRES_HOST: should be ONLY the hostname (ep-…aws.neon.tech) — no protocol, no '@', no '/'",
+  )
 }
 // Swap detection: a password-shaped value in any non-password slot means the
 // fields were mapped wrong, and connecting would both fail AND risk printing
 // a secret under a non-secret label.
 if (database?.startsWith("npg_")) {
-  fatals.push("POSTGRES_DB looks like a PASSWORD (npg_…) — the database and password values appear SWAPPED. In postgresql://USER:PASSWORD@HOST/DB, the password sits before the '@', the database name after the final '/'. (The database is usually 'neondb'.)")
+  fatals.push(
+    "POSTGRES_DB looks like a PASSWORD (npg_…) — the database and password values appear SWAPPED. In postgresql://USER:PASSWORD@HOST/DB, the password sits before the '@', the database name after the final '/'. (The database is usually 'neondb'.)",
+  )
 }
 if (user?.startsWith("npg_")) {
-  fatals.push("POSTGRES_USER looks like a PASSWORD (npg_…) — fields appear swapped; the user is usually 'neondb_owner'.")
+  fatals.push(
+    "POSTGRES_USER looks like a PASSWORD (npg_…) — fields appear swapped; the user is usually 'neondb_owner'.",
+  )
 }
 if (host && host.includes("-pooler")) {
-  warnings.push("POSTGRES_HOST: this is the POOLED host (-pooler). Use the direct host for this project (remove '-pooler')")
+  warnings.push(
+    "POSTGRES_HOST: this is the POOLED host (-pooler). Use the direct host for this project (remove '-pooler')",
+  )
 }
 if (fatals.length) {
   console.log("Problems found before even connecting:\n")
@@ -102,7 +128,10 @@ for (const w of warnings) console.log("  ⚠ " + w)
 console.log("\nconnecting…")
 
 const client = new pg.Client({
-  host, user, password, database,
+  host,
+  user,
+  password,
+  database,
   port: 5432,
   ssl: { rejectUnauthorized: true },
   connectionTimeoutMillis: 8_000,
@@ -130,7 +159,9 @@ try {
     console.log("  the PASSWORD is wrong. Re-copy it from Neon (copy button, current")
     console.log("  connection string — a reset invalidates every older string).")
   } else if (code === "3D000") {
-    console.log(`  the database name '${database}' does not exist on this server — re-check POSTGRES_DB`)
+    console.log(
+      `  the database name '${database}' does not exist on this server — re-check POSTGRES_DB`,
+    )
   } else if (code === "28000") {
     console.log(`  the user '${user}' was rejected — re-check POSTGRES_USER`)
   } else if (code === "ENOTFOUND" || code === "EAI_AGAIN") {

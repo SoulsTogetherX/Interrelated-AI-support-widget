@@ -67,8 +67,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -77,7 +77,9 @@ if (!process.env.POSTGRES_PASSWORD) {
 }
 
 if (!process.env.POSTGRES_PASSWORD) {
-  console.error("ingest-bench needs a database: set POSTGRES_PASSWORD (or fill .env) and start the compose database.")
+  console.error(
+    "ingest-bench needs a database: set POSTGRES_PASSWORD (or fill .env) and start the compose database.",
+  )
   process.exit(1)
 }
 //#endregion
@@ -184,7 +186,9 @@ async function main(): Promise<void> {
 
   /** Counts embedded texts so the short-circuit row can PROVE it embedded
    *  nothing — the worker suite's counting-embedder idiom. */
-  const counting = (inner: EmbeddingProvider): { provider: EmbeddingProvider; embedded: () => number } => {
+  const counting = (
+    inner: EmbeddingProvider,
+  ): { provider: EmbeddingProvider; embedded: () => number } => {
     let texts = 0
     return {
       provider: {
@@ -210,9 +214,18 @@ async function main(): Promise<void> {
 
   /** One timed tick of the real worker over one freshly queued job. The org
    *  and source persist across calls so the re-crawl row can reuse them. */
-  const runJob = async (label: string, orgId: string, sourceId: string, embedder: EmbeddingProvider, embedded: () => number): Promise<void> => {
+  const runJob = async (
+    label: string,
+    orgId: string,
+    sourceId: string,
+    embedder: EmbeddingProvider,
+    embedded: () => number,
+  ): Promise<void> => {
     const jobId = newId("job")
-    await db.insertInto("ingest_jobs").values({ id: jobId, org_id: orgId, source_id: sourceId }).execute()
+    await db
+      .insertInto("ingest_jobs")
+      .values({ id: jobId, org_id: orgId, source_id: sourceId })
+      .execute()
     const worker = new IngestWorker({
       db,
       embedder,
@@ -225,9 +238,15 @@ async function main(): Promise<void> {
     await worker.tick()
     const wallMs = Date.now() - startedAt
 
-    const job = await db.selectFrom("ingest_jobs").selectAll().where("id", "=", jobId).executeTakeFirstOrThrow()
+    const job = await db
+      .selectFrom("ingest_jobs")
+      .selectAll()
+      .where("id", "=", jobId)
+      .executeTakeFirstOrThrow()
     if (job.state !== "done") {
-      throw new Error(`${label}: job finished '${job.state}' (${job.error ?? "no error recorded"}) — nothing to publish`)
+      throw new Error(
+        `${label}: job finished '${job.state}' (${job.error ?? "no error recorded"}) — nothing to publish`,
+      )
     }
     // A skipped page is a shrunken denominator wearing a healthy state:
     // 25 of 31 pages would produce a rate that looks fine and means nothing.
@@ -255,7 +274,9 @@ async function main(): Promise<void> {
       embeddedTexts: embedded() - embeddedBefore,
       wallMs,
     })
-    console.log(`  ${label}: ${pages} pages in ${wallMs} ms (chunks in org: ${await count("chunks")}, embeddings: ${await count("chunk_embeddings")})`)
+    console.log(
+      `  ${label}: ${pages} pages in ${wallMs} ms (chunks in org: ${await count("chunks")}, embeddings: ${await count("chunk_embeddings")})`,
+    )
   }
 
   /** Org + sitemap source pointing at the loopback server. */
@@ -264,19 +285,33 @@ async function main(): Promise<void> {
     createdOrgs.push(orgId)
     await db.insertInto("organizations").values({ id: orgId, name }).execute()
     const sourceId = newId("src")
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: orgId, kind: "sitemap",
-      location: `http://127.0.0.1:${port}/sitemap.xml`, crawl_depth: 1,
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: orgId,
+        kind: "sitemap",
+        location: `http://127.0.0.1:${port}/sitemap.xml`,
+        crawl_depth: 1,
+      })
+      .execute()
     return { orgId, sourceId }
   }
 
   try {
-    console.log(`ingest-bench — ${files.size} corpus pages over loopback :${port}, real worker, real crawler\n`)
+    console.log(
+      `ingest-bench — ${files.size} corpus pages over loopback :${port}, real worker, real crawler\n`,
+    )
 
     const mock = counting(new MockEmbeddingProvider())
     const mockSite = await makeSource("Ingest Bench (mock)")
-    await runJob("cold, mock embedder", mockSite.orgId, mockSite.sourceId, mock.provider, mock.embedded)
+    await runJob(
+      "cold, mock embedder",
+      mockSite.orgId,
+      mockSite.sourceId,
+      mock.provider,
+      mock.embedded,
+    )
 
     if (!MOCK_ONLY) {
       const { LocalEmbeddingProvider } = await import("@providers/embedding/local")
@@ -286,18 +321,32 @@ async function main(): Promise<void> {
       await local.provider.embed(["warmup"])
 
       const localSite = await makeSource("Ingest Bench (local)")
-      await runJob("cold, local bge-small-en-v1.5", localSite.orgId, localSite.sourceId, local.provider, local.embedded)
-      await runJob("unchanged re-crawl (short-circuit)", localSite.orgId, localSite.sourceId, local.provider, local.embedded)
+      await runJob(
+        "cold, local bge-small-en-v1.5",
+        localSite.orgId,
+        localSite.sourceId,
+        local.provider,
+        local.embedded,
+      )
+      await runJob(
+        "unchanged re-crawl (short-circuit)",
+        localSite.orgId,
+        localSite.sourceId,
+        local.provider,
+        local.embedded,
+      )
     }
 
     // The table, in the shape eval/RESULTS.md publishes it.
-    console.log("\n| configuration | pages | chunks in org | texts embedded | wall | pages/s | chunks/s |")
+    console.log(
+      "\n| configuration | pages | chunks in org | texts embedded | wall | pages/s | chunks/s |",
+    )
     console.log("|---|---|---|---|---|---|---|")
     for (const row of rows) {
       const seconds = row.wallMs / 1000
       console.log(
         `| ${row.label} | ${row.pages} | ${row.chunks} | ${row.embeddedTexts} | ` +
-          `${(seconds).toFixed(2)} s | ${(row.pages / seconds).toFixed(1)} | ${(row.chunks / seconds).toFixed(0)} |`,
+          `${seconds.toFixed(2)} s | ${(row.pages / seconds).toFixed(1)} | ${(row.chunks / seconds).toFixed(0)} |`,
       )
     }
     console.log(

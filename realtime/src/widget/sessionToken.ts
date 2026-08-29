@@ -51,7 +51,9 @@ function mintSessionToken(
   now: number = Date.now(),
 ): { token: string; expiresAt: number } {
   const expiresAt = now + SESSION_TOKEN_TTL_MS
-  const payload = b64url(Buffer.from(JSON.stringify({ ...fields, exp: expiresAt } satisfies SessionTokenPayload)))
+  const payload = b64url(
+    Buffer.from(JSON.stringify({ ...fields, exp: expiresAt } satisfies SessionTokenPayload)),
+  )
   return { token: `${payload}.${sign(payload, secret)}`, expiresAt }
 }
 
@@ -62,7 +64,11 @@ function mintSessionToken(
  * route maps null to one uniform 401. timingSafeEqual on the signature:
  * a byte-by-byte compare leaks how much of a forged signature matched.
  */
-function verifySessionToken(token: string, secret: string, now: number = Date.now()): SessionTokenPayload | null {
+function verifySessionToken(
+  token: string,
+  secret: string,
+  now: number = Date.now(),
+): SessionTokenPayload | null {
   const dot = token.indexOf(".")
   if (dot === -1 || token.indexOf(".", dot + 1) !== -1) return null
   const payload = token.slice(0, dot)
@@ -85,7 +91,8 @@ function verifySessionToken(token: string, secret: string, now: number = Date.no
     typeof candidate["origin"] !== "string" ||
     typeof candidate["visitor"] !== "string" ||
     typeof candidate["exp"] !== "number"
-  ) return null
+  )
+    return null
   if (candidate["exp"] <= now) return null
   return {
     org: candidate["org"],
@@ -112,7 +119,9 @@ function resolveTokenSecret(): string {
     // A short secret is worse than a random one — refuse to limp.
     throw new Error("WIDGET_TOKEN_SECRET must be at least 32 characters")
   }
-  console.warn("[widget] WIDGET_TOKEN_SECRET unset — using an ephemeral secret (sessions die on restart)")
+  console.warn(
+    "[widget] WIDGET_TOKEN_SECRET unset — using an ephemeral secret (sessions die on restart)",
+  )
   return randomBytes(32).toString("base64url")
 }
 //#endregion

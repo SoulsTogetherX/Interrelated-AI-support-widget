@@ -16,9 +16,7 @@ import { validateEmail, validatePassword } from "./validation"
 //#endregion
 
 //#region Types
-export type AuthResult =
-  | { ok: true; userId: string }
-  | { ok: false; error: string }
+export type AuthResult = { ok: true; userId: string } | { ok: false; error: string }
 //#endregion
 
 //#region Constants
@@ -104,9 +102,7 @@ export async function registerUser(
 
 function isUniqueViolation(error: unknown): boolean {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: string }).code === "23505"
+    typeof error === "object" && error !== null && (error as { code?: string }).code === "23505"
   )
 }
 //#endregion

@@ -32,17 +32,26 @@ function buildLLMProvider(name: string): LLMProvider {
     case "groq": {
       const apiKey = process.env.GROQ_API_KEY
       if (!apiKey) throw new Error("LLM provider groq needs GROQ_API_KEY (see .env.example)")
-      return new GroqProvider({ apiKey, ...(process.env.GROQ_MODEL ? { model: process.env.GROQ_MODEL } : {}) })
+      return new GroqProvider({
+        apiKey,
+        ...(process.env.GROQ_MODEL ? { model: process.env.GROQ_MODEL } : {}),
+      })
     }
     case "gemini": {
       const apiKey = process.env.GEMINI_API_KEY
       if (!apiKey) throw new Error("LLM provider gemini needs GEMINI_API_KEY (see .env.example)")
-      return new GeminiProvider({ apiKey, ...(process.env.GEMINI_MODEL ? { model: process.env.GEMINI_MODEL } : {}) })
+      return new GeminiProvider({
+        apiKey,
+        ...(process.env.GEMINI_MODEL ? { model: process.env.GEMINI_MODEL } : {}),
+      })
     }
     case "ollama": {
       const model = process.env.OLLAMA_MODEL
       if (!model) throw new Error("LLM provider ollama needs OLLAMA_MODEL (see .env.example)")
-      return new OllamaProvider({ model, ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}) })
+      return new OllamaProvider({
+        model,
+        ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}),
+      })
     }
     case "anthropic": {
       // The one provider here with no free tier, so it is never a default
@@ -51,8 +60,12 @@ function buildLLMProvider(name: string): LLMProvider {
       // selectable for the same reason it is a credential option: a tenant
       // (or a developer comparing providers) may already pay for it.
       const apiKey = process.env.ANTHROPIC_API_KEY
-      if (!apiKey) throw new Error("LLM provider anthropic needs ANTHROPIC_API_KEY (see .env.example)")
-      return new AnthropicProvider({ apiKey, ...(process.env.ANTHROPIC_MODEL ? { model: process.env.ANTHROPIC_MODEL } : {}) })
+      if (!apiKey)
+        throw new Error("LLM provider anthropic needs ANTHROPIC_API_KEY (see .env.example)")
+      return new AnthropicProvider({
+        apiKey,
+        ...(process.env.ANTHROPIC_MODEL ? { model: process.env.ANTHROPIC_MODEL } : {}),
+      })
     }
     default:
       throw new Error(`unknown LLM provider "${name}" (mock | groq | gemini | ollama | anthropic)`)

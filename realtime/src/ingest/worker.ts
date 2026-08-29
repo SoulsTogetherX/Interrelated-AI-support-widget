@@ -112,7 +112,12 @@ const INSERT_BATCH = 100
  * minutes of waiting fails loudly, with the provider's own error, rather
  * than holding the queue's single worker forever.
  */
-const INGEST_EMBED_RETRY = { maxAttempts: 8, budgetMs: 300_000, baseDelayMs: 2_000, maxDelayMs: 60_000 }
+const INGEST_EMBED_RETRY = {
+  maxAttempts: 8,
+  budgetMs: 300_000,
+  baseDelayMs: 2_000,
+  maxDelayMs: 60_000,
+}
 //#endregion
 
 //#region Worker
@@ -225,7 +230,11 @@ class IngestWorker {
     // …and fail the ones that exhausted theirs — visibly, not by vanishing.
     await this.#db
       .updateTable("ingest_jobs")
-      .set({ state: "failed", locked_by: null, error: `lease expired after ${this.#maxAttempts} attempts` })
+      .set({
+        state: "failed",
+        locked_by: null,
+        error: `lease expired after ${this.#maxAttempts} attempts`,
+      })
       .where("state", "=", "running")
       .where("locked_at", "<", cutoff)
       .where("attempts", ">=", this.#maxAttempts)
@@ -307,13 +316,14 @@ class IngestWorker {
       // renewal, the vanished-document sweep, the status transitions, and the
       // failure path all work on an upload for free, and there is no second
       // ingest path to keep in step with this one.
-      const events = source.kind === "upload"
-        ? this.#uploadEvents(source.id)
-        : this.#crawler({
-          kind: source.kind,
-          location: source.location,
-          crawlDepth: source.crawl_depth,
-        })
+      const events =
+        source.kind === "upload"
+          ? this.#uploadEvents(source.id)
+          : this.#crawler({
+              kind: source.kind,
+              location: source.location,
+              crawlDepth: source.crawl_depth,
+            })
       for await (const event of events) {
         // Deploy-time stop: hand the job back between pages. attempts was
         // already incremented by the claim, which is correct — a job that
@@ -329,7 +339,11 @@ class IngestWorker {
           return
         }
         if (event.kind === "plan") {
-          await this.#db.updateTable("ingest_jobs").set({ docs_total: event.total }).where("id", "=", job.id).execute()
+          await this.#db
+            .updateTable("ingest_jobs")
+            .set({ docs_total: event.total })
+            .where("id", "=", job.id)
+            .execute()
         } else if (event.kind === "error") {
           // Page-level failures don't fail the job (one dead link in a
           // 100-page crawl). Recorded for the tenant, and still logged for
@@ -363,7 +377,11 @@ class IngestWorker {
 
       await this.#db
         .updateTable("ingest_jobs")
-        .set({ docs_total: docsDone, skipped_count: skippedCount, skipped_pages: JSON.stringify(skippedPages) })
+        .set({
+          docs_total: docsDone,
+          skipped_count: skippedCount,
+          skipped_pages: JSON.stringify(skippedPages),
+        })
         .where("id", "=", job.id)
         .execute()
       await this.#finishJob(job.id, "done", null)
@@ -431,7 +449,12 @@ class IngestWorker {
    * One page through parse-hash-chunk-embed-store. Returns the document id
    * (existing or new) so the caller can compute the vanished set.
    */
-  async #processPage(job: ClaimedJob, embedder: EmbeddingProvider, url: string, doc: { title: string | null; text: string; blocks: Parameters<typeof chunkBlocks>[0] }): Promise<string> {
+  async #processPage(
+    job: ClaimedJob,
+    embedder: EmbeddingProvider,
+    url: string,
+    doc: { title: string | null; text: string; blocks: Parameters<typeof chunkBlocks>[0] },
+  ): Promise<string> {
     const contentHash = createHash("sha256").update(doc.text, "utf8").digest("hex")
     const existing = await this.#db
       .selectFrom("documents")
@@ -516,7 +539,12 @@ class IngestWorker {
       if (existing) {
         await trx
           .updateTable("documents")
-          .set({ title: doc.title, content_hash: contentHash, token_count: tokenCount, fetched_at: new Date() })
+          .set({
+            title: doc.title,
+            content_hash: contentHash,
+            token_count: tokenCount,
+            fetched_at: new Date(),
+          })
           .where("id", "=", existing.id)
           .execute()
         // Chunk deletion cascades to chunk_embeddings (FK ON DELETE CASCADE)
@@ -526,8 +554,13 @@ class IngestWorker {
         await trx
           .insertInto("documents")
           .values({
-            id: documentId, org_id: job.org_id, source_id: job.source_id,
-            url, title: doc.title, content_hash: contentHash, token_count: tokenCount,
+            id: documentId,
+            org_id: job.org_id,
+            source_id: job.source_id,
+            url,
+            title: doc.title,
+            content_hash: contentHash,
+            token_count: tokenCount,
           })
           .execute()
       }
@@ -550,11 +583,17 @@ class IngestWorker {
         // Post-embed, so this is the dimension the provider actually
         // returned (a remote adapter discovers its own on first response).
         dim: embedder.dim,
-        embedding: vectors[i] as string,
+        embedding: vectors[i],
       }))
       for (let i = 0; i < chunkRows.length; i += INSERT_BATCH) {
-        await trx.insertInto("chunks").values(chunkRows.slice(i, i + INSERT_BATCH)).execute()
-        await trx.insertInto("chunk_embeddings").values(embeddingRows.slice(i, i + INSERT_BATCH)).execute()
+        await trx
+          .insertInto("chunks")
+          .values(chunkRows.slice(i, i + INSERT_BATCH))
+          .execute()
+        await trx
+          .insertInto("chunk_embeddings")
+          .values(embeddingRows.slice(i, i + INSERT_BATCH))
+          .execute()
       }
     })
     return documentId
@@ -571,7 +610,10 @@ class IngestWorker {
       .execute()
   }
 
-  async #setSourceStatus(sourceId: string, status: "pending" | "crawling" | "ready" | "failed"): Promise<void> {
+  async #setSourceStatus(
+    sourceId: string,
+    status: "pending" | "crawling" | "ready" | "failed",
+  ): Promise<void> {
     await this.#db.updateTable("sources").set({ status }).where("id", "=", sourceId).execute()
   }
   //#endregion

@@ -28,7 +28,7 @@ const embedder = new MockEmbeddingProvider()
 
 async function embedOne(text: string): Promise<number[]> {
   const [vector] = await embedder.embed([text])
-  return vector as number[]
+  return vector
 }
 
 /** Inserts a chunk row + its mock embedding for each text, batched to stay
@@ -48,28 +48,34 @@ async function insertChunks(
   const ids = rows.map(() => newId("chk"))
   const BATCH = 100
   for (let i = 0; i < rows.length; i += BATCH) {
-    await db.insertInto("chunks").values(
-      rows.slice(i, i + BATCH).map((r, j) => ({
-        id: ids[i + j] as string,
-        org_id: r.orgId,
-        document_id: r.documentId,
-        ord: r.ord,
-        heading_path: r.headingPath ?? null,
-        text: r.text,
-        token_count: Math.max(1, Math.ceil(r.text.length / 4)),
-        char_start: r.charStart ?? null,
-        char_end: r.charEnd ?? null,
-      })),
-    ).execute()
-    await db.insertInto("chunk_embeddings").values(
-      rows.slice(i, i + BATCH).map((r, j) => ({
-        chunk_id: ids[i + j] as string,
-        org_id: r.orgId,
-        model: embedder.model,
-        dim: embedder.dim,
-        embedding: toPgvector(padVector(vectors[i + j] as number[])),
-      })),
-    ).execute()
+    await db
+      .insertInto("chunks")
+      .values(
+        rows.slice(i, i + BATCH).map((r, j) => ({
+          id: ids[i + j],
+          org_id: r.orgId,
+          document_id: r.documentId,
+          ord: r.ord,
+          heading_path: r.headingPath ?? null,
+          text: r.text,
+          token_count: Math.max(1, Math.ceil(r.text.length / 4)),
+          char_start: r.charStart ?? null,
+          char_end: r.charEnd ?? null,
+        })),
+      )
+      .execute()
+    await db
+      .insertInto("chunk_embeddings")
+      .values(
+        rows.slice(i, i + BATCH).map((r, j) => ({
+          chunk_id: ids[i + j],
+          org_id: r.orgId,
+          model: embedder.model,
+          dim: embedder.dim,
+          embedding: toPgvector(padVector(vectors[i + j])),
+        })),
+      )
+      .execute()
   }
   return ids
 }
@@ -78,22 +84,37 @@ async function seedOrg(name: string): Promise<{ orgId: string; sourceId: string 
   const orgId = newId("org")
   await db.insertInto("organizations").values({ id: orgId, name }).execute()
   const sourceId = newId("src")
-  await db.insertInto("sources").values({
-    id: sourceId, org_id: orgId, kind: "url", location: `https://${name.toLowerCase().replace(/\s+/g, "-")}.example.com`,
-  }).execute()
+  await db
+    .insertInto("sources")
+    .values({
+      id: sourceId,
+      org_id: orgId,
+      kind: "url",
+      location: `https://${name.toLowerCase().replace(/\s+/g, "-")}.example.com`,
+    })
+    .execute()
   return { orgId, sourceId }
 }
 
 async function seedDocument(
-  orgId: string, sourceId: string, url: string,
+  orgId: string,
+  sourceId: string,
+  url: string,
   opts: { title?: string; deleted?: boolean } = {},
 ): Promise<string> {
   const id = newId("doc")
-  await db.insertInto("documents").values({
-    id, org_id: orgId, source_id: sourceId, url,
-    title: opts.title ?? null, content_hash: "c".repeat(64),
-    ...(opts.deleted ? { deleted_at: new Date() } : {}),
-  }).execute()
+  await db
+    .insertInto("documents")
+    .values({
+      id,
+      org_id: orgId,
+      source_id: sourceId,
+      url,
+      title: opts.title ?? null,
+      content_hash: "c".repeat(64),
+      ...(opts.deleted ? { deleted_at: new Date() } : {}),
+    })
+    .execute()
   return id
 }
 //#endregion
@@ -130,13 +151,31 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
     // ── Org A: the main corpus — live doc, deleted doc, a lexical tie pair ─
     const a = await seedOrg("Retrieval Co")
     orgA = a.orgId
-    const liveDoc = await seedDocument(orgA, a.sourceId, "https://docs.retrieval.example.com/billing", { title: "Billing FAQ" })
-    const goneDoc = await seedDocument(orgA, a.sourceId, "https://docs.retrieval.example.com/legacy", { deleted: true })
+    const liveDoc = await seedDocument(
+      orgA,
+      a.sourceId,
+      "https://docs.retrieval.example.com/billing",
+      { title: "Billing FAQ" },
+    )
+    const goneDoc = await seedDocument(
+      orgA,
+      a.sourceId,
+      "https://docs.retrieval.example.com/legacy",
+      { deleted: true },
+    )
 
     const liveIds = await insertChunks([
       // The refund chunk carries full metadata so the hydration test can
       // assert every field round-trips, not just ids.
-      { orgId: orgA, documentId: liveDoc, ord: 0, text: REFUND_TEXT, headingPath: "Billing > Refunds", charStart: 0, charEnd: REFUND_TEXT.length },
+      {
+        orgId: orgA,
+        documentId: liveDoc,
+        ord: 0,
+        text: REFUND_TEXT,
+        headingPath: "Billing > Refunds",
+        charStart: 0,
+        charEnd: REFUND_TEXT.length,
+      },
       { orgId: orgA, documentId: liveDoc, ord: 1, text: SHIPPING_TEXT },
       { orgId: orgA, documentId: liveDoc, ord: 2, text: RATE_LIMIT_TEXT },
       { orgId: orgA, documentId: liveDoc, ord: 3, text: PASSWORD_TEXT },
@@ -146,9 +185,9 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       { orgId: orgA, documentId: liveDoc, ord: 5, text: TIE_TEXT },
       { orgId: orgA, documentId: liveDoc, ord: 6, text: TIE_TEXT },
     ])
-    refundChunkId = liveIds[0] as string
-    sharedChunkA = liveIds[4] as string
-    tieChunkIds = [liveIds[5] as string, liveIds[6] as string]
+    refundChunkId = liveIds[0]
+    sharedChunkA = liveIds[4]
+    tieChunkIds = [liveIds[5], liveIds[6]]
     orgAChunkIds = liveIds
 
     // A chunk whose document is soft-deleted: embedded and indexed like any
@@ -156,7 +195,7 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
     const deletedIds = await insertChunks([
       { orgId: orgA, documentId: goneDoc, ord: 0, text: DELETED_TEXT },
     ])
-    deletedChunkId = deletedIds[0] as string
+    deletedChunkId = deletedIds[0]
 
     // ── Org B: one chunk with text IDENTICAL to org A's — same mock vector,
     // same tsv. Only the org filter separates them, in both arms. ──────────
@@ -164,7 +203,7 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
     orgB = b.orgId
     const bDoc = await seedDocument(orgB, b.sourceId, "https://docs.tenant-b.example.com/billing")
     const bIds = await insertChunks([{ orgId: orgB, documentId: bDoc, ord: 0, text: SHARED_TEXT }])
-    sharedChunkB = bIds[0] as string
+    sharedChunkB = bIds[0]
 
     // ── Tiny org: fewer chunks than k, for the k-overrun boundary. ─────────
     const tiny = await seedOrg("Tiny Org")
@@ -188,7 +227,10 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
   describe("dense arm", () => {
     it("returns the exact-text chunk first, at ~zero distance", async () => {
       const hits = await denseSearch(db, {
-        orgId: orgA, model: embedder.model, queryVector: await embedOne(SHIPPING_TEXT), k: 3,
+        orgId: orgA,
+        model: embedder.model,
+        queryVector: await embedOne(SHIPPING_TEXT),
+        k: 3,
       })
       expect(hits[0]?.chunkId).toBe(orgAChunkIds[1])
       // fp16 storage rounds the stored vector, so ~0 rather than exactly 0.
@@ -203,7 +245,10 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       // is the true nearest neighbor by a wide margin. Only the
       // documents.deleted_at filter keeps it out.
       const hits = await denseSearch(db, {
-        orgId: orgA, model: embedder.model, queryVector: await embedOne(DELETED_TEXT), k: 10,
+        orgId: orgA,
+        model: embedder.model,
+        queryVector: await embedOne(DELETED_TEXT),
+        k: 10,
       })
       expect(hits.length).toBeGreaterThan(0)
       expect(hits.map((h) => h.chunkId)).not.toContain(deletedChunkId)
@@ -213,8 +258,18 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       // SHARED_TEXT exists in both orgs with the SAME mock vector (distance
       // 0 for both rows) — the org filter is the only thing separating them.
       const queryVector = await embedOne(SHARED_TEXT)
-      const hitsA = await denseSearch(db, { orgId: orgA, model: embedder.model, queryVector, k: 10 })
-      const hitsB = await denseSearch(db, { orgId: orgB, model: embedder.model, queryVector, k: 10 })
+      const hitsA = await denseSearch(db, {
+        orgId: orgA,
+        model: embedder.model,
+        queryVector,
+        k: 10,
+      })
+      const hitsB = await denseSearch(db, {
+        orgId: orgB,
+        model: embedder.model,
+        queryVector,
+        k: 10,
+      })
       expect(hitsA.map((h) => h.chunkId)).toContain(sharedChunkA)
       expect(hitsA.map((h) => h.chunkId)).not.toContain(sharedChunkB)
       expect(hitsB.map((h) => h.chunkId)).toEqual([sharedChunkB])
@@ -222,14 +277,20 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
 
     it("returns the whole corpus when k exceeds it", async () => {
       const hits = await denseSearch(db, {
-        orgId: tinyOrg, model: embedder.model, queryVector: await embedOne("anything at all"), k: 5,
+        orgId: tinyOrg,
+        model: embedder.model,
+        queryVector: await embedOne("anything at all"),
+        k: 5,
       })
       expect(hits).toHaveLength(3)
     })
 
     it("returns [] for an org with no content", async () => {
       const hits = await denseSearch(db, {
-        orgId: emptyOrg, model: embedder.model, queryVector: await embedOne("anything"), k: 5,
+        orgId: emptyOrg,
+        model: embedder.model,
+        queryVector: await embedOne("anything"),
+        k: 5,
       })
       expect(hits).toEqual([])
     })
@@ -239,7 +300,10 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       // vectors across model spaces is the bug the model column exists to
       // prevent.
       const hits = await denseSearch(db, {
-        orgId: orgA, model: "no-such-model", queryVector: await embedOne(REFUND_TEXT), k: 5,
+        orgId: orgA,
+        model: "no-such-model",
+        queryVector: await embedOne(REFUND_TEXT),
+        k: 5,
       })
       expect(hits).toEqual([])
     })
@@ -270,7 +334,9 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       // websearch_to_tsquery's contract: end-user text can never produce a
       // parse error. These would all crash to_tsquery.
       for (const hostile of ['refund" AND (', "a | b & c!", '""""', "-—–"]) {
-        await expect(lexicalSearch(db, { orgId: orgA, query: hostile, k: 5 })).resolves.toBeDefined()
+        await expect(
+          lexicalSearch(db, { orgId: orgA, query: hostile, k: 5 }),
+        ).resolves.toBeDefined()
       }
     })
 
@@ -300,8 +366,11 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
   describe("hybrid", () => {
     it("ranks the both-arms consensus chunk first and reports both ranks", async () => {
       const results = await hybridSearch(db, {
-        orgId: orgA, queryText: REFUND_TEXT, queryVector: await embedOne(REFUND_TEXT),
-        model: embedder.model, k: 5,
+        orgId: orgA,
+        queryText: REFUND_TEXT,
+        queryVector: await embedOne(REFUND_TEXT),
+        model: embedder.model,
+        k: 5,
       })
       // Dense rank 1 (exact vector) + lexical rank 1 (exact wording) → RRF
       // score of exactly 1/61 + 1/61.
@@ -313,8 +382,11 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
 
     it("reports null lexical fields for dense-only results", async () => {
       const results = await hybridSearch(db, {
-        orgId: orgA, queryText: REFUND_TEXT, queryVector: await embedOne(REFUND_TEXT),
-        model: embedder.model, k: 5,
+        orgId: orgA,
+        queryText: REFUND_TEXT,
+        queryVector: await embedOne(REFUND_TEXT),
+        model: embedder.model,
+        k: 5,
       })
       // Dense returns the whole small corpus as neighbors; lexical matches
       // only the refund wording — so the tail is dense-only by construction.
@@ -329,8 +401,11 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
 
     it("hydrates full citation metadata", async () => {
       const results = await hybridSearch(db, {
-        orgId: orgA, queryText: REFUND_TEXT, queryVector: await embedOne(REFUND_TEXT),
-        model: embedder.model, k: 1,
+        orgId: orgA,
+        queryText: REFUND_TEXT,
+        queryVector: await embedOne(REFUND_TEXT),
+        model: embedder.model,
+        k: 1,
       })
       expect(results[0]).toMatchObject({
         chunkId: refundChunkId,
@@ -345,15 +420,20 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
 
     it("cuts to k after fusion", async () => {
       const results = await hybridSearch(db, {
-        orgId: orgA, queryText: REFUND_TEXT, queryVector: await embedOne(REFUND_TEXT),
-        model: embedder.model, k: 2,
+        orgId: orgA,
+        queryText: REFUND_TEXT,
+        queryVector: await embedOne(REFUND_TEXT),
+        model: embedder.model,
+        k: 2,
       })
       expect(results).toHaveLength(2)
     })
 
     it("returns [] for an org with no content", async () => {
       const results = await hybridSearch(db, {
-        orgId: emptyOrg, queryText: "anything", queryVector: await embedOne("anything"),
+        orgId: emptyOrg,
+        queryText: "anything",
+        queryVector: await embedOne("anything"),
         model: embedder.model,
       })
       expect(results).toEqual([])
@@ -405,7 +485,9 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
         const docId = await seedDocument(orgId, sourceId, `https://docs.tenant-${t}.example.com/`)
         const ids = await insertChunks(
           Array.from({ length: CHUNKS_PER_TENANT }, (_, j) => ({
-            orgId, documentId: docId, ord: j,
+            orgId,
+            documentId: docId,
+            ord: j,
             text: `Tenant ${t} article ${j}: assorted product documentation prose.`,
           })),
         )
@@ -433,11 +515,16 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       const queryVector = await embedOne("how do I configure the product?")
       for (const [orgId, ownIds] of tenantChunks) {
         const hits = await denseSearch(singleConn, {
-          orgId, model: embedder.model, queryVector, k: K,
+          orgId,
+          model: embedder.model,
+          queryVector,
+          k: K,
         })
         expect(hits, `tenant ${orgId} starved`).toHaveLength(K)
         for (const hit of hits) {
-          expect(ownIds.has(hit.chunkId), `tenant ${orgId} got foreign chunk ${hit.chunkId}`).toBe(true)
+          expect(ownIds.has(hit.chunkId), `tenant ${orgId} got foreign chunk ${hit.chunkId}`).toBe(
+            true,
+          )
         }
       }
     }, 60_000)
@@ -455,7 +542,11 @@ describe.skipIf(!DB_CONFIGURED)("hybrid retrieval", () => {
       let starved = 0
       for (const orgId of tenantChunks.keys()) {
         const hits = await denseSearch(singleConn, {
-          orgId, model: embedder.model, queryVector, k: K, iterativeScan: "off",
+          orgId,
+          model: embedder.model,
+          queryVector,
+          k: K,
+          iterativeScan: "off",
         })
         if (hits.length < K) starved++
       }
@@ -474,10 +565,14 @@ describe("retrieval input validation", () => {
     await expect(denseSearch(db, { ...base, k: 0 })).rejects.toThrow(/k must be/)
     await expect(denseSearch(db, { ...base, k: 2.5 })).rejects.toThrow(/k must be/)
     await expect(denseSearch(db, { ...base, k: 1_001 })).rejects.toThrow(/k must be/)
-    await expect(lexicalSearch(db, { orgId: "org_x", query: "q", k: -1 })).rejects.toThrow(/k must be/)
+    await expect(lexicalSearch(db, { orgId: "org_x", query: "q", k: -1 })).rejects.toThrow(
+      /k must be/,
+    )
   })
   it("rejects an out-of-range efSearch", async () => {
-    await expect(denseSearch(db, { ...base, k: 5, efSearch: 0 })).rejects.toThrow(/efSearch must be/)
+    await expect(denseSearch(db, { ...base, k: 5, efSearch: 0 })).rejects.toThrow(
+      /efSearch must be/,
+    )
   })
 })
 //#endregion

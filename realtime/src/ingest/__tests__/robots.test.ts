@@ -22,7 +22,8 @@ function policy(text: string, agent = USER_AGENT_PRODUCT) {
   return robotsPolicy(parseRobotsTxt(text), agent, "test")
 }
 
-const allowed = (text: string, url: string, agent?: string) => policy(text, agent).check(url).allowed
+const allowed = (text: string, url: string, agent?: string) =>
+  policy(text, agent).check(url).allowed
 
 /** The reason clause a refusal carries — what the dashboard shows. */
 function reason(text: string, url: string, agent?: string): string | null {
@@ -162,12 +163,17 @@ describe("robots.txt — which rule wins", () => {
 
   it("names the deciding rule in the reason", () => {
     const text = "User-agent: *\nDisallow: /private/\nDisallow: /private/deep/\n"
-    expect(reason(text, "https://x.test/private/deep/x")).toBe("disallowed by robots.txt (User-agent: *, Disallow: /private/deep/)")
-    expect(reason(text, "https://x.test/private/y")).toBe("disallowed by robots.txt (User-agent: *, Disallow: /private/)")
+    expect(reason(text, "https://x.test/private/deep/x")).toBe(
+      "disallowed by robots.txt (User-agent: *, Disallow: /private/deep/)",
+    )
+    expect(reason(text, "https://x.test/private/y")).toBe(
+      "disallowed by robots.txt (User-agent: *, Disallow: /private/)",
+    )
   })
 
   it("Crawl-delay comes from the matched group, and only from it", () => {
-    const text = "User-agent: *\nCrawl-delay: 10\n\nUser-agent: InterrelatedBot\nCrawl-delay: 2.5\nDisallow: /x\n"
+    const text =
+      "User-agent: *\nCrawl-delay: 10\n\nUser-agent: InterrelatedBot\nCrawl-delay: 2.5\nDisallow: /x\n"
     expect(policy(text).crawlDelaySeconds).toBe(2.5)
     expect(policy(text, "otherbot").crawlDelaySeconds).toBe(10)
     expect(policy("User-agent: *\nCrawl-delay: soon\n").crawlDelaySeconds).toBeNull()
@@ -245,7 +251,8 @@ describe("robots.txt — comparison form", () => {
 //#region Tolerant parsing (RFC 9309 §2.2.4)
 describe("robots.txt — parsing tolerance", () => {
   it("survives comments, CRLF, a BOM, mixed-case fields, and missing spaces", () => {
-    const text = "\uFEFFuser-AGENT: *   # everyone\r\nDISALLOW:/a # trailing comment\r\n\r\nallow:  /a/b\r\n"
+    const text =
+      "\uFEFFuser-AGENT: *   # everyone\r\nDISALLOW:/a # trailing comment\r\n\r\nallow:  /a/b\r\n"
     expect(allowed(text, "https://x.test/a/x")).toBe(false)
     expect(allowed(text, "https://x.test/a/b")).toBe(true)
   })
@@ -262,7 +269,16 @@ describe("robots.txt — parsing tolerance", () => {
 describe("fetchRobotsPolicy — what the outcome of the fetch means", () => {
   let server: Server
   let base: string
-  let mode: "ok" | "specific" | "notfound" | "forbidden" | "gone" | "error" | "redirect" | "huge" | "no-location" = "ok"
+  let mode:
+    | "ok"
+    | "specific"
+    | "notfound"
+    | "forbidden"
+    | "gone"
+    | "error"
+    | "redirect"
+    | "huge"
+    | "no-location" = "ok"
   let seenAgent: string | undefined
 
   beforeAll(async () => {
@@ -270,15 +286,21 @@ describe("fetchRobotsPolicy — what the outcome of the fetch means", () => {
       const path = new URL(req.url ?? "/", "http://fixture").pathname
       if (path === "/robots.txt") seenAgent = req.headers["user-agent"]
       if (path === "/moved/robots.txt") {
-        res.writeHead(200, { "content-type": "text/plain" }).end("User-agent: *\nDisallow: /moved-rule\n")
+        res
+          .writeHead(200, { "content-type": "text/plain" })
+          .end("User-agent: *\nDisallow: /moved-rule\n")
         return
       }
       switch (mode) {
         case "ok":
-          res.writeHead(200, { "content-type": "text/plain" }).end("User-agent: *\nDisallow: /private/\nCrawl-delay: 3\n")
+          res
+            .writeHead(200, { "content-type": "text/plain" })
+            .end("User-agent: *\nDisallow: /private/\nCrawl-delay: 3\n")
           return
         case "specific":
-          res.writeHead(200).end("User-agent: *\nAllow: /\n\nUser-agent: InterrelatedBot\nDisallow: /secret\n")
+          res
+            .writeHead(200)
+            .end("User-agent: *\nAllow: /\n\nUser-agent: InterrelatedBot\nDisallow: /secret\n")
           return
         case "notfound":
           res.writeHead(404).end("nope")

@@ -103,7 +103,9 @@ function assertBatch(options: {
 }): number {
   const { provider, model, expected, declaredDim, vectors } = options
   if (vectors.length !== expected) {
-    throw new Error(`${provider}: ${model} returned ${vectors.length} embeddings for ${expected} texts`)
+    throw new Error(
+      `${provider}: ${model} returned ${vectors.length} embeddings for ${expected} texts`,
+    )
   }
   let dim = declaredDim
   for (const vector of vectors) {

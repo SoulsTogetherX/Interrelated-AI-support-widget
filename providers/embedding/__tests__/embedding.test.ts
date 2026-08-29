@@ -18,9 +18,9 @@ describe("MockEmbeddingProvider", () => {
 
   it("produces uncorrelated unit vectors for different texts", async () => {
     const [a, b] = await provider.embed(["refund policy", "shipping times"])
-    const dot = a!.reduce((acc, v, i) => acc + v * (b![i] as number), 0)
-    const norm = Math.sqrt(a!.reduce((acc, v) => acc + v * v, 0))
-    expect(norm).toBeCloseTo(1, 6)          // unit-normalized like a real model
+    const dot = a.reduce((acc, v, i) => acc + v * b[i], 0)
+    const norm = Math.sqrt(a.reduce((acc, v) => acc + v * v, 0))
+    expect(norm).toBeCloseTo(1, 6) // unit-normalized like a real model
     expect(Math.abs(dot)).toBeLessThan(0.35) // hash-seeded → near-orthogonal
   })
 
@@ -62,7 +62,7 @@ describe.skipIf(!FASTEMBED)("LocalEmbeddingProvider (real fastembed)", () => {
     expect(refund).toHaveLength(provider.dim)
 
     const cosine = (a: number[], b: number[]): number => {
-      const dot = a.reduce((acc, v, i) => acc + v * (b[i] as number), 0)
+      const dot = a.reduce((acc, v, i) => acc + v * b[i], 0)
       const na = Math.sqrt(a.reduce((acc, v) => acc + v * v, 0))
       const nb = Math.sqrt(b.reduce((acc, v) => acc + v * v, 0))
       return dot / (na * nb)
@@ -70,7 +70,7 @@ describe.skipIf(!FASTEMBED)("LocalEmbeddingProvider (real fastembed)", () => {
     // The one semantic property everything downstream depends on: related
     // texts closer than unrelated ones. If THIS fails, the model file or
     // adapter is broken and the eval harness would be measuring noise.
-    expect(cosine(refund!, money!)).toBeGreaterThan(cosine(refund!, weather!))
+    expect(cosine(refund, money)).toBeGreaterThan(cosine(refund, weather))
   }, 300_000) // first run downloads the model; generous timeout
 })
 

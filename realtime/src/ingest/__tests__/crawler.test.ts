@@ -27,11 +27,16 @@ const html = (body: string) => `<!doctype html><html><body>${body}</body></html>
 
 /** A real PDF at a real link, because since M7.6 the crawler FETCHES those
  *  (§3.10.7) — the datasheet a docs site links is content, not an asset. */
-const PDF_MANUAL = buildPdf([{ lines: ["The manual says refunds take five days."] }], { info: { Title: "Manual" } })
+const PDF_MANUAL = buildPdf([{ lines: ["The manual says refunds take five days."] }], {
+  info: { Title: "Manual" },
+})
 
 const routes: Record<
   string,
-  { type: string; body: string } | { type: string; bytes: Buffer } | { redirect: string } | { status: number }
+  | { type: string; body: string }
+  | { type: string; bytes: Buffer }
+  | { redirect: string }
+  | { status: number }
 > = {
   "/site/index.html": {
     type: "text/html",
@@ -109,7 +114,8 @@ beforeAll(async () => {
     requestedAt.push(Date.now())
     if (path === "/robots.txt") {
       if (robotsTxt === null) res.writeHead(404).end("no robots here")
-      else if (typeof robotsTxt === "string") res.writeHead(200, { "content-type": "text/plain" }).end(robotsTxt)
+      else if (typeof robotsTxt === "string")
+        res.writeHead(200, { "content-type": "text/plain" }).end(robotsTxt)
       else res.writeHead(robotsTxt.status).end()
       return
     }
@@ -125,7 +131,9 @@ beforeAll(async () => {
       // substitution below would re-encode latin1 as utf-8 and corrupt them.
       res.writeHead(200, { "content-type": route.type }).end(route.bytes)
     } else {
-      res.writeHead(200, { "content-type": route.type }).end(route.body.replaceAll("__BASE__", base))
+      res
+        .writeHead(200, { "content-type": route.type })
+        .end(route.body.replaceAll("__BASE__", base))
     }
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -149,12 +157,16 @@ beforeEach(() => {
 //#region Helpers
 const options = { fetchDelayMs: 0, fetchOptions: { hostGuard: () => {} } }
 
-async function run(source: Partial<CrawlSource> & { location: string }, extra: Record<string, unknown> = {}) {
+async function run(
+  source: Partial<CrawlSource> & { location: string },
+  extra: Record<string, unknown> = {},
+) {
   const events: CrawlEvent[] = []
   for await (const event of crawl(
     { kind: "url", crawlDepth: 1, ...source },
     { ...options, ...extra },
-  )) events.push(event)
+  ))
+    events.push(event)
   return {
     events,
     pages: events.flatMap((e) => (e.kind === "page" ? [e.url] : [])),
@@ -174,8 +186,11 @@ describe("crawl (url kind)", () => {
   it("follows same-origin links to the configured depth", async () => {
     const depth1 = await run({ location: `${base}/site/index.html`, crawlDepth: 1 })
     expect(depth1.pages.sort()).toEqual([
-      `${base}/site/a.html`, `${base}/site/b.md`, `${base}/site/deep/c.html`,
-      `${base}/site/index.html`, `${base}/site/manual.pdf`,
+      `${base}/site/a.html`,
+      `${base}/site/b.md`,
+      `${base}/site/deep/c.html`,
+      `${base}/site/index.html`,
+      `${base}/site/manual.pdf`,
     ])
     // d.html is only linked FROM a.html — depth 2 territory.
     const depth2 = await run({ location: `${base}/site/index.html`, crawlDepth: 2 })
@@ -185,7 +200,9 @@ describe("crawl (url kind)", () => {
   it("parses each page (markdown served as text/plain included)", async () => {
     const { events } = await run({ location: `${base}/site/index.html` })
     const md = events.find((e) => e.kind === "page" && e.url.endsWith("/b.md"))
-    expect(md?.kind === "page" && md.doc.blocks.some((b) => b.kind === "heading" && b.text === "B")).toBe(true)
+    expect(
+      md?.kind === "page" && md.doc.blocks.some((b) => b.kind === "heading" && b.text === "B"),
+    ).toBe(true)
   })
 
   it("dedupes fragment variants and redirect targets", async () => {
@@ -215,7 +232,9 @@ describe("crawl (url kind)", () => {
 
   it("reports broken links as error events and keeps crawling", async () => {
     const { errors, pages } = await run({ location: `${base}/site/index.html` })
-    expect(errors).toEqual([{ kind: "error", url: `${base}/site/broken.html`, message: "HTTP 404" }])
+    expect(errors).toEqual([
+      { kind: "error", url: `${base}/site/broken.html`, message: "HTTP 404" },
+    ])
     expect(pages.length).toBeGreaterThan(1) // the failure aborted nothing
   })
 
@@ -234,12 +253,17 @@ describe("crawl (url kind)", () => {
 //#region Sitemap crawling
 describe("crawl (sitemap kind)", () => {
   it("announces a plan, fetches exactly the same-origin locs, reports failures", async () => {
-    const { events, pages, errors } = await run({ kind: "sitemap", location: `${base}/sitemap.xml` })
+    const { events, pages, errors } = await run({
+      kind: "sitemap",
+      location: `${base}/sitemap.xml`,
+    })
     // Plan counts fetchABLE urls (foreign loc excluded); broken.html is in
     // the plan — its failure is discovered by fetching, not planning.
     expect(events[0]).toEqual({ kind: "plan", total: 3 })
     expect(pages.sort()).toEqual([`${base}/site/a.html`, `${base}/site/b.md`])
-    expect(errors).toEqual([{ kind: "error", url: `${base}/site/broken.html`, message: "HTTP 404" }])
+    expect(errors).toEqual([
+      { kind: "error", url: `${base}/site/broken.html`, message: "HTTP 404" },
+    ])
     expect(requested).not.toContain("/foreign.html")
     // Sitemaps enumerate; they do not license link-walking — d.html is
     // linked from a.html but must not be fetched.
@@ -253,7 +277,9 @@ describe("crawl (sitemap kind)", () => {
   })
 
   it("throws CrawlError when the sitemap itself is unfetchable", async () => {
-    await expect(run({ kind: "sitemap", location: `${base}/missing-sitemap.xml` })).rejects.toThrow(CrawlError)
+    await expect(run({ kind: "sitemap", location: `${base}/missing-sitemap.xml` })).rejects.toThrow(
+      CrawlError,
+    )
   })
 })
 //#endregion
@@ -293,11 +319,14 @@ describe("crawl honors robots.txt", () => {
   })
 
   it("a group naming InterrelatedBot wins over the wildcard", async () => {
-    robotsTxt = "User-agent: *\nDisallow: /\n\nUser-agent: InterrelatedBot\nDisallow: /site/drafts/\n"
+    robotsTxt =
+      "User-agent: *\nDisallow: /\n\nUser-agent: InterrelatedBot\nDisallow: /site/drafts/\n"
     const { pages, skipped } = await run({ location: robotsRoot() })
     expect(pages).toContain(`${base}/site/private/p.html`) // the wildcard's Disallow: / does not bind us
     expect(skipped.map((s) => s.url)).toEqual([`${base}/site/drafts/d.html`])
-    expect(skipped[0]?.reason).toBe("disallowed by robots.txt (User-agent: InterrelatedBot, Disallow: /site/drafts/)")
+    expect(skipped[0]?.reason).toBe(
+      "disallowed by robots.txt (User-agent: InterrelatedBot, Disallow: /site/drafts/)",
+    )
   })
 
   it("a redirect that lands on a disallowed page is not ingested", async () => {
@@ -335,7 +364,10 @@ describe("crawl honors robots.txt", () => {
 
   it("sitemap entries robots.txt disallows are skipped and left out of the plan", async () => {
     robotsTxt = "User-agent: *\nDisallow: /site/private/\n"
-    const { events, pages, skipped } = await run({ kind: "sitemap", location: `${base}/robots-sitemap.xml` })
+    const { events, pages, skipped } = await run({
+      kind: "sitemap",
+      location: `${base}/robots-sitemap.xml`,
+    })
     expect(skipped.map((s) => s.url)).toEqual([`${base}/site/private/p.html`])
     // The skip is announced BEFORE the plan, and the plan counts only what
     // will be fetched — the progress bar never waits for a page that is not
@@ -350,7 +382,9 @@ describe("crawl honors robots.txt", () => {
 
   it("a sitemap the robots.txt disallows is nothing crawlable", async () => {
     robotsTxt = "User-agent: *\nDisallow: /robots-sitemap.xml\n"
-    await expect(run({ kind: "sitemap", location: `${base}/robots-sitemap.xml` })).rejects.toThrow(/nothing crawlable/)
+    await expect(run({ kind: "sitemap", location: `${base}/robots-sitemap.xml` })).rejects.toThrow(
+      /nothing crawlable/,
+    )
     expect(requested).toEqual(["/robots.txt"])
   })
 
@@ -360,7 +394,7 @@ describe("crawl honors robots.txt", () => {
     // at 0.3 s each, so both gaps must be ≥ ~300 ms.
     robotsTxt = "User-agent: *\nCrawl-delay: 0.3\n"
     await run({ location: `${base}/site/a.html` })
-    let gaps = requestedAt.slice(1).map((t, i) => t - (requestedAt[i] as number))
+    let gaps = requestedAt.slice(1).map((t, i) => t - requestedAt[i])
     expect(requested).toEqual(["/robots.txt", "/site/a.html", "/site/d.html"])
     expect(gaps.every((g) => g >= 250)).toBe(true)
 
@@ -371,7 +405,7 @@ describe("crawl honors robots.txt", () => {
     requestedAt = []
     const started = Date.now()
     const { pages } = await run({ location: `${base}/site/a.html` }, { maxCrawlDelayMs: 200 })
-    gaps = requestedAt.slice(1).map((t, i) => t - (requestedAt[i] as number))
+    gaps = requestedAt.slice(1).map((t, i) => t - requestedAt[i])
     expect(pages).toHaveLength(2)
     expect(gaps).toHaveLength(2)
     expect(gaps.every((g) => g >= 150)).toBe(true)

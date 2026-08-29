@@ -27,20 +27,14 @@ export default async function ConversationsPage({
       <h1 className="convlist-title">Conversations</h1>
       {conversations.length === 0 ? (
         <p className="convlist-empty">
-          No conversations yet — they appear here the moment a visitor asks
-          your widget a question.
+          No conversations yet — they appear here the moment a visitor asks your widget a question.
         </p>
       ) : (
         <ul className="convlist-items">
           {conversations.map((c) => (
             <li key={c.id}>
-              <Link
-                className="convlist-item"
-                href={`/dashboard/${org.id}/conversations/${c.id}`}
-              >
-                <span className="convlist-preview">
-                  {c.preview ?? "(empty conversation)"}
-                </span>
+              <Link className="convlist-item" href={`/dashboard/${org.id}/conversations/${c.id}`}>
+                <span className="convlist-preview">{c.preview ?? "(empty conversation)"}</span>
                 <span className="convlist-meta">
                   {c.messageCount} message{c.messageCount === 1 ? "" : "s"} ·{" "}
                   {statusLabel(c.status)} ·{" "}

@@ -15,11 +15,7 @@ import "./page.css"
 export const metadata = { title: "Providers — Interrelated" }
 
 // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
-export default async function ProvidersPage({
-  params,
-}: {
-  params: Promise<{ orgId: string }>
-}) {
+export default async function ProvidersPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params
   const { org } = await requireOrgMember(orgId)
   const credentials = await listCredentialDisplay(org.id)
@@ -34,10 +30,9 @@ export default async function ProvidersPage({
       </nav>
       <h1 className="providers-title">AI provider</h1>
       <p className="providers-intro">
-        Your organization brings its own AI provider. The key is tested with a
-        real request before it is saved, stored encrypted (AES-256-GCM under a
-        server-held master key), shown only as its last four characters from
-        then on, and never returned by any API.
+        Your organization brings its own AI provider. The key is tested with a real request before
+        it is saved, stored encrypted (AES-256-GCM under a server-held master key), shown only as
+        its last four characters from then on, and never returned by any API.
       </p>
 
       <section className="providers-card">
@@ -80,10 +75,9 @@ export default async function ProvidersPage({
       <section className="providers-card">
         <h2 className="providers-cardtitle">Embedding</h2>
         <p className="providers-cardintro">
-          Embeddings turn your pages — and every visitor question — into
-          vectors. Both sides must come from the same model, so changing this
-          re-indexes your sources automatically; until that finishes, answers
-          come from the pages already indexed under the new model. Connect
+          Embeddings turn your pages — and every visitor question — into vectors. Both sides must
+          come from the same model, so changing this re-indexes your sources automatically; until
+          that finishes, answers come from the pages already indexed under the new model. Connect
           nothing and indexing runs on the platform&apos;s built-in model.
         </p>
         {embedding ? (

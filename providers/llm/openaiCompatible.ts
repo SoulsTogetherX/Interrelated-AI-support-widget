@@ -52,7 +52,8 @@ interface OpenAIStreamChunk {
 function toUsage(value: unknown): LLMUsage | null {
   if (typeof value !== "object" || value === null) return null
   const usage = value as Record<string, unknown>
-  if (typeof usage["prompt_tokens"] !== "number" || typeof usage["completion_tokens"] !== "number") return null
+  if (typeof usage["prompt_tokens"] !== "number" || typeof usage["completion_tokens"] !== "number")
+    return null
   return { inputTokens: usage["prompt_tokens"], outputTokens: usage["completion_tokens"] }
 }
 //#endregion
@@ -104,7 +105,8 @@ class OpenAICompatibleProvider implements LLMProvider {
         chunk = JSON.parse(data) as OpenAIStreamChunk
       } catch {
         throw new LLMHttpError({
-          provider: this.#provider, status: 200,
+          provider: this.#provider,
+          status: 200,
           detail: `stream carried a non-JSON data line: ${data.slice(0, 120)}`,
         })
       }

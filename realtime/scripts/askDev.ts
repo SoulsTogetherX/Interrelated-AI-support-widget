@@ -30,8 +30,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -48,8 +48,12 @@ async function main(): Promise<void> {
     console.error('usage: npm run ask -- "<question>" [--org "Name"] [--conversation con_…]')
     process.exit(1)
   }
-  const orgName = args.includes("--org") ? (args[args.indexOf("--org") + 1] ?? "Local Dev Org") : "Local Dev Org"
-  const conversationId = args.includes("--conversation") ? args[args.indexOf("--conversation") + 1] : undefined
+  const orgName = args.includes("--org")
+    ? (args[args.indexOf("--org") + 1] ?? "Local Dev Org")
+    : "Local Dev Org"
+  const conversationId = args.includes("--conversation")
+    ? args[args.indexOf("--conversation") + 1]
+    : undefined
 
   const { db } = await import("@/db/pool")
   const { answerQuestion } = await import("@/answer/pipeline")
@@ -58,9 +62,10 @@ async function main(): Promise<void> {
   const { buildLLMProvider } = await import("@/answer/buildLLM")
   const { groundedMockResponder } = await import("@/answer/mockResponder")
 
-  const fallbackEmbedder = process.env.EMBEDDING_PROVIDER === "local"
-    ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
-    : new MockEmbeddingProvider()
+  const fallbackEmbedder =
+    process.env.EMBEDDING_PROVIDER === "local"
+      ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
+      : new MockEmbeddingProvider()
 
   // Provider selection shares server boot's table (answer/buildLLM.ts) —
   // one place to know how env config maps to providers. The lone CLI
@@ -68,11 +73,16 @@ async function main(): Promise<void> {
   // corrupt a quote; a missing key throws a one-line usage error below.
   const tamper = args.includes("--tamper")
   const llmChoice = args.includes("--llm") ? (args[args.indexOf("--llm") + 1] ?? "mock") : "mock"
-  const llm = tamper && llmChoice === "mock"
-    ? new MockLLMProvider(groundedMockResponder(true))
-    : buildLLMProvider(llmChoice)
+  const llm =
+    tamper && llmChoice === "mock"
+      ? new MockLLMProvider(groundedMockResponder(true))
+      : buildLLMProvider(llmChoice)
 
-  const org = await db.selectFrom("organizations").select(["id"]).where("name", "=", orgName).executeTakeFirst()
+  const org = await db
+    .selectFrom("organizations")
+    .select(["id"])
+    .where("name", "=", orgName)
+    .executeTakeFirst()
   if (!org) {
     console.error(`no organization named "${orgName}" — run npm run enqueue first, or pass --org`)
     process.exit(1)
@@ -89,7 +99,9 @@ async function main(): Promise<void> {
   }
 
   const result = await answerQuestion({
-    db, embedder, llm,
+    db,
+    embedder,
+    llm,
     orgId: org.id,
     visitorId: "cli-dev",
     question,
@@ -110,9 +122,13 @@ async function main(): Promise<void> {
     const { costUsd } = await import("@shared/pricing/models")
     const cost = costUsd(llm.model, result.usage.inputTokens, result.usage.outputTokens)
     const priced = cost === null ? "unpriced model" : `$${cost.toFixed(6)} at list price`
-    console.log(`tokens: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out  (${priced})`)
+    console.log(
+      `tokens: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out  (${priced})`,
+    )
   }
-  console.log(`claims: ${result.claims.length} total, ${result.claims.filter((c) => c.verdict.status === "verified").length} verified\n`)
+  console.log(
+    `claims: ${result.claims.length} total, ${result.claims.filter((c) => c.verdict.status === "verified").length} verified\n`,
+  )
   console.log(result.content)
   await db.destroy()
 }
@@ -125,7 +141,9 @@ main().catch((err) => {
     const status = (err as { status?: number }).status
     const retryAfterMs = (err as { retryAfterMs?: number | null }).retryAfterMs
     if (status === 429) {
-      console.error(`rate limited by the provider${retryAfterMs ? ` — retry in ${Math.ceil(retryAfterMs / 1000)}s` : ""}`)
+      console.error(
+        `rate limited by the provider${retryAfterMs ? ` — retry in ${Math.ceil(retryAfterMs / 1000)}s` : ""}`,
+      )
       process.exit(1)
     }
   }
@@ -135,7 +153,9 @@ main().catch((err) => {
   // developer probing a slow self-hosted model would otherwise grep for a
   // timeout this CLI never set.
   if (err instanceof Error && err.name === "TimeoutError") {
-    console.error("the provider did not answer inside the pipeline's deadline (ANSWER_DEADLINE_MS, 60s default) — it accepted the call and went quiet")
+    console.error(
+      "the provider did not answer inside the pipeline's deadline (ANSWER_DEADLINE_MS, 60s default) — it accepted the call and went quiet",
+    )
     process.exit(1)
   }
   console.error("ask failed:", err instanceof Error ? err.message : err)

@@ -1,6 +1,8 @@
 /* Class names prefixed "live-" — global CSS, prefix-scoped (§9.2). */
 
-.live { max-width: 820px }
+.live {
+  max-width: 820px;
+}
 
 .live-head {
   display: flex;
@@ -9,11 +11,24 @@
   gap: 16px;
   flex-wrap: wrap;
 }
-.live-title { font-size: 20px; margin: 0 0 6px }
-.live-audit { font-size: 13px; color: var(--accent); text-decoration: none }
-.live-audit:hover { text-decoration: underline }
+.live-title {
+  font-size: 20px;
+  margin: 0 0 6px;
+}
+.live-audit {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.live-audit:hover {
+  text-decoration: underline;
+}
 
-.live-lede { color: var(--ink-muted); font-size: 14px; margin: 0 0 14px }
+.live-lede {
+  color: var(--ink-muted);
+  font-size: 14px;
+  margin: 0 0 14px;
+}
 
 .live-closed {
   padding: 18px;

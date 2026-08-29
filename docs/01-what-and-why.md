@@ -25,15 +25,15 @@ accepts, the conversation appears in your dashboard's inbox, an agent clicks
 it, and the two of them are talking live over a WebSocket, in the same
 bubble.
 
-You pay Interrelated nothing for the AI: the model calls run on *your* key,
-against *your* provider account, under *your* data-processing terms. That is
+You pay Interrelated nothing for the AI: the model calls run on _your_ key,
+against _your_ provider account, under _your_ data-processing terms. That is
 the "bring your own provider" model, and it is a first-class feature, not a
 cost dodge.
 
 ## The problem it exists to solve
 
 "Chat with your docs" bots are easy to build and easy to build **badly**.
-The standard failure is *hallucination with confidence*: the model produces
+The standard failure is _hallucination with confidence_: the model produces
 a fluent, plausible answer that the documentation does not support — a
 refund policy that doesn't exist, a config flag that was never shipped. For
 a support product this is worse than useless, because the customer acts on
@@ -48,14 +48,14 @@ whether it is confident measures nothing.
 
 **The model's claims are verified by code, not trusted.**
 
-Concretely: the model is *not allowed* to answer in prose. It must answer as
+Concretely: the model is _not allowed_ to answer in prose. It must answer as
 a JSON list of claims, where each claim has three fields:
 
 ```json
 {
-  "text":    "Refunds are processed within five business days.",
+  "text": "Refunds are processed within five business days.",
   "chunkId": "chk_01h2x9...",
-  "quote":   "refunds are issued within five (5) business days of the request"
+  "quote": "refunds are issued within five (5) business days of the request"
 }
 ```
 
@@ -68,14 +68,14 @@ Then a deterministic checker (`shared/grounding/verify.ts` — no AI involved,
 confirms the quote actually occurs in the chunk the claim cites. Three
 outcomes are possible per claim:
 
-| Verdict | Meaning | What happens |
-|---|---|---|
-| `verified` | The quote is really there | Shown to the visitor, with a citation link |
-| `quote_not_found` | Real chunk, but the "quote" isn't in it | **Stripped** — the visitor never sees the sentence |
-| `unknown_chunk` | The model cited a chunk it was never shown | **Stripped** |
+| Verdict           | Meaning                                    | What happens                                       |
+| ----------------- | ------------------------------------------ | -------------------------------------------------- |
+| `verified`        | The quote is really there                  | Shown to the visitor, with a citation link         |
+| `quote_not_found` | Real chunk, but the "quote" isn't in it    | **Stripped** — the visitor never sees the sentence |
+| `unknown_chunk`   | The model cited a chunk it was never shown | **Stripped**                                       |
 
 Every verdict — including the stripped ones — is stored in the database, so
-the tenant's dashboard shows what the visitor was *spared*, and the **strip
+the tenant's dashboard shows what the visitor was _spared_, and the **strip
 rate is a published metric**. Measured against a real model: 23.8% of its
 claims were stripped, versus 0% for a deterministic control — which is the
 project's thesis expressed as a number. There is deliberately **no uncited
@@ -86,7 +86,7 @@ to reach a visitor even if the model produces it.
 Two companion mechanisms complete the honesty story:
 
 - **The refusal gate.** Before any model call, the system checks whether the
-  retrieved passages are actually *close* to the question (a numeric cut on
+  retrieved passages are actually _close_ to the question (a numeric cut on
   embedding distance, threshold derived from an 80-question answerable set
   vs. a 40-question unanswerable set — not picked by feel). Off-topic
   questions are refused for free, without spending the tenant's tokens.
@@ -101,12 +101,12 @@ Every organization supplies its own AI credentials, for three reasons:
 1. **Economics** — the platform never pays for a tenant's model usage, which
    is what makes a $0-infrastructure SaaS possible at all.
 2. **Trust** — a tenant chose a vendor and a data processor. Their
-   customers' questions go to *that* provider on *that* key, never silently
+   customers' questions go to _that_ provider on _that_ key, never silently
    to some cheaper alternative (this rule is enforced and tested: the
    platform's fallback provider is never used for an org that saved its own
    credential).
 3. **Engineering content** — supporting five LLM providers and four
-   embedding providers behind one interface, each with a *different*
+   embedding providers behind one interface, each with a _different_
    structured-output mechanism, is where much of the interesting work lives.
    Tenant keys are treated as the dangerous objects they are: AES-256-GCM
    encrypted at rest, displayed only as a four-character suffix after save,
@@ -119,14 +119,14 @@ The project has explicit anti-goals, chosen and documented (CLAUDE.md's
 
 - **No RAG framework.** No LangChain, no LlamaIndex. Retrieval is
   hand-written SQL — hybrid vector + full-text search fused by Reciprocal
-  Rank Fusion — because the retrieval layer *is* the technical content.
+  Rank Fusion — because the retrieval layer _is_ the technical content.
 - **No vendor citation feature.** Anthropic ships a native citations mode;
   building verification ourselves means it works identically across all
   five providers and the hard decisions are visibly ours.
 - **No trusting a first response.** Structured output enforcement varies
   wildly by provider (from real server-side schema enforcement to "please
   emit JSON"), so every response is validated, retried exactly once on
-  violation, and the violation *counted* as a per-model metric.
+  violation, and the violation _counted_ as a per-model metric.
 - **No unmeasured claims.** Every number in the README is produced by a
   committed script anyone can re-run, and the documents publish the
   failures alongside (the 12 questions retrieval still misses, the harness

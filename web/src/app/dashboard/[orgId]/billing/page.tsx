@@ -41,10 +41,7 @@ export default async function BillingPage({ params }: { params: Promise<{ orgId:
   // rather than a page explaining what they may not do.
   if (org.role !== "owner") notFound()
 
-  const [subscription, usage] = await Promise.all([
-    getSubscription(org.id),
-    getTodayUsage(org.id),
-  ])
+  const [subscription, usage] = await Promise.all([getSubscription(org.id), getTodayUsage(org.id)])
   // stripeConfig() throws on a LIVE key by design — a misconfigured
   // deployment must fail loudly rather than quietly take money. Everything
   // else (no key at all) is a normal unconfigured state.
@@ -58,8 +55,9 @@ export default async function BillingPage({ params }: { params: Promise<{ orgId:
         {org.name} is on the <strong>{plan.name}</strong> plan
         {usage ? (
           <>
-            {" "}— {usage.answers.toLocaleString("en-US")} of{" "}
-            {usage.limit.toLocaleString("en-US")} answers used today.
+            {" "}
+            — {usage.answers.toLocaleString("en-US")} of {usage.limit.toLocaleString("en-US")}{" "}
+            answers used today.
           </>
         ) : (
           "."
@@ -68,15 +66,14 @@ export default async function BillingPage({ params }: { params: Promise<{ orgId:
 
       {!configured ? (
         <p className="billing-banner" role="status">
-          Billing is not configured on this deployment, so the plans below are read-only. The
-          quota above is still enforced — it comes from the organization&rsquo;s plan, not from
-          Stripe.
+          Billing is not configured on this deployment, so the plans below are read-only. The quota
+          above is still enforced — it comes from the organization&rsquo;s plan, not from Stripe.
         </p>
       ) : (
         <p className="billing-banner" role="status">
           <strong>Stripe test mode.</strong> This deployment refuses a live key by design, so no
-          real card can be charged here. Use Stripe&rsquo;s test card <code>4242 4242 4242 4242</code>{" "}
-          with any future expiry and any CVC.
+          real card can be charged here. Use Stripe&rsquo;s test card{" "}
+          <code>4242 4242 4242 4242</code> with any future expiry and any CVC.
         </p>
       )}
 
@@ -124,9 +121,9 @@ export default async function BillingPage({ params }: { params: Promise<{ orgId:
         <h2 className="billing-cardtitle">How the quota is enforced</h2>
         <p className="billing-cardnote">
           The ceiling is checked before the model is called, against a counter written in the same
-          transaction as each answer — so the worst case is a stopped widget, never a surprise
-          bill. Refusals count, because they still cost a retrieval. The count resets at midnight
-          UTC. A plan change takes effect on the very next question: nothing caches it.
+          transaction as each answer — so the worst case is a stopped widget, never a surprise bill.
+          Refusals count, because they still cost a retrieval. The count resets at midnight UTC. A
+          plan change takes effect on the very next question: nothing caches it.
         </p>
       </section>
     </div>

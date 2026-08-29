@@ -131,7 +131,10 @@ class Participant {
     const started = performance.now()
     return new Promise<number>((resolve, reject) => {
       let sawReady = false
-      const timer = setTimeout(() => reject(new Error("timed out waiting for ready/history")), timeoutMs)
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for ready/history")),
+        timeoutMs,
+      )
       const onMessage = (event: MessageEvent): void => {
         if (typeof event.data !== "string") return
         const frame = JSON.parse(event.data) as HandoffServerFrame
@@ -197,21 +200,23 @@ async function runHandoffLoad(config: HandoffLoadConfig): Promise<HandoffLoadRes
   // happened to be (a 6 s drain on a 9 s run reported 106/s for what was
   // really 178/s).
   let lastReceiveAt = 0
-  const record = (self: number) => (tag: number, at: number): void => {
-    const sent = sentAt.get(tag)
-    if (sent === undefined) return
-    lastReceiveAt = Math.max(lastReceiveAt, at)
-    const mine = owned.get(self)?.has(tag) ?? false
-    if (mine) {
-      if (echoedTags.has(tag)) return
-      echoedTags.add(tag)
-      roundTrip.record(at - sent)
-    } else {
-      if (deliveredTags.has(tag)) return
-      deliveredTags.add(tag)
-      delivery.record(at - sent)
+  const record =
+    (self: number) =>
+    (tag: number, at: number): void => {
+      const sent = sentAt.get(tag)
+      if (sent === undefined) return
+      lastReceiveAt = Math.max(lastReceiveAt, at)
+      const mine = owned.get(self)?.has(tag) ?? false
+      if (mine) {
+        if (echoedTags.has(tag)) return
+        echoedTags.add(tag)
+        roundTrip.record(at - sent)
+      } else {
+        if (deliveredTags.has(tag)) return
+        deliveredTags.add(tag)
+        delivery.record(at - sent)
+      }
     }
-  }
 
   // ── Connect ──────────────────────────────────────────────────────────────
   // Sequentially per session, both sides together: an agent attaching is

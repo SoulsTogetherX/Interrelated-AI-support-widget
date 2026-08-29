@@ -24,7 +24,10 @@ let otherConversationId: string
 
 async function seedOrg(name: string): Promise<string> {
   const id = newId("org")
-  await db.insertInto("organizations").values({ id, name: `${name} ${RUN}` }).execute()
+  await db
+    .insertInto("organizations")
+    .values({ id, name: `${name} ${RUN}` })
+    .execute()
   return id
 }
 
@@ -36,90 +39,105 @@ describe.skipIf(!hasDb)("conversation queries (integration)", () => {
     // Two conversations in the org, so the list's ordering is observable.
     const older = newId("con")
     conversationId = newId("con")
-    await db.insertInto("conversations").values([
-      {
-        id: older,
+    await db
+      .insertInto("conversations")
+      .values([
+        {
+          id: older,
+          org_id: orgId,
+          visitor_id: "vis_older",
+          last_message_at: new Date("2026-01-01T00:00:00Z"),
+        },
+        {
+          id: conversationId,
+          org_id: orgId,
+          visitor_id: "vis_newer",
+          last_message_at: new Date("2026-06-01T00:00:00Z"),
+        },
+      ])
+      .execute()
+    await db
+      .insertInto("messages")
+      .values({
+        id: newId("msg"),
+        conversation_id: older,
         org_id: orgId,
-        visitor_id: "vis_older",
-        last_message_at: new Date("2026-01-01T00:00:00Z"),
-      },
-      {
-        id: conversationId,
-        org_id: orgId,
-        visitor_id: "vis_newer",
-        last_message_at: new Date("2026-06-01T00:00:00Z"),
-      },
-    ]).execute()
-    await db.insertInto("messages").values({
-      id: newId("msg"),
-      conversation_id: older,
-      org_id: orgId,
-      role: "visitor",
-      content: "older thread question",
-    }).execute()
+        role: "visitor",
+        content: "older thread question",
+      })
+      .execute()
 
     // The interesting conversation: a visitor turn, then an assistant turn
     // whose claims split verified / stripped.
     const visitorMessageId = newId("msg")
     const assistantMessageId = newId("msg")
-    await db.insertInto("messages").values([
-      {
-        id: visitorMessageId,
-        conversation_id: conversationId,
-        org_id: orgId,
-        role: "visitor",
-        content: "How long do refunds take?",
-        created_at: new Date("2026-06-01T00:00:00Z"),
-      },
-      {
-        id: assistantMessageId,
-        conversation_id: conversationId,
-        org_id: orgId,
-        role: "assistant",
-        content: "Refunds are processed within five business days.",
-        model: "test-model",
-        // Paired with `model` by CHECK since migration 010.
-        schema_violations: 0,
-        retrieval_score: 0.21,
-        ttft_ms: 120,
-        total_ms: 900,
-        created_at: new Date("2026-06-01T00:00:01Z"),
-      },
-    ]).execute()
-    await db.insertInto("message_citations").values([
-      {
-        message_id: assistantMessageId,
-        ord: 0,
-        chunk_id: newId("chk"),
-        claim_text: "Refunds are processed within five business days.",
-        quote: "processed within five business days",
-        verdict: "verified",
-        span_start: 10,
-        span_end: 45,
-        url: "https://docs.example/refunds",
-        heading_path: "Refunds",
-      },
-      {
-        message_id: assistantMessageId,
-        ord: 1,
-        chunk_id: newId("chk"),
-        claim_text: "Refunds are always instant.",
-        quote: "always instant",
-        verdict: "quote_not_found",
-        span_start: null,
-        span_end: null,
-        url: "https://docs.example/refunds",
-        heading_path: "Refunds",
-      },
-    ]).execute()
+    await db
+      .insertInto("messages")
+      .values([
+        {
+          id: visitorMessageId,
+          conversation_id: conversationId,
+          org_id: orgId,
+          role: "visitor",
+          content: "How long do refunds take?",
+          created_at: new Date("2026-06-01T00:00:00Z"),
+        },
+        {
+          id: assistantMessageId,
+          conversation_id: conversationId,
+          org_id: orgId,
+          role: "assistant",
+          content: "Refunds are processed within five business days.",
+          model: "test-model",
+          // Paired with `model` by CHECK since migration 010.
+          schema_violations: 0,
+          retrieval_score: 0.21,
+          ttft_ms: 120,
+          total_ms: 900,
+          created_at: new Date("2026-06-01T00:00:01Z"),
+        },
+      ])
+      .execute()
+    await db
+      .insertInto("message_citations")
+      .values([
+        {
+          message_id: assistantMessageId,
+          ord: 0,
+          chunk_id: newId("chk"),
+          claim_text: "Refunds are processed within five business days.",
+          quote: "processed within five business days",
+          verdict: "verified",
+          span_start: 10,
+          span_end: 45,
+          url: "https://docs.example/refunds",
+          heading_path: "Refunds",
+        },
+        {
+          message_id: assistantMessageId,
+          ord: 1,
+          chunk_id: newId("chk"),
+          claim_text: "Refunds are always instant.",
+          quote: "always instant",
+          verdict: "quote_not_found",
+          span_start: null,
+          span_end: null,
+          url: "https://docs.example/refunds",
+          heading_path: "Refunds",
+        },
+      ])
+      .execute()
 
     // A conversation belonging to a DIFFERENT tenant, for the isolation case.
     otherConversationId = newId("con")
-    await db.insertInto("conversations").values({
-      id: otherConversationId,
-      org_id: otherOrgId,
-      visitor_id: "vis_other",
-    }).execute()
+    await db
+      .insertInto("conversations")
+      .values({
+        id: otherConversationId,
+        org_id: otherOrgId,
+        visitor_id: "vis_other",
+      })
+      .execute()
   })
 
   afterAll(async () => {

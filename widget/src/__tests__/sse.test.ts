@@ -29,9 +29,9 @@ describe("readAnswerEvents", () => {
   const done = { type: "done", claimsTotal: 1, claimsShown: 1 }
 
   it("parses one event per data frame", async () => {
-    const events = await collect(streamOf(bytes(
-      `data: ${JSON.stringify(meta)}\n\ndata: ${JSON.stringify(done)}\n\n`,
-    )))
+    const events = await collect(
+      streamOf(bytes(`data: ${JSON.stringify(meta)}\n\ndata: ${JSON.stringify(done)}\n\n`)),
+    )
     expect(events).toEqual([meta, done])
   })
 
@@ -56,7 +56,9 @@ describe("readAnswerEvents", () => {
   })
 
   it("leaves a trailing partial frame unparsed — no half-JSON reaches the UI", async () => {
-    const events = await collect(streamOf(bytes(`data: ${JSON.stringify(meta)}\n\ndata: {"type":"cl`)))
+    const events = await collect(
+      streamOf(bytes(`data: ${JSON.stringify(meta)}\n\ndata: {"type":"cl`)),
+    )
     expect(events).toEqual([meta])
   })
 })

@@ -35,15 +35,27 @@ describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
     orgId = newId("org")
     await db.insertInto("organizations").values({ id: orgId, name: "Pipeline Co" }).execute()
     sourceId = newId("src")
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: orgId, kind: "url", location: "https://docs.example.com",
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: orgId,
+        kind: "url",
+        location: "https://docs.example.com",
+      })
+      .execute()
     documentId = newId("doc")
-    await db.insertInto("documents").values({
-      id: documentId, org_id: orgId, source_id: sourceId,
-      url: "https://docs.example.com/billing", title: "Billing",
-      content_hash: "a".repeat(64),
-    }).execute()
+    await db
+      .insertInto("documents")
+      .values({
+        id: documentId,
+        org_id: orgId,
+        source_id: sourceId,
+        url: "https://docs.example.com/billing",
+        title: "Billing",
+        content_hash: "a".repeat(64),
+      })
+      .execute()
   })
 
   afterAll(async () => {
@@ -53,12 +65,20 @@ describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
   //#region Chunks + lexical column
   it("computes the tsv column and finds chunks lexically", async () => {
     const chunkId = newId("chk")
-    await db.insertInto("chunks").values({
-      id: chunkId, org_id: orgId, document_id: documentId, ord: 0,
-      heading_path: "Billing > Refunds",
-      text: "Refunds are processed within five business days.",
-      token_count: 9, char_start: 0, char_end: 48,
-    }).execute()
+    await db
+      .insertInto("chunks")
+      .values({
+        id: chunkId,
+        org_id: orgId,
+        document_id: documentId,
+        ord: 0,
+        heading_path: "Billing > Refunds",
+        text: "Refunds are processed within five business days.",
+        token_count: 9,
+        char_start: 0,
+        char_end: 48,
+      })
+      .execute()
 
     // The generated tsv must make this row findable via full-text search —
     // this is the lexical half of hybrid retrieval working end to end.
@@ -73,19 +93,35 @@ describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
     // ord collisions would silently interleave two chunkings of the same
     // document — the unique index makes a buggy re-chunk loud instead.
     await expect(
-      db.insertInto("chunks").values({
-        id: newId("chk"), org_id: orgId, document_id: documentId, ord: 0,
-        text: "Duplicate position.", token_count: 3,
-      }).execute(),
+      db
+        .insertInto("chunks")
+        .values({
+          id: newId("chk"),
+          org_id: orgId,
+          document_id: documentId,
+          ord: 0,
+          text: "Duplicate position.",
+          token_count: 3,
+        })
+        .execute(),
     ).rejects.toThrow(/chunks_document_ord/)
   })
 
   it("rejects an inverted char span", async () => {
     await expect(
-      db.insertInto("chunks").values({
-        id: newId("chk"), org_id: orgId, document_id: documentId, ord: 99,
-        text: "Bad span.", token_count: 2, char_start: 10, char_end: 5,
-      }).execute(),
+      db
+        .insertInto("chunks")
+        .values({
+          id: newId("chk"),
+          org_id: orgId,
+          document_id: documentId,
+          ord: 99,
+          text: "Bad span.",
+          token_count: 2,
+          char_start: 10,
+          char_end: 5,
+        })
+        .execute(),
     ).rejects.toThrow(/check/i)
   })
   //#endregion
@@ -106,13 +142,27 @@ describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
     ]
     let ord = 100
     for (const [id, v] of vectors) {
-      await db.insertInto("chunks").values({
-        id, org_id: orgId, document_id: documentId, ord: ord++,
-        text: `Vector fixture ${id}`, token_count: 3,
-      }).execute()
-      await db.insertInto("chunk_embeddings").values({
-        chunk_id: id, org_id: orgId, model: "mock-384", dim: 3, embedding: vec([...v]),
-      }).execute()
+      await db
+        .insertInto("chunks")
+        .values({
+          id,
+          org_id: orgId,
+          document_id: documentId,
+          ord: ord++,
+          text: `Vector fixture ${id}`,
+          token_count: 3,
+        })
+        .execute()
+      await db
+        .insertInto("chunk_embeddings")
+        .values({
+          chunk_id: id,
+          org_id: orgId,
+          model: "mock-384",
+          dim: 3,
+          embedding: vec([...v]),
+        })
+        .execute()
     }
 
     const { rows } = await sql<{ chunk_id: string }>`
@@ -129,31 +179,49 @@ describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
     // vector that skipped padding must fail HERE, not silently compare
     // against padded neighbors in a different space.
     await expect(
-      db.insertInto("chunk_embeddings").values({
-        chunk_id: newId("chk"), org_id: orgId, model: "mock-384", dim: 384,
-        embedding: `[${Array.from({ length: 384 }, () => 0).join(",")}]`,
-      }).execute(),
+      db
+        .insertInto("chunk_embeddings")
+        .values({
+          chunk_id: newId("chk"),
+          org_id: orgId,
+          model: "mock-384",
+          dim: 384,
+          embedding: `[${Array.from({ length: 384 }, () => 0).join(",")}]`,
+        })
+        .execute(),
     ).rejects.toThrow(/dimensions|foreign key/i)
   })
 
   it("rejects a second embedding for the same (chunk_id, model)", async () => {
     const chunkId = newId("chk")
-    await db.insertInto("chunks").values({
-      id: chunkId, org_id: orgId, document_id: documentId, ord: 200,
-      text: "PK fixture.", token_count: 2,
-    }).execute()
+    await db
+      .insertInto("chunks")
+      .values({
+        id: chunkId,
+        org_id: orgId,
+        document_id: documentId,
+        ord: 200,
+        text: "PK fixture.",
+        token_count: 2,
+      })
+      .execute()
     const row = {
-      chunk_id: chunkId, org_id: orgId, model: "mock-384", dim: 3,
+      chunk_id: chunkId,
+      org_id: orgId,
+      model: "mock-384",
+      dim: 3,
       embedding: vec([1, 2, 3]),
     }
     await db.insertInto("chunk_embeddings").values(row).execute()
-    await expect(
-      db.insertInto("chunk_embeddings").values(row).execute(),
-    ).rejects.toThrow(/chunk_embeddings_pkey/)
+    await expect(db.insertInto("chunk_embeddings").values(row).execute()).rejects.toThrow(
+      /chunk_embeddings_pkey/,
+    )
     // …while the SAME chunk under a DIFFERENT model is legal (BYO-provider:
     // two orgs on two models can share a corpus in principle).
-    await db.insertInto("chunk_embeddings")
-      .values({ ...row, model: "bge-small-en-v1.5", dim: 384 }).execute()
+    await db
+      .insertInto("chunk_embeddings")
+      .values({ ...row, model: "bge-small-en-v1.5", dim: 384 })
+      .execute()
   })
 
   it("uses the partial HNSW index for same-model queries", async () => {
@@ -177,18 +245,29 @@ describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
   //#region Documents + jobs
   it("enforces URL uniqueness among live documents only", async () => {
     const dup = {
-      org_id: orgId, source_id: sourceId,
-      url: "https://docs.example.com/billing", content_hash: "b".repeat(64),
+      org_id: orgId,
+      source_id: sourceId,
+      url: "https://docs.example.com/billing",
+      content_hash: "b".repeat(64),
     }
     // Same live URL as the spine document → rejected.
     await expect(
-      db.insertInto("documents").values({ id: newId("doc"), ...dup }).execute(),
+      db
+        .insertInto("documents")
+        .values({ id: newId("doc"), ...dup })
+        .execute(),
     ).rejects.toThrow(/documents_source_url_live/)
     // Soft-delete the original → the URL becomes reusable (recrawl of a
     // page that was removed and re-added must not collide with tombstones).
-    await db.updateTable("documents")
-      .set({ deleted_at: new Date() }).where("id", "=", documentId).execute()
-    await db.insertInto("documents").values({ id: newId("doc"), ...dup }).execute()
+    await db
+      .updateTable("documents")
+      .set({ deleted_at: new Date() })
+      .where("id", "=", documentId)
+      .execute()
+    await db
+      .insertInto("documents")
+      .values({ id: newId("doc"), ...dup })
+      .execute()
     // NOTE: the spine document stays soft-deleted from here on — un-deleting
     // it would create a second live row at this URL, violating the very
     // index under test. (Chunks reference documents by id, not liveness, so
@@ -200,15 +279,28 @@ describe.skipIf(!DB_CONFIGURED)("content pipeline schema", () => {
     // state='running' with no locked_by is how work silently vanishes after
     // a worker crash — the CHECK turns that state into an insert error.
     await expect(
-      db.insertInto("ingest_jobs").values({
-        id: newId("job"), org_id: orgId, source_id: sourceId, state: "running",
-      }).execute(),
+      db
+        .insertInto("ingest_jobs")
+        .values({
+          id: newId("job"),
+          org_id: orgId,
+          source_id: sourceId,
+          state: "running",
+        })
+        .execute(),
     ).rejects.toThrow(/check/i)
     // The legal form of the same transition:
-    await db.insertInto("ingest_jobs").values({
-      id: newId("job"), org_id: orgId, source_id: sourceId,
-      state: "running", locked_by: "worker-test", locked_at: new Date(),
-    }).execute()
+    await db
+      .insertInto("ingest_jobs")
+      .values({
+        id: newId("job"),
+        org_id: orgId,
+        source_id: sourceId,
+        state: "running",
+        locked_by: "worker-test",
+        locked_at: new Date(),
+      })
+      .execute()
   })
   //#endregion
 })

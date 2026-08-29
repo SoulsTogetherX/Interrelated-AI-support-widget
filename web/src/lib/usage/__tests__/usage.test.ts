@@ -44,10 +44,18 @@ describe.skipIf(!DB_CONFIGURED)("usage reads", () => {
   })
 
   it("reads today's counters and follows a plan change", async () => {
-    await db.insertInto("usage_daily").values({
-      org_id: orgId, day: utcToday(), answers: 40, refusals: 4, escalations: 2,
-      input_tokens: 12_000, output_tokens: 900,
-    }).execute()
+    await db
+      .insertInto("usage_daily")
+      .values({
+        org_id: orgId,
+        day: utcToday(),
+        answers: 40,
+        refusals: 4,
+        escalations: 2,
+        input_tokens: 12_000,
+        output_tokens: 900,
+      })
+      .execute()
 
     const free = await getTodayUsage(orgId)
     expect(free?.answers).toBe(40)
@@ -75,9 +83,14 @@ describe.skipIf(!DB_CONFIGURED)("usage reads", () => {
     const org = newId("org")
     await db.insertInto("organizations").values({ id: org, name: "Overshoot Co" }).execute()
     try {
-      await db.insertInto("usage_daily").values({
-        org_id: org, day: utcToday(), answers: PLANS.free.dailyAnswers + 3,
-      }).execute()
+      await db
+        .insertInto("usage_daily")
+        .values({
+          org_id: org,
+          day: utcToday(),
+          answers: PLANS.free.dailyAnswers + 3,
+        })
+        .execute()
       const usage = await getTodayUsage(org)
       expect(usage?.answers).toBe(PLANS.free.dailyAnswers + 3)
       expect(usage?.fraction).toBe(1)
@@ -90,7 +103,8 @@ describe.skipIf(!DB_CONFIGURED)("usage reads", () => {
     const org = newId("org")
     await db.insertInto("organizations").values({ id: org, name: "Rollover Co" }).execute()
     try {
-      await db.insertInto("usage_daily")
+      await db
+        .insertInto("usage_daily")
         .values({ org_id: org, day: utcDaysAgo(1), answers: 199 })
         .execute()
       const usage = await getTodayUsage(org)
@@ -108,7 +122,8 @@ describe.skipIf(!DB_CONFIGURED)("usage reads", () => {
     const other = newId("org")
     await db.insertInto("organizations").values({ id: other, name: "Noisy Neighbour Co" }).execute()
     try {
-      await db.insertInto("usage_daily")
+      await db
+        .insertInto("usage_daily")
         .values({ org_id: other, day: utcToday(), answers: 5_000 })
         .execute()
       const usage = await getTodayUsage(orgId)

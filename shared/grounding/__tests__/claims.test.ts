@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest"
 import { MAX_CLAIMS, ANSWER_JSON_SCHEMA, parseAnswerPayload, parseAnswerText } from "../claims"
 
 //#region Fixtures
-const goodClaim = { text: "Fastify supports HTTP/2.", chunkId: "chk_a", quote: "Fastify offers experimental support for HTTP/2" }
+const goodClaim = {
+  text: "Fastify supports HTTP/2.",
+  chunkId: "chk_a",
+  quote: "Fastify offers experimental support for HTTP/2",
+}
 
 function payloadWith(claims: unknown): unknown {
   return { claims }
@@ -37,11 +41,13 @@ describe("parseAnswerPayload", () => {
   })
 
   it("rejects blank and missing claim fields with path-prefixed errors", () => {
-    const result = parseAnswerPayload(payloadWith([
-      { text: "   ", chunkId: "chk_a", quote: "q" },
-      { text: "ok", quote: "q" },
-      { text: "ok", chunkId: "chk_a", quote: 7 },
-    ]))
+    const result = parseAnswerPayload(
+      payloadWith([
+        { text: "   ", chunkId: "chk_a", quote: "q" },
+        { text: "ok", quote: "q" },
+        { text: "ok", chunkId: "chk_a", quote: 7 },
+      ]),
+    )
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors).toContain("claims[0].text: expected a non-blank string")
@@ -51,7 +57,9 @@ describe("parseAnswerPayload", () => {
   })
 
   it("collects every error in one pass — the single retry prompt needs the full list", () => {
-    const result = parseAnswerPayload(payloadWith([{ text: "", chunkId: "", quote: "" }, "not an object"]))
+    const result = parseAnswerPayload(
+      payloadWith([{ text: "", chunkId: "", quote: "" }, "not an object"]),
+    )
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.length).toBe(4)
   })
@@ -74,11 +82,17 @@ describe("parseAnswerText", () => {
   })
 
   it("parses JSON inside a ```json fence", () => {
-    expect(parseAnswerText("```json\n" + json + "\n```")).toEqual({ ok: true, payload: { claims: [goodClaim] } })
+    expect(parseAnswerText("```json\n" + json + "\n```")).toEqual({
+      ok: true,
+      payload: { claims: [goodClaim] },
+    })
   })
 
   it("parses JSON inside a bare ``` fence", () => {
-    expect(parseAnswerText("```\n" + json + "\n```")).toEqual({ ok: true, payload: { claims: [goodClaim] } })
+    expect(parseAnswerText("```\n" + json + "\n```")).toEqual({
+      ok: true,
+      payload: { claims: [goodClaim] },
+    })
   })
 
   it("parses JSON wrapped in prose preamble and postamble", () => {
@@ -123,9 +137,15 @@ describe("ANSWER_JSON_SCHEMA", () => {
   it("mirrors the validator's contract — required fields and the claims cap", () => {
     // The schema is handed to providers; the validator is the source of
     // truth. This pins the two facts that would silently diverge first.
-    const claims = (ANSWER_JSON_SCHEMA["properties"] as Record<string, Record<string, unknown>>)["claims"]
+    const claims = (ANSWER_JSON_SCHEMA["properties"] as Record<string, Record<string, unknown>>)[
+      "claims"
+    ]
     expect(claims).toBeDefined()
-    expect(claims!["maxItems"]).toBe(MAX_CLAIMS)
-    expect((claims!["items"] as Record<string, unknown>)["required"]).toEqual(["text", "chunkId", "quote"])
+    expect(claims["maxItems"]).toBe(MAX_CLAIMS)
+    expect((claims["items"] as Record<string, unknown>)["required"]).toEqual([
+      "text",
+      "chunkId",
+      "quote",
+    ])
   })
 })

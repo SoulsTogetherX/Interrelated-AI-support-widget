@@ -32,7 +32,11 @@ describe("MockLLMProvider", () => {
 
   it("honors deltaSize at the boundaries: 1, exact length, and larger than the text", async () => {
     const text = "abcdef"
-    for (const [deltaSize, expectedCount] of [[1, 6], [6, 1], [100, 1]] as const) {
+    for (const [deltaSize, expectedCount] of [
+      [1, 6],
+      [6, 1],
+      [100, 1],
+    ] as const) {
       const provider = new MockLLMProvider([{ text, deltaSize }])
       const { deltas } = await collect(provider.stream(request))
       expect(deltas.join("")).toBe(text)
@@ -49,7 +53,11 @@ describe("MockLLMProvider", () => {
 
   it("carries scripted finishReason and usage on the done event", async () => {
     const provider = new MockLLMProvider([
-      { text: "truncated {", finishReason: "length", usage: { inputTokens: 100, outputTokens: 32 } },
+      {
+        text: "truncated {",
+        finishReason: "length",
+        usage: { inputTokens: 100, outputTokens: 32 },
+      },
     ])
     const { done } = await collect(provider.stream(request))
     expect(done[0]).toEqual({

@@ -24,8 +24,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -42,7 +42,9 @@ async function main(): Promise<void> {
     console.error('usage: npm run search -- "<question>" [--org "Name"] [--k N] [--dense-only]')
     process.exit(1)
   }
-  const orgName = args.includes("--org") ? (args[args.indexOf("--org") + 1] ?? "Local Dev Org") : "Local Dev Org"
+  const orgName = args.includes("--org")
+    ? (args[args.indexOf("--org") + 1] ?? "Local Dev Org")
+    : "Local Dev Org"
   const k = args.includes("--k") ? Number(args[args.indexOf("--k") + 1]) : 8
   const denseOnly = args.includes("--dense-only")
 
@@ -51,11 +53,16 @@ async function main(): Promise<void> {
   const { denseSearch, hybridSearch } = await import("@/retrieval/search")
   const { MockEmbeddingProvider } = await import("@providers/embedding/mock")
 
-  const fallbackEmbedder = process.env.EMBEDDING_PROVIDER === "local"
-    ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
-    : new MockEmbeddingProvider()
+  const fallbackEmbedder =
+    process.env.EMBEDDING_PROVIDER === "local"
+      ? new (await import("@providers/embedding/local")).LocalEmbeddingProvider()
+      : new MockEmbeddingProvider()
 
-  const org = await db.selectFrom("organizations").select(["id"]).where("name", "=", orgName).executeTakeFirst()
+  const org = await db
+    .selectFrom("organizations")
+    .select(["id"])
+    .where("name", "=", orgName)
+    .executeTakeFirst()
   if (!org) {
     console.error(`no organization named "${orgName}" — run npm run enqueue first, or pass --org`)
     process.exit(1)
@@ -80,7 +87,9 @@ async function main(): Promise<void> {
     .where("model", "=", embedder.model)
     .executeTakeFirst()
   if (Number(covered?.n ?? 0) === 0) {
-    console.warn(`warning: org has no embeddings under model "${embedder.model}" — was the content ingested with a different EMBEDDING_PROVIDER?`)
+    console.warn(
+      `warning: org has no embeddings under model "${embedder.model}" — was the content ingested with a different EMBEDDING_PROVIDER?`,
+    )
   }
 
   const [queryVector] = await embedder.embed([query], { task: "query" })
@@ -88,22 +97,37 @@ async function main(): Promise<void> {
 
   if (denseOnly) {
     const hits = await denseSearch(db, {
-      orgId: org.id, model: embedder.model, queryVector: queryVector as number[], k,
+      orgId: org.id,
+      model: embedder.model,
+      queryVector: queryVector,
+      k,
     })
-    console.log(`dense-only, ${hits.length} results in ${Date.now() - started}ms (model ${embedder.model})\n`)
-    hits.forEach((h, i) => console.log(`  ${i + 1}. distance ${h.distance.toFixed(4)}  ${h.chunkId}`))
+    console.log(
+      `dense-only, ${hits.length} results in ${Date.now() - started}ms (model ${embedder.model})\n`,
+    )
+    hits.forEach((h, i) =>
+      console.log(`  ${i + 1}. distance ${h.distance.toFixed(4)}  ${h.chunkId}`),
+    )
   } else {
     const results = await hybridSearch(db, {
-      orgId: org.id, queryText: query, queryVector: queryVector as number[], model: embedder.model, k,
+      orgId: org.id,
+      queryText: query,
+      queryVector: queryVector,
+      model: embedder.model,
+      k,
     })
-    console.log(`hybrid, ${results.length} results in ${Date.now() - started}ms (model ${embedder.model})\n`)
+    console.log(
+      `hybrid, ${results.length} results in ${Date.now() - started}ms (model ${embedder.model})\n`,
+    )
     for (const [i, r] of results.entries()) {
       const arms = [
         r.denseRank ? `D#${r.denseRank} d=${r.denseDistance?.toFixed(4)}` : "D–",
         r.lexicalRank ? `L#${r.lexicalRank}` : "L–",
       ].join(" ")
       const preview = r.text.length > 100 ? `${r.text.slice(0, 100)}…` : r.text
-      console.log(`  ${i + 1}. rrf=${r.score.toFixed(5)}  [${arms}]  ${r.headingPath ?? "(no heading)"}`)
+      console.log(
+        `  ${i + 1}. rrf=${r.score.toFixed(5)}  [${arms}]  ${r.headingPath ?? "(no heading)"}`,
+      )
       console.log(`     ${r.url}`)
       console.log(`     ${preview.replace(/\n/g, " ")}\n`)
     }

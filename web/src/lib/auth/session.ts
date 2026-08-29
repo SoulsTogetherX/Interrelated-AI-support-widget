@@ -59,9 +59,7 @@ export async function createSessionForUser(
 // matching session, or the session has expired. Expiry is checked in SQL
 // against the database clock — the same clock that wrote expires_at — so a
 // skewed app server cannot extend a session's life.
-export async function resolveSessionUser(
-  token: string | undefined,
-): Promise<SessionUser | null> {
+export async function resolveSessionUser(token: string | undefined): Promise<SessionUser | null> {
   if (!token) {
     return null
   }
@@ -82,9 +80,6 @@ export async function destroySession(token: string | undefined): Promise<void> {
   if (!token) {
     return
   }
-  await db
-    .deleteFrom("sessions")
-    .where("id", "=", hashSessionToken(token))
-    .execute()
+  await db.deleteFrom("sessions").where("id", "=", hashSessionToken(token)).execute()
 }
 //#endregion

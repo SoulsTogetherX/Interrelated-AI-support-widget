@@ -12,11 +12,7 @@ import "./layout.css"
 
 import type { ReactNode } from "react"
 
-export default async function DashboardLayout({
-  children,
-}: {
-  children: ReactNode
-}) {
+export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const user = await currentUser()
   return (
     <div className="dashshell">

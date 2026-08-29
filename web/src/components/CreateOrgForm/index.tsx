@@ -24,8 +24,8 @@ export default function CreateOrgForm({ title }: { title: string }) {
     <form className="createorg" action={formAction}>
       <h1 className="createorg-title">{title}</h1>
       <p className="createorg-hint">
-        An organization owns everything else: your documentation sources, the
-        AI provider key, the widget, and its conversations.
+        An organization owns everything else: your documentation sources, the AI provider key, the
+        widget, and its conversations.
       </p>
       <label className="createorg-label">
         Organization name

@@ -59,8 +59,14 @@ const PORTS = [
  *  providers/embedding/local.ts dynamic-imports it and resolution walks up
  *  from providers/ into the root package (§2.4.5c). */
 const REQUIRED_PATHS = [
-  { path: join(ROOT, "realtime", "node_modules", "tsx", "dist", "cli.mjs"), fix: "npm ci   (in realtime/)" },
-  { path: join(ROOT, "web", "node_modules", "next", "dist", "bin", "next"), fix: "npm ci   (in web/)" },
+  {
+    path: join(ROOT, "realtime", "node_modules", "tsx", "dist", "cli.mjs"),
+    fix: "npm ci   (in realtime/)",
+  },
+  {
+    path: join(ROOT, "web", "node_modules", "next", "dist", "bin", "next"),
+    fix: "npm ci   (in web/)",
+  },
   { path: join(ROOT, "web", "node_modules", "tsx", "dist", "cli.mjs"), fix: "npm ci   (in web/)" },
   { path: join(ROOT, "widget", "node_modules", "esbuild"), fix: "npm ci   (in widget/)" },
   { path: join(ROOT, "node_modules", "fastembed"), fix: "npm ci   (at the repo root)" },
@@ -228,7 +234,9 @@ async function preflight() {
   // password provisions a working LOCAL container on a fresh volume.
   if (!existsSync(join(ROOT, ".env"))) {
     copyFileSync(join(ROOT, ".env.example"), join(ROOT, ".env"))
-    console.log("[playground] no .env found — copied .env.example (placeholder values, fine for local use)")
+    console.log(
+      "[playground] no .env found — copied .env.example (placeholder values, fine for local use)",
+    )
   }
 
   const missing = REQUIRED_PATHS.filter(({ path }) => !existsSync(path))
@@ -266,7 +274,9 @@ function ensureSecrets() {
   if (changed) {
     mkdirSync(dirname(SECRETS_PATH), { recursive: true })
     writeFileSync(SECRETS_PATH, JSON.stringify(secrets, null, 2) + "\n")
-    console.log(`[playground] wrote ${existing === null ? "new" : "updated"} secrets to .playground/secrets.json (gitignored)`)
+    console.log(
+      `[playground] wrote ${existing === null ? "new" : "updated"} secrets to .playground/secrets.json (gitignored)`,
+    )
   }
   return secrets
 }
@@ -295,7 +305,9 @@ async function startDatabase(env) {
     if (probe.status === 0) return
     await new Promise((r) => setTimeout(r, 1000))
   }
-  fail(["the database container never became ready (90s). `docker compose logs database` has the story."])
+  fail([
+    "the database container never became ready (90s). `docker compose logs database` has the story.",
+  ])
 }
 
 function buildWidget() {
@@ -303,7 +315,12 @@ function buildWidget() {
   // The one npm-shim spawn, acceptable because it EXITS: the esbuild arg
   // list should keep living in widget/package.json rather than drifting
   // into a second copy here.
-  const build = spawnSync("npm run build", { cwd: join(ROOT, "widget"), stdio: "inherit", shell: true, timeout: 120000 })
+  const build = spawnSync("npm run build", {
+    cwd: join(ROOT, "widget"),
+    stdio: "inherit",
+    shell: true,
+    timeout: 120000,
+  })
   if (build.status !== 0) fail(["the widget build failed — see its output above."])
 }
 
@@ -314,10 +331,12 @@ async function waitFor(url, { child, accept, timeoutMs, label }) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
-      fail([`${label} exited (code ${child.exitCode}) before becoming ready — its output is above.`,
+      fail([
+        `${label} exited (code ${child.exitCode}) before becoming ready — its output is above.`,
         "If it died at migrate with a Postgres auth error, your .env's POSTGRES_PASSWORD does not",
         "match the existing database volume: restore the old password, or `docker compose down -v`",
-        "(DESTROYS local data) and re-run."])
+        "(DESTROYS local data) and re-run.",
+      ])
     }
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(4000) })
@@ -335,16 +354,18 @@ async function waitFor(url, { child, accept, timeoutMs, label }) {
 async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes("--help")) {
-    console.log([
-      "usage: npm run playground [-- --skip-seed]",
-      "",
-      "Boots the whole product locally: database (Docker) + realtime (:3000) +",
-      "dashboard (:3001) + widget fixtures (:4400), seeds the Fastify demo corpus",
-      "and a dashboard login, and prints where everything is.",
-      "",
-      "  --skip-seed   keep the existing corpus and login (faster re-boot;",
-      "                seeding re-embeds ~660 chunks with the local model)",
-    ].join("\n"))
+    console.log(
+      [
+        "usage: npm run playground [-- --skip-seed]",
+        "",
+        "Boots the whole product locally: database (Docker) + realtime (:3000) +",
+        "dashboard (:3001) + widget fixtures (:4400), seeds the Fastify demo corpus",
+        "and a dashboard login, and prints where everything is.",
+        "",
+        "  --skip-seed   keep the existing corpus and login (faster re-boot;",
+        "                seeding re-embeds ~660 chunks with the local model)",
+      ].join("\n"),
+    )
     return
   }
   const skipSeed = argv.includes("--skip-seed")
@@ -401,25 +422,39 @@ async function main() {
 
   let seed = null
   if (!skipSeed) {
-    console.log("[playground] seeding the demo corpus (31 Fastify docs pages, local embeddings — first run also downloads the ~30 MB model)…")
+    console.log(
+      "[playground] seeding the demo corpus (31 Fastify docs pages, local embeddings — first run also downloads the ~30 MB model)…",
+    )
     const startedAt = Date.now()
     const demo = await runToCompletion(
       "seed",
-      [join(ROOT, "realtime", "node_modules", "tsx", "dist", "cli.mjs"), "scripts/seedWidgetDemo.ts", "--corpus", "fastify"],
+      [
+        join(ROOT, "realtime", "node_modules", "tsx", "dist", "cli.mjs"),
+        "scripts/seedWidgetDemo.ts",
+        "--corpus",
+        "fastify",
+      ],
       join(ROOT, "realtime"),
       env,
     )
     if (demo.code !== 0) fail(["seed-demo failed — its output is above."])
     const play = await runToCompletion(
       "seed",
-      [join(ROOT, "web", "node_modules", "tsx", "dist", "cli.mjs"), "--tsconfig", "tsconfig.json", "scripts/seedPlayground.ts"],
+      [
+        join(ROOT, "web", "node_modules", "tsx", "dist", "cli.mjs"),
+        "--tsconfig",
+        "tsconfig.json",
+        "scripts/seedPlayground.ts",
+      ],
       join(ROOT, "web"),
       env,
     )
     if (play.code !== 0) fail(["seed-playground failed — its output is above."])
     seed = parseSeedResult(play.stdout)
     const seconds = Math.round((Date.now() - startedAt) / 1000)
-    console.log(`[playground] seeded in ${seconds}s${seconds > 45 ? " — next time, `npm run playground -- --skip-seed` skips this" : ""}`)
+    console.log(
+      `[playground] seeded in ${seconds}s${seconds > 45 ? " — next time, `npm run playground -- --skip-seed` skips this" : ""}`,
+    )
   }
 
   await waitFor("http://localhost:4400/fixtures/tailwind.html", {

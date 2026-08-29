@@ -18,10 +18,7 @@ describe("summarizeScan", () => {
   it("reports a healthy run as zero starved and full recall", () => {
     // What `iterative_scan = relaxed_order` is supposed to produce: every
     // tenant gets the k rows it asked for.
-    const summary = summarizeScan(
-      [outcome("a", 5), outcome("b", 5), outcome("c", 5)],
-      5,
-    )
+    const summary = summarizeScan([outcome("a", 5), outcome("b", 5), outcome("c", 5)], 5)
     expect(summary.tenants).toBe(3)
     expect(summary.starved).toBe(0)
     expect(summary.starvedFraction).toBe(0)
@@ -33,10 +30,7 @@ describe("summarizeScan", () => {
     // 4 of 5 is a widget answering from 80% of its own documentation with
     // no error anywhere — the failure mode this measurement exists to size,
     // so "nearly enough" is still starved.
-    const summary = summarizeScan(
-      [outcome("a", 5), outcome("b", 4), outcome("c", 0)],
-      5,
-    )
+    const summary = summarizeScan([outcome("a", 5), outcome("b", 4), outcome("c", 0)], 5)
     expect(summary.starved).toBe(2)
     expect(summary.starvedFraction).toBeCloseTo(2 / 3, 10)
     expect(summary.meanReturned).toBeCloseTo(3, 10)

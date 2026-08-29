@@ -60,35 +60,73 @@ describe.skipIf(!DB_CONFIGURED)("widget chat under the answer deadline", () => {
 
     orgId = newId("org")
     await db.insertInto("organizations").values({ id: orgId, name: "Deadline Org" }).execute()
-    await db.insertInto("api_keys").values({
-      id: newId("key"), org_id: orgId, kind: "public", public_id: PK, secret_hash: null, secret_suffix: null,
-    }).execute()
+    await db
+      .insertInto("api_keys")
+      .values({
+        id: newId("key"),
+        org_id: orgId,
+        kind: "public",
+        public_id: PK,
+        secret_hash: null,
+        secret_suffix: null,
+      })
+      .execute()
     await db.insertInto("allowed_origins").values({ org_id: orgId, origin: ORIGIN }).execute()
     const sourceId = newId("src")
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: orgId, kind: "url", location: ORIGIN,
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: orgId,
+        kind: "url",
+        location: ORIGIN,
+      })
+      .execute()
     const documentId = newId("doc")
-    await db.insertInto("documents").values({
-      id: documentId, org_id: orgId, source_id: sourceId,
-      url: `${ORIGIN}/shipping`, title: "Shipping", content_hash: "e".repeat(64),
-    }).execute()
+    await db
+      .insertInto("documents")
+      .values({
+        id: documentId,
+        org_id: orgId,
+        source_id: sourceId,
+        url: `${ORIGIN}/shipping`,
+        title: "Shipping",
+        content_hash: "e".repeat(64),
+      })
+      .execute()
     const chunkId = newId("chk")
     const [vector] = await embedder.embed([CHUNK_TEXT])
-    await db.insertInto("chunks").values({
-      id: chunkId, org_id: orgId, document_id: documentId, ord: 0,
-      heading_path: "Shipping", text: CHUNK_TEXT,
-      token_count: Math.ceil(CHUNK_TEXT.length / 4), char_start: null, char_end: null,
-    }).execute()
-    await db.insertInto("chunk_embeddings").values({
-      chunk_id: chunkId, org_id: orgId, model: embedder.model, dim: embedder.dim,
-      embedding: toPgvector(padVector(vector!)),
-    }).execute()
+    await db
+      .insertInto("chunks")
+      .values({
+        id: chunkId,
+        org_id: orgId,
+        document_id: documentId,
+        ord: 0,
+        heading_path: "Shipping",
+        text: CHUNK_TEXT,
+        token_count: Math.ceil(CHUNK_TEXT.length / 4),
+        char_start: null,
+        char_end: null,
+      })
+      .execute()
+    await db
+      .insertInto("chunk_embeddings")
+      .values({
+        chunk_id: chunkId,
+        org_id: orgId,
+        model: embedder.model,
+        dim: embedder.dim,
+        embedding: toPgvector(padVector(vector)),
+      })
+      .execute()
 
     llm = new HangingLLMProvider()
     const app = createApp({
       widget: {
-        db, embedder, llm,
+        db,
+        embedder,
+        llm,
         tokenSecret: SECRET,
         answerDeadlineMs: 120,
         mintLimiter: new RateLimiter({ capacity: 10_000, refillPerSecond: 1000 }),
@@ -123,7 +161,11 @@ describe.skipIf(!DB_CONFIGURED)("widget chat under the answer deadline", () => {
     const startedAt = Date.now()
     const res = await fetch(`${baseUrl}/v1/widget/chat`, {
       method: "POST",
-      headers: { "content-type": "application/json", origin: ORIGIN, authorization: `Bearer ${token}` },
+      headers: {
+        "content-type": "application/json",
+        origin: ORIGIN,
+        authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ question: CHUNK_TEXT }),
     })
     expect(res.status).toBe(200) // SSE had already started — failure is an event
@@ -136,7 +178,8 @@ describe.skipIf(!DB_CONFIGURED)("widget chat under the answer deadline", () => {
     expect(elapsedMs).toBeLessThan(5_000)
     expect(llm.calls).toBe(1)
 
-    const events = text.split("\n\n")
+    const events = text
+      .split("\n\n")
       .filter((frame) => frame.startsWith("data: "))
       .map((frame) => JSON.parse(frame.slice(6)) as AnswerEvent)
     // meta went out before generation began; then the one terminal error —
@@ -148,8 +191,11 @@ describe.skipIf(!DB_CONFIGURED)("widget chat under the answer deadline", () => {
 
     // The question is history; the answer that never arrived is not.
     const meta = events[0] as { conversationId: string }
-    const messages = await db.selectFrom("messages")
-      .select("role").where("conversation_id", "=", meta.conversationId).execute()
+    const messages = await db
+      .selectFrom("messages")
+      .select("role")
+      .where("conversation_id", "=", meta.conversationId)
+      .execute()
     expect(messages.map((m) => m.role)).toEqual(["visitor"])
   })
 })

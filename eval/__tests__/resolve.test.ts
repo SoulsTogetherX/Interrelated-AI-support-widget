@@ -19,8 +19,12 @@ describe("resolveAnchor", () => {
   it("matches an anchor across a rewrapped line break", () => {
     // The reason squash exists: the golden anchor quotes prose as one line,
     // the corpus wraps it. Upstream rewrapping must not break resolution.
-    const chunks = [{ id: "c1", text: "Fastify starts loading the plugin\n__after__ `.listen()` is called." }]
-    expect(resolveAnchor(chunks, "loading the plugin __after__ `.listen()` is called")).toEqual(["c1"])
+    const chunks = [
+      { id: "c1", text: "Fastify starts loading the plugin\n__after__ `.listen()` is called." },
+    ]
+    expect(resolveAnchor(chunks, "loading the plugin __after__ `.listen()` is called")).toEqual([
+      "c1",
+    ])
   })
 
   it("is case-sensitive — an anchor is a quotation, not a search", () => {

@@ -72,7 +72,10 @@ async function main(): Promise<void> {
         .where("state", "in", ["queued", "running"])
         .executeTakeFirst()
       if (!live) {
-        await db.insertInto("ingest_jobs").values({ id: newId("job"), org_id: ORG, source_id: SRC }).execute()
+        await db
+          .insertInto("ingest_jobs")
+          .values({ id: newId("job"), org_id: ORG, source_id: SRC })
+          .execute()
       }
 
       console.log(`[round ${round}] tick…`)

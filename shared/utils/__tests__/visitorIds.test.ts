@@ -31,7 +31,12 @@ describe("visitor id namespaces", () => {
   it("classifies a customer's user id as identified and NOT anonymous", () => {
     // The shapes a customer's backend will actually send: an integer id, a
     // prefixed id, a UUID, a ULID.
-    for (const id of ["42", "usr_8f3a91", "550e8400-e29b-41d4-a716-446655440000", "01ARZ3NDEKTSV4RRFFQ69G5FAV"]) {
+    for (const id of [
+      "42",
+      "usr_8f3a91",
+      "550e8400-e29b-41d4-a716-446655440000",
+      "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    ]) {
       expect(isIdentifiedVisitorId(id)).toBe(true)
       expect(isAnonymousVisitorId(id)).toBe(false)
     }
@@ -43,7 +48,12 @@ describe("visitor id namespaces", () => {
     // browser presenting them must be refused, so they must NOT read as
     // anonymous.
     const hex32 = "0123456789abcdef0123456789abcdef"
-    for (const nearMiss of [`vis_${hex32.slice(1)}`, `vis_${hex32.toUpperCase()}`, `vis-${hex32}`, `vix_${hex32}`]) {
+    for (const nearMiss of [
+      `vis_${hex32.slice(1)}`,
+      `vis_${hex32.toUpperCase()}`,
+      `vis-${hex32}`,
+      `vix_${hex32}`,
+    ]) {
       expect(isAnonymousVisitorId(nearMiss)).toBe(false)
       expect(isIdentifiedVisitorId(nearMiss)).toBe(true)
     }

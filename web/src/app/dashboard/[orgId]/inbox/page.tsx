@@ -45,8 +45,8 @@ export default async function InboxPage({ params }: { params: Promise<{ orgId: s
 
       <h1 className="inbox-title">Inbox</h1>
       <p className="inbox-lede">
-        Conversations a visitor is waiting on. Opening one connects you to them — attaching
-        is what claims it, so there is no separate button to forget.
+        Conversations a visitor is waiting on. Opening one connects you to them — attaching is what
+        claims it, so there is no separate button to forget.
       </p>
 
       {waiting.length === 0 ? (
@@ -64,20 +64,21 @@ export default async function InboxPage({ params }: { params: Promise<{ orgId: s
                 <span className={`inbox-badge inbox-badge-${handoff.status}`}>
                   {handoff.status === "pending" ? "waiting" : "with an agent"}
                 </span>
-                <span className="inbox-preview">
-                  {handoff.preview ?? "(no messages yet)"}
-                </span>
+                <span className="inbox-preview">{handoff.preview ?? "(no messages yet)"}</span>
                 <span className="inbox-meta">
                   {/* "user 42" when the tenant's server identified them
                       (M7.3): the id an agent can act on, and one a browser
                       cannot forge. */}
-                  {describeVisitor(handoff.visitorId).noun} {describeVisitor(handoff.visitorId).name}
-                  {" · "}{REASON_LABEL[handoff.reason] ?? handoff.reason}
+                  {describeVisitor(handoff.visitorId).noun}{" "}
+                  {describeVisitor(handoff.visitorId).name}
+                  {" · "}
+                  {REASON_LABEL[handoff.reason] ?? handoff.reason}
                   {" · "}
                   waiting {waited(handoff.requestedAt, now)}
-                  {handoff.claimedBy !== null && (
-                    handoff.claimedBy === user.id ? " · claimed by you" : " · claimed by a colleague"
-                  )}
+                  {handoff.claimedBy !== null &&
+                    (handoff.claimedBy === user.id
+                      ? " · claimed by you"
+                      : " · claimed by a colleague")}
                 </span>
               </Link>
             </li>

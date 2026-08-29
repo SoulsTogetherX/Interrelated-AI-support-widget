@@ -45,8 +45,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -102,7 +102,7 @@ interface StrategyResult {
 function percentile(sorted: readonly number[], p: number): number {
   if (sorted.length === 0) return 0
   const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)
-  return sorted[Math.max(0, idx)] as number
+  return sorted[Math.max(0, idx)]
 }
 
 function parseArgs(argv: readonly string[]): {
@@ -123,7 +123,12 @@ function parseArgs(argv: readonly string[]): {
   return {
     efSearch: num("--ef-search", 40),
     targetTokens: num("--target-tokens", 400),
-    sweepEf: sweepIdx === -1 ? null : String(argv[sweepIdx + 1]).split(",").map(Number),
+    sweepEf:
+      sweepIdx === -1
+        ? null
+        : String(argv[sweepIdx + 1])
+            .split(",")
+            .map(Number),
     sweepThreshold: argv.includes("--sweep-threshold"),
     enforceFloor: !argv.includes("--no-floor"),
   }
@@ -149,9 +154,9 @@ async function main(): Promise<void> {
   if (embedderChoice !== "local" && embedderChoice !== "gemini") {
     console.error(
       `embedder "${embedderChoice}" refused: the eval measures retrieval QUALITY, so it runs only on ` +
-      "models with real semantics — local (bge-small-en-v1.5, keyless) or gemini " +
-      "(gemini-embedding-001, needs GEMINI_API_KEY). The mock exists for plumbing tests; " +
-      "its scores here would be noise, which is the promise providers/embedding/mock.ts makes.",
+        "models with real semantics — local (bge-small-en-v1.5, keyless) or gemini " +
+        "(gemini-embedding-001, needs GEMINI_API_KEY). The mock exists for plumbing tests; " +
+        "its scores here would be noise, which is the promise providers/embedding/mock.ts makes.",
     )
     process.exit(1)
   }
@@ -209,29 +214,44 @@ async function main(): Promise<void> {
       EVAL_RETRY,
     )
 
-  const embedder = embedderChoice === "gemini"
-    ? new (await import("@providers/embedding/gemini")).GeminiEmbeddingProvider({
-        apiKey: process.env.GEMINI_API_KEY as string,
-        ...(process.env.GEMINI_EMBED_MODEL ? { model: process.env.GEMINI_EMBED_MODEL } : {}),
-      })
-    : new LocalEmbeddingProvider()
+  const embedder =
+    embedderChoice === "gemini"
+      ? new (await import("@providers/embedding/gemini")).GeminiEmbeddingProvider({
+          apiKey: process.env.GEMINI_API_KEY as string,
+          ...(process.env.GEMINI_EMBED_MODEL ? { model: process.env.GEMINI_EMBED_MODEL } : {}),
+        })
+      : new LocalEmbeddingProvider()
   console.log(`embedder: ${embedder.model}`)
 
   //#region Ingest the corpus snapshot
   // Plain consts (not narrowed lets): the ids are captured by the retrieve
   // closures below, where TypeScript would not preserve a let's narrowing.
-  const existingOrg = await db.selectFrom("organizations").select(["id"]).where("name", "=", EVAL_ORG_NAME).executeTakeFirst()
+  const existingOrg = await db
+    .selectFrom("organizations")
+    .select(["id"])
+    .where("name", "=", EVAL_ORG_NAME)
+    .executeTakeFirst()
   const orgId = existingOrg?.id ?? newId("org")
   if (!existingOrg) {
     await db.insertInto("organizations").values({ id: orgId, name: EVAL_ORG_NAME }).execute()
   }
-  const existingSource = await db.selectFrom("sources").select(["id"])
-    .where("org_id", "=", orgId).where("location", "=", EVAL_SOURCE_URL).executeTakeFirst()
+  const existingSource = await db
+    .selectFrom("sources")
+    .select(["id"])
+    .where("org_id", "=", orgId)
+    .where("location", "=", EVAL_SOURCE_URL)
+    .executeTakeFirst()
   const sourceId = existingSource?.id ?? newId("src")
   if (!existingSource) {
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: orgId, kind: "url", location: EVAL_SOURCE_URL,
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: orgId,
+        kind: "url",
+        location: EVAL_SOURCE_URL,
+      })
+      .execute()
   }
 
   const files: Array<{ relPath: string; url: string }> = []
@@ -256,11 +276,17 @@ async function main(): Promise<void> {
     // targetTokens participates in the hash: an ablation run re-chunks even
     // though the text itself is unchanged.
     const contentHash = createHash("sha256")
-      .update(`${args.targetTokens}:`).update(text, "utf8").digest("hex")
+      .update(`${args.targetTokens}:`)
+      .update(text, "utf8")
+      .digest("hex")
 
-    const existing = await db.selectFrom("documents").select(["id", "content_hash"])
-      .where("source_id", "=", sourceId).where("url", "=", file.url)
-      .where("deleted_at", "is", null).executeTakeFirst()
+    const existing = await db
+      .selectFrom("documents")
+      .select(["id", "content_hash"])
+      .where("source_id", "=", sourceId)
+      .where("url", "=", file.url)
+      .where("deleted_at", "is", null)
+      .executeTakeFirst()
     // Unchanged text is only enough if this document's chunks ALREADY carry
     // vectors under the model about to be scored — the ingest worker's second
     // condition (§3.10.5), which the harness needed the moment --embedder
@@ -272,14 +298,18 @@ async function main(): Promise<void> {
     // those documents as "unchanged". The dense arm could then see 70% of the
     // corpus, and hybrid recall@5 fell from 75.0% to 46.3% — a floor
     // violation whose cause was invisible in the score itself.
-    const embeddedHere = existing === undefined
-      ? false
-      : (await db.selectFrom("chunk_embeddings")
-          .innerJoin("chunks", "chunks.id", "chunk_embeddings.chunk_id")
-          .select(({ fn }) => fn.countAll<string>().as("n"))
-          .where("chunks.document_id", "=", existing.id)
-          .where("chunk_embeddings.model", "=", embedder.model)
-          .executeTakeFirst())?.n !== "0"
+    const embeddedHere =
+      existing === undefined
+        ? false
+        : (
+            await db
+              .selectFrom("chunk_embeddings")
+              .innerJoin("chunks", "chunks.id", "chunk_embeddings.chunk_id")
+              .select(({ fn }) => fn.countAll<string>().as("n"))
+              .where("chunks.document_id", "=", existing.id)
+              .where("chunk_embeddings.model", "=", embedder.model)
+              .executeTakeFirst()
+          )?.n !== "0"
     if (existing && existing.content_hash === contentHash && embeddedHere) {
       skipped++
       continue
@@ -300,28 +330,52 @@ async function main(): Promise<void> {
     const documentId = existing?.id ?? newId("doc")
     await db.transaction().execute(async (trx) => {
       if (existing) {
-        await trx.updateTable("documents")
+        await trx
+          .updateTable("documents")
           .set({ title: doc.title, content_hash: contentHash, fetched_at: new Date() })
-          .where("id", "=", existing.id).execute()
+          .where("id", "=", existing.id)
+          .execute()
         await trx.deleteFrom("chunks").where("document_id", "=", existing.id).execute()
       } else {
-        await trx.insertInto("documents").values({
-          id: documentId, org_id: orgId, source_id: sourceId,
-          url: file.url, title: doc.title, content_hash: contentHash,
-        }).execute()
+        await trx
+          .insertInto("documents")
+          .values({
+            id: documentId,
+            org_id: orgId,
+            source_id: sourceId,
+            url: file.url,
+            title: doc.title,
+            content_hash: contentHash,
+          })
+          .execute()
       }
       const chunkRows = chunks.map((chunk) => ({
-        id: newId("chk"), org_id: orgId, document_id: documentId,
-        ord: chunk.ord, heading_path: chunk.headingPath, text: chunk.text,
-        token_count: chunk.tokenCount, char_start: chunk.charStart, char_end: chunk.charEnd,
+        id: newId("chk"),
+        org_id: orgId,
+        document_id: documentId,
+        ord: chunk.ord,
+        heading_path: chunk.headingPath,
+        text: chunk.text,
+        token_count: chunk.tokenCount,
+        char_start: chunk.charStart,
+        char_end: chunk.charEnd,
       }))
       const embeddingRows = chunkRows.map((row, i) => ({
-        chunk_id: row.id, org_id: orgId, model: embedder.model,
-        dim: embedder.dim, embedding: vectors[i] as string,
+        chunk_id: row.id,
+        org_id: orgId,
+        model: embedder.model,
+        dim: embedder.dim,
+        embedding: vectors[i],
       }))
       for (let i = 0; i < chunkRows.length; i += 100) {
-        await trx.insertInto("chunks").values(chunkRows.slice(i, i + 100)).execute()
-        await trx.insertInto("chunk_embeddings").values(embeddingRows.slice(i, i + 100)).execute()
+        await trx
+          .insertInto("chunks")
+          .values(chunkRows.slice(i, i + 100))
+          .execute()
+        await trx
+          .insertInto("chunk_embeddings")
+          .values(embeddingRows.slice(i, i + 100))
+          .execute()
       }
     })
     ingested++
@@ -331,14 +385,17 @@ async function main(): Promise<void> {
 
   //#region Resolve golden anchors to chunk ids
   const golden: GoldenEntry[] = readFileSync(GOLDEN_PATH, "utf8")
-    .split("\n").filter((l) => l.trim().length > 0).map((l) => JSON.parse(l) as GoldenEntry)
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
+    .map((l) => JSON.parse(l) as GoldenEntry)
 
   const failures: string[] = []
   const relevantByQuery = new Map<string, Set<string>>()
   for (const entry of golden) {
     const relevant = new Set<string>()
     for (const anchor of entry.anchors) {
-      const rows = await db.selectFrom("chunks")
+      const rows = await db
+        .selectFrom("chunks")
         .innerJoin("documents", "documents.id", "chunks.document_id")
         .select(["chunks.id", "chunks.text"])
         .where("documents.url", "=", anchor.url)
@@ -351,7 +408,9 @@ async function main(): Promise<void> {
       }
       const hits = resolveAnchor(rows, anchor.mustContain)
       if (hits.length === 0) {
-        failures.push(`${entry.id}: anchor not found in ${anchor.url}: "${anchor.mustContain.slice(0, 60)}…"`)
+        failures.push(
+          `${entry.id}: anchor not found in ${anchor.url}: "${anchor.mustContain.slice(0, 60)}…"`,
+        )
       }
       for (const hit of hits) relevant.add(hit)
     }
@@ -366,15 +425,20 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   const relevantSizes = [...relevantByQuery.values()].map((s) => s.size)
-  console.log(`golden: ${golden.length} questions, ${relevantSizes.reduce((a, b) => a + b, 0)} relevant chunks (max ${Math.max(...relevantSizes)}/question)`)
+  console.log(
+    `golden: ${golden.length} questions, ${relevantSizes.reduce((a, b) => a + b, 0)} relevant chunks (max ${Math.max(...relevantSizes)}/question)`,
+  )
   //#endregion
 
   //#region Embed all questions
   const queryVectors = new Map<string, number[]>()
   for (let i = 0; i < golden.length; i += EMBED_BATCH) {
     const batch = golden.slice(i, i + EMBED_BATCH)
-    const vecs = await embed(batch.map((g) => g.question), "query")
-    batch.forEach((g, j) => queryVectors.set(g.id, vecs[j] as number[]))
+    const vecs = await embed(
+      batch.map((g) => g.question),
+      "query",
+    )
+    batch.forEach((g, j) => queryVectors.set(g.id, vecs[j]))
   }
   //#endregion
 
@@ -389,12 +453,18 @@ async function main(): Promise<void> {
   if (args.sweepThreshold) {
     const { evaluateGroundedness } = await import("@/answer/gate")
     const noanswer: NoAnswerEntry[] = readFileSync(NOANSWER_PATH, "utf8")
-      .split("\n").filter((l) => l.trim().length > 0).map((l) => JSON.parse(l) as NoAnswerEntry)
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as NoAnswerEntry)
 
     async function gateSignal(question: string, vector: number[]): Promise<number> {
       const retrieved = await hybridSearch(db, {
-        orgId, queryText: question, queryVector: vector,
-        model: embedder.model, k: RETRIEVE_K, efSearch: args.efSearch,
+        orgId,
+        queryText: question,
+        queryVector: vector,
+        model: embedder.model,
+        k: RETRIEVE_K,
+        efSearch: args.efSearch,
       })
       // Infinity threshold: never refuse on distance, so .signal is the raw
       // min dense distance. A null signal (no dense evidence at all) is
@@ -409,15 +479,21 @@ async function main(): Promise<void> {
     const noanswerSignals: Array<{ category: NoAnswerEntry["category"]; signal: number }> = []
     for (let i = 0; i < noanswer.length; i += EMBED_BATCH) {
       const batch = noanswer.slice(i, i + EMBED_BATCH)
-      const vecs = await embed(batch.map((n) => n.question), "query")
+      const vecs = await embed(
+        batch.map((n) => n.question),
+        "query",
+      )
       for (const [j, entry] of batch.entries()) {
-        noanswerSignals.push({ category: entry.category, signal: await gateSignal(entry.question, vecs[j] as number[]) })
+        noanswerSignals.push({
+          category: entry.category,
+          signal: await gateSignal(entry.question, vecs[j]),
+        })
       }
     }
 
     const stats = (values: readonly number[]): string => {
       const sorted = [...values].sort((a, b) => a - b)
-      const pick = (p: number) => (percentile(sorted, p)).toFixed(3)
+      const pick = (p: number) => percentile(sorted, p).toFixed(3)
       return `min ${pick(0)}  p25 ${pick(25)}  median ${pick(50)}  p75 ${pick(75)}  max ${pick(100)}`
     }
     console.log(`\ngate signal (min dense cosine distance), model ${embedder.model}:`)
@@ -429,17 +505,29 @@ async function main(): Promise<void> {
 
     const rate = (values: readonly number[], t: number): number =>
       values.filter((v) => v > t).length / values.length
-    const lines = ["threshold,false_refusal,correct_refusal,cr_off_topic,cr_adjacent,cr_absent_detail"]
-    for (let t = 0.30; t <= 1.0001; t += 0.01) {
+    const lines = [
+      "threshold,false_refusal,correct_refusal,cr_off_topic,cr_adjacent,cr_absent_detail",
+    ]
+    for (let t = 0.3; t <= 1.0001; t += 0.01) {
       const th = Number(t.toFixed(2))
       const by = (category: NoAnswerEntry["category"]) =>
-        rate(noanswerSignals.filter((n) => n.category === category).map((n) => n.signal), th)
-      lines.push([
-        th.toFixed(2),
-        rate(goldenSignals, th).toFixed(4),
-        rate(noanswerSignals.map((n) => n.signal), th).toFixed(4),
-        by("off_topic").toFixed(4), by("adjacent").toFixed(4), by("absent_detail").toFixed(4),
-      ].join(","))
+        rate(
+          noanswerSignals.filter((n) => n.category === category).map((n) => n.signal),
+          th,
+        )
+      lines.push(
+        [
+          th.toFixed(2),
+          rate(goldenSignals, th).toFixed(4),
+          rate(
+            noanswerSignals.map((n) => n.signal),
+            th,
+          ).toFixed(4),
+          by("off_topic").toFixed(4),
+          by("adjacent").toFixed(4),
+          by("absent_detail").toFixed(4),
+        ].join(","),
+      )
     }
     mkdirSync(RESULTS_DIR, { recursive: true })
     const csvPath = join(RESULTS_DIR, "threshold-sweep.csv")
@@ -454,13 +542,34 @@ async function main(): Promise<void> {
     const sortedGolden = [...goldenSignals].sort((a, b) => a - b)
     const maxGolden = sortedGolden.at(-1) as number
     const secondMaxGolden = sortedGolden.at(-2) as number
-    for (const [label, t] of [["FR=0 (conservative)", maxGolden + 0.005], ["FR=1/80 (aggressive)", secondMaxGolden + 0.005]] as const) {
-      const all = rate(noanswerSignals.map((n) => n.signal), t)
+    for (const [label, t] of [
+      ["FR=0 (conservative)", maxGolden + 0.005],
+      ["FR=1/80 (aggressive)", secondMaxGolden + 0.005],
+    ] as const) {
+      const all = rate(
+        noanswerSignals.map((n) => n.signal),
+        t,
+      )
       console.log(
         `${label}: threshold ${t.toFixed(3)} → correct-refusal ${(all * 100).toFixed(1)}% ` +
-        `(off_topic ${(rate(noanswerSignals.filter((n) => n.category === "off_topic").map((n) => n.signal), t) * 100).toFixed(0)}%, ` +
-        `adjacent ${(rate(noanswerSignals.filter((n) => n.category === "adjacent").map((n) => n.signal), t) * 100).toFixed(0)}%, ` +
-        `absent_detail ${(rate(noanswerSignals.filter((n) => n.category === "absent_detail").map((n) => n.signal), t) * 100).toFixed(0)}%)`,
+          `(off_topic ${(
+            rate(
+              noanswerSignals.filter((n) => n.category === "off_topic").map((n) => n.signal),
+              t,
+            ) * 100
+          ).toFixed(0)}%, ` +
+          `adjacent ${(
+            rate(
+              noanswerSignals.filter((n) => n.category === "adjacent").map((n) => n.signal),
+              t,
+            ) * 100
+          ).toFixed(0)}%, ` +
+          `absent_detail ${(
+            rate(
+              noanswerSignals.filter((n) => n.category === "absent_detail").map((n) => n.signal),
+              t,
+            ) * 100
+          ).toFixed(0)}%)`,
       )
     }
     await db.destroy()
@@ -489,8 +598,8 @@ async function main(): Promise<void> {
     }
     console.log(
       `${name.padEnd(8)} recall@1 ${fmt(result.score.recall[1])}  @5 ${fmt(result.score.recall[5])}  ` +
-      `@10 ${fmt(result.score.recall[10])}  MRR@10 ${fmt(result.score.mrr10)}  nDCG@10 ${fmt(result.score.ndcg10)}  ` +
-      `p50 ${result.latencyP50Ms.toFixed(0)}ms p95 ${result.latencyP95Ms.toFixed(0)}ms`,
+        `@10 ${fmt(result.score.recall[10])}  MRR@10 ${fmt(result.score.mrr10)}  nDCG@10 ${fmt(result.score.ndcg10)}  ` +
+        `p50 ${result.latencyP50Ms.toFixed(0)}ms p95 ${result.latencyP95Ms.toFixed(0)}ms`,
     )
     return result
   }
@@ -501,36 +610,86 @@ async function main(): Promise<void> {
     console.log("\nef_search,dense_recall@5,dense_recall@10,hybrid_recall@5,hybrid_recall@10")
     for (const ef of args.sweepEf) {
       const dense = await runStrategy(`d ef=${ef}`, async (e) =>
-        (await denseSearch(db, { orgId: orgId, model: embedder.model, queryVector: queryVectors.get(e.id) as number[], k: RETRIEVE_K, efSearch: ef })).map((h) => h.chunkId))
+        (
+          await denseSearch(db, {
+            orgId: orgId,
+            model: embedder.model,
+            queryVector: queryVectors.get(e.id) as number[],
+            k: RETRIEVE_K,
+            efSearch: ef,
+          })
+        ).map((h) => h.chunkId),
+      )
       const hybrid = await runStrategy(`h ef=${ef}`, async (e) =>
-        (await hybridSearch(db, { orgId: orgId, queryText: e.question, queryVector: queryVectors.get(e.id) as number[], model: embedder.model, k: RETRIEVE_K, efSearch: ef })).map((r) => r.chunkId))
-      console.log(`${ef},${fmt(dense.score.recall[5]).trim()},${fmt(dense.score.recall[10]).trim()},${fmt(hybrid.score.recall[5]).trim()},${fmt(hybrid.score.recall[10]).trim()}`)
+        (
+          await hybridSearch(db, {
+            orgId: orgId,
+            queryText: e.question,
+            queryVector: queryVectors.get(e.id) as number[],
+            model: embedder.model,
+            k: RETRIEVE_K,
+            efSearch: ef,
+          })
+        ).map((r) => r.chunkId),
+      )
+      console.log(
+        `${ef},${fmt(dense.score.recall[5]).trim()},${fmt(dense.score.recall[10]).trim()},${fmt(hybrid.score.recall[5]).trim()},${fmt(hybrid.score.recall[10]).trim()}`,
+      )
     }
     await db.destroy()
     return
   }
   //#endregion
 
-  console.log(`\nscoring ${golden.length} questions, k=${RETRIEVE_K}, ef_search=${args.efSearch}, targetTokens=${args.targetTokens}\n`)
+  console.log(
+    `\nscoring ${golden.length} questions, k=${RETRIEVE_K}, ef_search=${args.efSearch}, targetTokens=${args.targetTokens}\n`,
+  )
   const dense = await runStrategy("dense", async (e) =>
-    (await denseSearch(db, { orgId: orgId, model: embedder.model, queryVector: queryVectors.get(e.id) as number[], k: RETRIEVE_K, efSearch: args.efSearch })).map((h) => h.chunkId))
+    (
+      await denseSearch(db, {
+        orgId: orgId,
+        model: embedder.model,
+        queryVector: queryVectors.get(e.id) as number[],
+        k: RETRIEVE_K,
+        efSearch: args.efSearch,
+      })
+    ).map((h) => h.chunkId),
+  )
   const lexical = await runStrategy("lexical", async (e) =>
-    (await lexicalSearch(db, { orgId: orgId, query: e.question, k: RETRIEVE_K })).map((h) => h.chunkId))
+    (await lexicalSearch(db, { orgId: orgId, query: e.question, k: RETRIEVE_K })).map(
+      (h) => h.chunkId,
+    ),
+  )
   const hybrid = await runStrategy("hybrid", async (e) =>
-    (await hybridSearch(db, { orgId: orgId, queryText: e.question, queryVector: queryVectors.get(e.id) as number[], model: embedder.model, k: RETRIEVE_K, efSearch: args.efSearch })).map((r) => r.chunkId))
+    (
+      await hybridSearch(db, {
+        orgId: orgId,
+        queryText: e.question,
+        queryVector: queryVectors.get(e.id) as number[],
+        model: embedder.model,
+        k: RETRIEVE_K,
+        efSearch: args.efSearch,
+      })
+    ).map((r) => r.chunkId),
+  )
   //#endregion
 
   //#region Failure listing (for RESULTS.md analysis)
   const missed: string[] = []
   for (const entry of golden) {
     const results = await hybridSearch(db, {
-      orgId: orgId, queryText: entry.question,
+      orgId: orgId,
+      queryText: entry.question,
       queryVector: queryVectors.get(entry.id) as number[],
-      model: embedder.model, k: RETRIEVE_K, efSearch: args.efSearch,
+      model: embedder.model,
+      k: RETRIEVE_K,
+      efSearch: args.efSearch,
     })
     const relevant = relevantByQuery.get(entry.id) as Set<string>
     if (!results.some((r) => relevant.has(r.chunkId))) {
-      missed.push(`${entry.id} [${entry.style}] "${entry.question}" → top hit: ${results[0]?.url ?? "(none)"}`)
+      missed.push(
+        `${entry.id} [${entry.style}] "${entry.question}" → top hit: ${results[0]?.url ?? "(none)"}`,
+      )
     }
   }
   if (missed.length > 0) {
@@ -543,8 +702,15 @@ async function main(): Promise<void> {
   mkdirSync(RESULTS_DIR, { recursive: true })
   const results = {
     corpus: { files: files.length, questions: golden.length },
-    params: { efSearch: args.efSearch, targetTokens: args.targetTokens, k: RETRIEVE_K, model: embedder.model },
-    dense, lexical, hybrid,
+    params: {
+      efSearch: args.efSearch,
+      targetTokens: args.targetTokens,
+      k: RETRIEVE_K,
+      model: embedder.model,
+    },
+    dense,
+    lexical,
+    hybrid,
     missedAtK: missed,
   }
   const resultsPath = join(RESULTS_DIR, "latest.json")
@@ -556,7 +722,9 @@ async function main(): Promise<void> {
     try {
       floor = JSON.parse(readFileSync(FLOOR_PATH, "utf8")) as { hybridRecallAt5: number }
     } catch {
-      console.warn("no eval/floor.json — floor not enforced (bootstrap mode). Commit one to arm the CI gate.")
+      console.warn(
+        "no eval/floor.json — floor not enforced (bootstrap mode). Commit one to arm the CI gate.",
+      )
     }
     if (floor) {
       const measured = hybrid.score.recall[5] ?? 0
@@ -566,7 +734,9 @@ async function main(): Promise<void> {
         )
         process.exit(1)
       }
-      console.log(`floor ok: hybrid recall@5 ${(measured * 100).toFixed(1)}% ≥ ${(floor.hybridRecallAt5 * 100).toFixed(1)}%`)
+      console.log(
+        `floor ok: hybrid recall@5 ${(measured * 100).toFixed(1)}% ≥ ${(floor.hybridRecallAt5 * 100).toFixed(1)}%`,
+      )
     }
   }
   //#endregion
@@ -575,7 +745,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("eval failed:", err instanceof Error ? err.stack ?? err.message : err)
+  console.error("eval failed:", err instanceof Error ? (err.stack ?? err.message) : err)
   process.exit(1)
 })
 //#endregion

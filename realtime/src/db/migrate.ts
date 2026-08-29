@@ -72,7 +72,9 @@ async function migrateToLatest(db: Kysely<any>): Promise<MigrationResultSet> {
   const resultSet = await migrator.migrateToLatest()
   if (resultSet.error) {
     const err = resultSet.error
-    throw err instanceof Error ? err : new Error(typeof err === "string" ? err : JSON.stringify(err))
+    throw err instanceof Error
+      ? err
+      : new Error(typeof err === "string" ? err : JSON.stringify(err))
   }
   return resultSet
 }

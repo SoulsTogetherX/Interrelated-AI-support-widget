@@ -62,7 +62,11 @@ export default function UploadSourceForm({ orgId }: { orgId: string }) {
             }}
           />
         </label>
-        <button className="uploadsource-submit" type="submit" disabled={pending || tooBig || !chosen}>
+        <button
+          className="uploadsource-submit"
+          type="submit"
+          disabled={pending || tooBig || !chosen}
+        >
           {pending ? "Reading…" : "Upload"}
         </button>
       </div>

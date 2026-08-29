@@ -49,8 +49,8 @@ export default function RotateKeyForm({
           {pending ? "…" : "Rotate key"}
         </button>
         <span className="rotatekey-hint">
-          Issues a new key now. This one keeps working for {graceHours} hours so
-          you can update your snippet without downtime.
+          Issues a new key now. This one keeps working for {graceHours} hours so you can update your
+          snippet without downtime.
         </span>
       </div>
       {state.error ? (

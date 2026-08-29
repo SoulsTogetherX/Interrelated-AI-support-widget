@@ -30,19 +30,67 @@ import type { ProviderFormState } from "@/lib/providers/actions"
 // combination that cannot work.
 const PROVIDERS = {
   generation: [
-    { value: "groq", label: "Groq", needsKey: true, needsBase: false, modelHint: "llama-3.3-70b-versatile (default)" },
-    { value: "gemini", label: "Google Gemini", needsKey: true, needsBase: false, modelHint: "gemini-3.6-flash (default)" },
+    {
+      value: "groq",
+      label: "Groq",
+      needsKey: true,
+      needsBase: false,
+      modelHint: "llama-3.3-70b-versatile (default)",
+    },
+    {
+      value: "gemini",
+      label: "Google Gemini",
+      needsKey: true,
+      needsBase: false,
+      modelHint: "gemini-3.6-flash (default)",
+    },
     // Listed last of the hosted providers on purpose: it is the only one
     // with no free tier, so it is the only one where clicking Test spends
     // money. The label says so rather than leaving a tenant to find out.
-    { value: "anthropic", label: "Anthropic Claude (paid)", needsKey: true, needsBase: false, modelHint: "claude-haiku-4-5-20251001 (default)" },
-    { value: "ollama", label: "Ollama (self-hosted)", needsKey: false, needsBase: true, modelHint: "required — a model you have pulled" },
-    { value: "openai_compatible", label: "OpenAI-compatible", needsKey: true, needsBase: true, modelHint: "required" },
+    {
+      value: "anthropic",
+      label: "Anthropic Claude (paid)",
+      needsKey: true,
+      needsBase: false,
+      modelHint: "claude-haiku-4-5-20251001 (default)",
+    },
+    {
+      value: "ollama",
+      label: "Ollama (self-hosted)",
+      needsKey: false,
+      needsBase: true,
+      modelHint: "required — a model you have pulled",
+    },
+    {
+      value: "openai_compatible",
+      label: "OpenAI-compatible",
+      needsKey: true,
+      needsBase: true,
+      modelHint: "required",
+    },
   ],
   embedding: [
-    { value: "gemini", label: "Google Gemini", needsKey: true, needsBase: false, modelHint: "gemini-embedding-001 (default)" },
-    { value: "ollama", label: "Ollama (self-hosted)", needsKey: false, needsBase: true, modelHint: "required — e.g. nomic-embed-text" },
-    { value: "openai_compatible", label: "OpenAI-compatible", needsKey: true, needsBase: true, modelHint: "required — up to 1024 dimensions" },
+    {
+      value: "gemini",
+      label: "Google Gemini",
+      needsKey: true,
+      needsBase: false,
+      modelHint: "gemini-embedding-001 (default)",
+    },
+    {
+      value: "ollama",
+      label: "Ollama (self-hosted)",
+      needsKey: false,
+      needsBase: true,
+      modelHint: "required — e.g. nomic-embed-text",
+    },
+    {
+      value: "openai_compatible",
+      label: "OpenAI-compatible",
+      needsKey: true,
+      needsBase: true,
+      modelHint: "required — up to 1024 dimensions",
+    },
   ],
 } as const
 
@@ -53,7 +101,13 @@ type ProviderValue = (typeof PROVIDERS)[Role][number]["value"]
 //#region Component
 const INITIAL: ProviderFormState = { error: null, success: null }
 
-export default function ProviderForm({ orgId, role = "generation" }: { orgId: string; role?: Role }) {
+export default function ProviderForm({
+  orgId,
+  role = "generation",
+}: {
+  orgId: string
+  role?: Role
+}) {
   const [state, formAction, pending] = useActionState(submitProviderAction, INITIAL)
   const choices = PROVIDERS[role]
   const [provider, setProvider] = useState<ProviderValue>(choices[0].value)
@@ -107,7 +161,12 @@ export default function ProviderForm({ orgId, role = "generation" }: { orgId: st
 
       <label className="providerform-label">
         Model
-        <input className="providerform-input" name="model" type="text" placeholder={meta.modelHint} />
+        <input
+          className="providerform-input"
+          name="model"
+          type="text"
+          placeholder={meta.modelHint}
+        />
       </label>
 
       {state.error ? (

@@ -55,7 +55,10 @@ class FakeSocket {
 }
 
 const READY: HandoffServerFrame = {
-  type: "ready", role: "visitor", conversationId: "con_1", status: "pending",
+  type: "ready",
+  role: "visitor",
+  conversationId: "con_1",
+  status: "pending",
 }
 
 /** Only the two methods the socket calls; the rest of WidgetClient is not
@@ -64,18 +67,28 @@ function fakeClient(tickets: Array<string | null | Error>): WidgetClient {
   return {
     ensureSession: () => Promise.resolve(),
     // eslint-disable-next-line require-yield
-    async *ask() { throw new Error("not used") },
+    async *ask() {
+      throw new Error("not used")
+    },
     escalate: () => Promise.reject(new Error("not used")),
     handoffTicket: () => {
       const next = tickets.shift()
       if (next instanceof Error) return Promise.reject(next)
       return Promise.resolve(next ?? null)
     },
-    openHandoff: () => { throw new Error("not used") },
-    rememberHandoff: () => { throw new Error("not used") },
-    forgetHandoff: () => { throw new Error("not used") },
-    storedHandoff: () => { throw new Error("not used") },
-  } as WidgetClient
+    openHandoff: () => {
+      throw new Error("not used")
+    },
+    rememberHandoff: () => {
+      throw new Error("not used")
+    },
+    forgetHandoff: () => {
+      throw new Error("not used")
+    },
+    storedHandoff: () => {
+      throw new Error("not used")
+    },
+  }
 }
 
 interface Harness {
@@ -154,10 +167,21 @@ describe("HandoffSocket", () => {
       type: "history",
       messages: [
         { id: "msg_1", role: "visitor", text: "hi", at: "2026-01-01T00:00:00.000Z" },
-        { id: "msg_2", role: "assistant", text: "I don't know that one.", at: "2026-01-01T00:00:01.000Z" },
+        {
+          id: "msg_2",
+          role: "assistant",
+          text: "I don't know that one.",
+          at: "2026-01-01T00:00:01.000Z",
+        },
       ],
     })
-    socket.deliver({ type: "message", id: "msg_3", role: "agent", text: "I can help", at: "2026-01-01T00:00:02.000Z" })
+    socket.deliver({
+      type: "message",
+      id: "msg_3",
+      role: "agent",
+      text: "I can help",
+      at: "2026-01-01T00:00:02.000Z",
+    })
 
     // The backlog arrives ONCE, as one thing to render over the thread; the
     // live message is a separate event. Collapsing them would double-render
@@ -247,7 +271,7 @@ describe("HandoffSocket", () => {
     await vi.waitFor(() => {
       if (FakeSocket.live.length < 2) throw new Error("no reconnect yet")
     })
-    const second = FakeSocket.live[1] as FakeSocket
+    const second = FakeSocket.live[1]
     expect(second.url).toBe("wss://api.test/v1/handoff?ticket=tkt_2")
     second.deliver(READY)
 
@@ -290,7 +314,7 @@ describe("HandoffSocket", () => {
     await vi.waitFor(() => {
       if (FakeSocket.live.length === 0) throw new Error("no retry yet")
     })
-    expect((FakeSocket.live[0] as FakeSocket).url).toContain("ticket=tkt_2")
+    expect(FakeSocket.live[0].url).toContain("ticket=tkt_2")
     expect(h.statuses).not.toContain("ended")
     h.socket.close()
   })
@@ -314,7 +338,9 @@ describe("HandoffSocket", () => {
     // close() would land on a UI that has already moved on — here, it would
     // make an abandoned rejoin forget a bookmark it meant to keep.
     let answer!: (ticket: string | null) => void
-    const pending = new Promise<string | null>((resolve) => { answer = resolve })
+    const pending = new Promise<string | null>((resolve) => {
+      answer = resolve
+    })
     const statuses: HandoffStatus[] = []
     const socket = new HandoffSocket({
       apiBase: "https://api.test",

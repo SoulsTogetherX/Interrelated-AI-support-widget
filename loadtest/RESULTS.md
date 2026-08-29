@@ -8,14 +8,14 @@ README quotes.
 
 ## What is measured
 
-One **session** is one conversation: a visitor socket *and* an agent socket,
+One **session** is one conversation: a visitor socket _and_ an agent socket,
 which is the product's actual unit — somebody waiting, somebody answering.
 
-| Metric | What it covers |
-|---|---|
-| **connect** | ticket → upgrade → `ready` → `history`. Includes the backlog read, so a slow replay would show up here. |
+| Metric         | What it covers                                                                                                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **connect**    | ticket → upgrade → `ready` → `history`. Includes the backlog read, so a slow replay would show up here.                                                                              |
 | **round trip** | a client's own message coming back to it. The server persists **before** it broadcasts, so this contains a real Postgres write — it is "did my message land", not a relay benchmark. |
-| **delivery** | one end's message arriving at the **other** end. Both timestamps come from one process, so there is no clock skew in the number. |
+| **delivery**   | one end's message arriving at the **other** end. Both timestamps come from one process, so there is no clock skew in the number.                                                     |
 
 Percentiles are nearest-rank, never interpolated: printing a latency nobody
 measured is the one thing a report like this must not do.
@@ -23,20 +23,21 @@ measured is the one thing a report like this must not do.
 ## Results
 
 Measured 2026-08-13 on the dev machine (Windows 11, Docker Desktop Postgres 18
-+ pgvector, realtime under `tsx`, all on one host). **These are not production
-numbers** — Render and Neon are different machines on a network, and the
-round-trip figure there will be dominated by the hop this setup does not have.
-What transfers is the *shape*: where the knee is, and what causes it.
+
+- pgvector, realtime under `tsx`, all on one host). **These are not production
+  numbers** — Render and Neon are different machines on a network, and the
+  round-trip figure there will be dominated by the hop this setup does not have.
+  What transfers is the _shape_: where the knee is, and what causes it.
 
 | Sessions | Sockets | Offered | Sustained | connect p50 / p95 | round trip p50 / p95 | delivery p50 / p95 | unfinished |
-|---|---|---|---|---|---|---|---|
-| 100 | 200 | ~50/s | 32/s | 9.6 / 20.7 | 24.3 / 57.0 | 24.6 / 56.9 | 0 |
-| 100 | 200 | ~100/s | 100/s | 9.4 / 18.4 | 26.0 / 72.5 | 26.1 / 72.4 | 0 |
-| 100 | 200 | ~200/s | 192/s | 9.2 / 18.7 | 60.3 / 410.3 | 60.5 / 408.6 | 0 |
-| 150 | 300 | ~600/s | 233/s | 11.6 / 28.3 | 2306 / 3027 | 2304 / 3027 | 758 |
+| -------- | ------- | ------- | --------- | ----------------- | -------------------- | ------------------ | ---------- |
+| 100      | 200     | ~50/s   | 32/s      | 9.6 / 20.7        | 24.3 / 57.0          | 24.6 / 56.9        | 0          |
+| 100      | 200     | ~100/s  | 100/s     | 9.4 / 18.4        | 26.0 / 72.5          | 26.1 / 72.4        | 0          |
+| 100      | 200     | ~200/s  | 192/s     | 9.2 / 18.7        | 60.3 / 410.3         | 60.5 / 408.6       | 0          |
+| 150      | 300     | ~600/s  | 233/s     | 11.6 / 28.3       | 2306 / 3027          | 2304 / 3027        | 758        |
 
 All latencies in milliseconds. "Unfinished" counts messages that had not
-echoed when the drain window closed — past the knee they are *late*, not
+echoed when the drain window closed — past the knee they are _late_, not
 dropped: no socket errored, no send failed, and the count is what a queue
 looks like when it is longer than the patience of the measuring tool.
 
@@ -56,7 +57,7 @@ capacity and everything after that is waiting.
 RETURNING + the conversation's recency bump), and the pool is capped at 5
 connections (§3.2, sized for Neon's free tier). ~233 tx/s through 5
 connections is ~21 ms of database time each, which matches the low-load round
-trip almost exactly — so the ceiling is *database concurrency*, not the
+trip almost exactly — so the ceiling is _database concurrency_, not the
 socket layer, and the honest way to raise it is a bigger pool against a
 bigger database, not a rewrite here.
 
@@ -67,7 +68,7 @@ down rather than quietly fixed:
 
 1. **Synchronized senders measure the herd, not the service.** With every
    client starting its loop at the same instant, 200 clients on a 4-second
-   interval offered 38/s *on average* but arrived as bursts of 200, and the
+   interval offered 38/s _on average_ but arrived as bursts of 200, and the
    p50 that came out — 365 ms — was almost entirely queue wait. Staggering
    each client across one interval dropped the same run to 24 ms p50 and
    57 ms p95. Two hundred people do not type in unison; the jittered arrival
@@ -91,7 +92,7 @@ changes, and whose output gets published.
 npm run loadtest -- --sessions 100 --messages 6 --interval 2000
 ```
 
-Needs a running realtime service started with the *same* `WIDGET_TOKEN_SECRET`
+Needs a running realtime service started with the _same_ `WIDGET_TOKEN_SECRET`
 this process reads (tickets are signed with a key derived from it), and
 `POSTGRES_*` pointing at that service's database. The harness seeds its own
 org, conversations, and handoffs, and deletes all of it — including on Ctrl-C.

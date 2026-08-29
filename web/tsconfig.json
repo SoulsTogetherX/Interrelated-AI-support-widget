@@ -9,11 +9,7 @@
   // `tsc --noEmit` is the fast standalone gate.
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
-    ],
+    "lib": ["dom", "dom.iterable", "esnext"],
     "module": "esnext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -33,12 +29,8 @@
       }
     ],
     "paths": {
-      "@/*": [
-        "./src/*"
-      ],
-      "@shared/*": [
-        "../shared/*"
-      ],
+      "@/*": ["./src/*"],
+      "@shared/*": ["../shared/*"],
       // shared/ has no package.json by design (CLAUDE.md 2.4), so its
       // TYPE-ONLY `import type { ColumnType } from "kysely"` resolves by
       // walking up from shared/ — which finds the ROOT node_modules
@@ -48,9 +40,7 @@
       // wherever it sits. Without it `next build` fails on Vercel with
       // "Cannot find module 'kysely'" from ../shared/db/schema.ts while
       // every local and CI typecheck passes.
-      "kysely": [
-        "./node_modules/kysely"
-      ]
+      "kysely": ["./node_modules/kysely"]
     },
     "allowJs": true
   },
@@ -69,7 +59,5 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
-  "exclude": [
-    "node_modules"
-  ]
+  "exclude": ["node_modules"]
 }

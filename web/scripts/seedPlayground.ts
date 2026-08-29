@@ -43,7 +43,9 @@ const DEMO_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 const UNIQUE_VIOLATION = "23505"
 
 function isUniqueViolation(err: unknown): boolean {
-  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === UNIQUE_VIOLATION
+  return (
+    typeof err === "object" && err !== null && (err as { code?: unknown }).code === UNIQUE_VIOLATION
+  )
 }
 
 /** The user's id whatever the password situation: register → authenticate →
@@ -59,7 +61,11 @@ async function ensureUser(): Promise<{ userId: string; passwordChanged: boolean 
   if (authenticated.ok) return { userId: authenticated.userId, passwordChanged: false }
 
   const index = await emailBlindIndex(EMAIL)
-  const row = await db.selectFrom("users").select("id").where("email_index", "=", index).executeTakeFirst()
+  const row = await db
+    .selectFrom("users")
+    .select("id")
+    .where("email_index", "=", index)
+    .executeTakeFirst()
   if (!row) {
     // Neither creatable nor findable — registerUser's error is the real story.
     throw new Error(`could not create or find ${EMAIL}: ${registered.error}`)
@@ -97,7 +103,8 @@ async function ensureMembership(orgId: string, userId: string): Promise<"owner" 
     // unique violation rather than two owners.
     if (owner) return "agent"
     try {
-      await db.updateTable("org_members")
+      await db
+        .updateTable("org_members")
         .set({ role: "owner" })
         .where("org_id", "=", orgId)
         .where("user_id", "=", userId)
@@ -111,7 +118,8 @@ async function ensureMembership(orgId: string, userId: string): Promise<"owner" 
 
   const role = owner ? "agent" : "owner"
   try {
-    await db.insertInto("org_members")
+    await db
+      .insertInto("org_members")
       .values({ org_id: orgId, user_id: userId, role })
       .onConflict((oc) => oc.columns(["org_id", "user_id"]).doNothing())
       .execute()
@@ -120,7 +128,8 @@ async function ensureMembership(orgId: string, userId: string): Promise<"owner" 
     // Lost the owner race: someone else claimed the seat between the read
     // and the insert. Agent is the honest answer.
     if (isUniqueViolation(err) && role === "owner") {
-      await db.insertInto("org_members")
+      await db
+        .insertInto("org_members")
         .values({ org_id: orgId, user_id: userId, role: "agent" })
         .onConflict((oc) => oc.columns(["org_id", "user_id"]).doNothing())
         .execute()
@@ -165,11 +174,15 @@ async function main(): Promise<void> {
 
   console.log(`playground login ready: ${EMAIL} (${role} of "${ORG_NAME}")`)
   if (passwordChanged) {
-    console.log("note: the account already existed with a different password — sign in with the one you set")
+    console.log(
+      "note: the account already existed with a different password — sign in with the one you set",
+    )
   }
   console.log(`demo-page origins allowlisted: ${DEMO_ORIGINS.join(", ")}`)
   // The machine line the orchestrator's banner parses (playground-core.mjs).
-  console.log(`PLAYGROUND_RESULT ${JSON.stringify({ email: EMAIL, role, passwordChanged, orgId: org.id })}`)
+  console.log(
+    `PLAYGROUND_RESULT ${JSON.stringify({ email: EMAIL, role, passwordChanged, orgId: org.id })}`,
+  )
 
   await db.destroy()
 }

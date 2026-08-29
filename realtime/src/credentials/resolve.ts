@@ -60,9 +60,7 @@ async function loadCredential(
       role,
       provider: row.provider,
       apiKey:
-        row.key_ciphertext !== null
-          ? decryptProviderKey(row.key_ciphertext, row.id)
-          : undefined,
+        row.key_ciphertext !== null ? decryptProviderKey(row.key_ciphertext, row.id) : undefined,
       baseUrl: row.base_url ?? undefined,
       model: row.model ?? undefined,
     },

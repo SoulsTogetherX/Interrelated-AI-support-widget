@@ -13,12 +13,19 @@ async function main(): Promise<void> {
     if (embedder === null) throw new Error("no embedding credential resolved for the demo org")
     console.log(`resolved: model=${embedder.model} dim=${embedder.dim}`)
 
-    const texts = Array.from({ length: 8 }, (_, i) =>
-      `Fastify plugins and encapsulation, section ${i}. ` + "The framework provides a powerful plugin architecture with encapsulation contexts. ".repeat(6),
+    const texts = Array.from(
+      { length: 8 },
+      (_, i) =>
+        `Fastify plugins and encapsulation, section ${i}. ` +
+        "The framework provides a powerful plugin architecture with encapsulation contexts. ".repeat(
+          6,
+        ),
     )
     const started = Date.now()
     const vectors = await embedder.embed(texts, { task: "document" })
-    console.log(`OK: ${vectors.length} vectors of ${vectors[0]?.length}-d in ${Date.now() - started}ms`)
+    console.log(
+      `OK: ${vectors.length} vectors of ${vectors[0]?.length}-d in ${Date.now() - started}ms`,
+    )
   } catch (error) {
     console.log("FAILED — full error:")
     console.log(error instanceof Error ? error.message : String(error))

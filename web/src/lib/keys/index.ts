@@ -59,7 +59,14 @@
 //#region Imports
 import { sql } from "kysely"
 
-import { hashSecretKey, isId, newId, newPublishableKey, newSecretKey, secretKeySuffix } from "@shared/utils/ids"
+import {
+  hashSecretKey,
+  isId,
+  newId,
+  newPublishableKey,
+  newSecretKey,
+  secretKeySuffix,
+} from "@shared/utils/ids"
 
 import { db } from "@/lib/db"
 //#endregion
@@ -90,8 +97,7 @@ export interface PublishableKey {
 }
 
 export type RotationResult =
-  | { rotated: true; publishableKey: string; graceEndsAt: Date }
-  | { rotated: false }
+  { rotated: true; publishableKey: string; graceEndsAt: Date } | { rotated: false }
 
 /** The same standing rule, applied to a secret key. */
 export type SecretKeyStatus = PublishableKeyStatus
@@ -114,8 +120,7 @@ export interface SecretKey {
 /** The one and only time the plaintext exists outside the customer's own
  *  server: in this return value, on its way to the owner's screen. */
 export type SecretIssueResult =
-  | { issued: true; keyId: string; secretKey: string; suffix: string }
-  | { issued: false }
+  { issued: true; keyId: string; secretKey: string; suffix: string } | { issued: false }
 
 export type SecretRotationResult =
   | { rotated: true; keyId: string; secretKey: string; suffix: string; graceEndsAt: Date }
@@ -173,7 +178,10 @@ export async function listPublishableKeys(orgId: string): Promise<PublishableKey
  *  scoping is in the WHERE, so an owner of org A cannot rotate org B's key
  *  by posting its id, and the two failures are indistinguishable on
  *  purpose. */
-export async function rotatePublishableKey(orgId: string, fromKeyId: string): Promise<RotationResult> {
+export async function rotatePublishableKey(
+  orgId: string,
+  fromKeyId: string,
+): Promise<RotationResult> {
   if (!isId("key", fromKeyId)) {
     return { rotated: false }
   }
@@ -198,7 +206,8 @@ export async function rotatePublishableKey(orgId: string, fromKeyId: string): Pr
         org_id: orgId,
         kind: "public",
         public_id: publishableKey,
-        secret_hash: null, secret_suffix: null,
+        secret_hash: null,
+        secret_suffix: null,
       })
       .execute()
     // returning() types the column as Date | null; the SET just made it
@@ -272,7 +281,9 @@ export async function listSecretKeys(orgId: string): Promise<SecretKey[]> {
 const UNIQUE_VIOLATION = "23505"
 
 function isUniqueViolation(err: unknown): boolean {
-  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === UNIQUE_VIOLATION
+  return (
+    typeof err === "object" && err !== null && (err as { code?: unknown }).code === UNIQUE_VIOLATION
+  )
 }
 
 /** Issues the org's FIRST secret key (or its first since the last was
@@ -314,7 +325,10 @@ export async function issueSecretKey(orgId: string): Promise<SecretIssueResult> 
  *  key. The guarded UPDATE is the atomic claim (a second click finds the row
  *  already retiring and gets `rotated: false`); the new key is shown once,
  *  like the first. */
-export async function rotateSecretKey(orgId: string, fromKeyId: string): Promise<SecretRotationResult> {
+export async function rotateSecretKey(
+  orgId: string,
+  fromKeyId: string,
+): Promise<SecretRotationResult> {
   if (!isId("key", fromKeyId)) {
     return { rotated: false }
   }
@@ -365,10 +379,7 @@ export async function revokeSecretKeyNow(orgId: string, keyId: string): Promise<
     .where("id", "=", keyId)
     .where("org_id", "=", orgId)
     .where("kind", "=", "secret")
-    .where((eb) => eb.or([
-      eb("revoked_at", "is", null),
-      eb("revoked_at", ">", sql<Date>`NOW()`),
-    ]))
+    .where((eb) => eb.or([eb("revoked_at", "is", null), eb("revoked_at", ">", sql<Date>`NOW()`)]))
     .executeTakeFirst()
   return result.numUpdatedRows > 0n
 }

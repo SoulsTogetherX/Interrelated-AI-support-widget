@@ -11,13 +11,19 @@ import { buildPdf } from "@/ingest/__tests__/pdfFixtures"
 /** The contract EVERY parser is judged by (parsers/types.ts). Asserted on
  *  every document this suite produces, because an offset that drifts is a
  *  citation that deep-links into the wrong sentence. */
-function expectOffsetContract(doc: { text: string; blocks: Array<{ text: string; charStart: number; charEnd: number }> }): void {
+function expectOffsetContract(doc: {
+  text: string
+  blocks: Array<{ text: string; charStart: number; charEnd: number }>
+}): void {
   for (const block of doc.blocks) {
     expect(doc.text.slice(block.charStart, block.charEnd)).toBe(block.text)
   }
 }
 
-const asResource = (body: Buffer, overrides: Partial<{ url: string; contentType: string; charset: string | null }> = {}) => ({
+const asResource = (
+  body: Buffer,
+  overrides: Partial<{ url: string; contentType: string; charset: string | null }> = {},
+) => ({
   url: "https://docs.example.com/policy.pdf",
   contentType: "application/pdf",
   charset: null,
@@ -60,7 +66,16 @@ describe("parsePdf", () => {
     // fixture line of "" is dropped entirely, as asserted below), so a page
     // arrives as one run of lines and leaves as one block.
     const doc = await parsePdf(
-      buildPdf([{ lines: ["Refunds are processed within", "five business days of approval.", "", "Exceptions need a manager."] }]),
+      buildPdf([
+        {
+          lines: [
+            "Refunds are processed within",
+            "five business days of approval.",
+            "",
+            "Exceptions need a manager.",
+          ],
+        },
+      ]),
     )
     expect(doc.blocks).toHaveLength(1)
     expect(doc.blocks[0]?.text).toBe(
@@ -116,7 +131,9 @@ describe("parsePdf — refusals", () => {
   it("refuses bytes that are not a readable PDF, instead of hanging or guessing", async () => {
     const truncated = buildPdf([{ lines: ["Cut short."] }]).subarray(0, 250)
     await expect(parsePdf(truncated)).rejects.toThrow(PdfParseError)
-    await expect(parsePdf(Buffer.from("%PDF-1.4 and then nothing useful"))).rejects.toThrow(PdfParseError)
+    await expect(parsePdf(Buffer.from("%PDF-1.4 and then nothing useful"))).rejects.toThrow(
+      PdfParseError,
+    )
     await expect(parsePdf(Buffer.alloc(0))).rejects.toThrow(PdfParseError)
   })
 
@@ -125,7 +142,10 @@ describe("parsePdf — refusals", () => {
     // largest attack surface, and the input is the half that can be bounded
     // cheaply. Refused on size alone — the bytes here are a valid PDF
     // followed by padding, so only the cap can be what rejects it.
-    const padded = Buffer.concat([buildPdf([{ lines: ["Valid, but enormous."] }]), Buffer.alloc(10 * 1024 * 1024)])
+    const padded = Buffer.concat([
+      buildPdf([{ lines: ["Valid, but enormous."] }]),
+      Buffer.alloc(10 * 1024 * 1024),
+    ])
     await expect(parsePdf(padded)).rejects.toThrow(/larger than 10 MB/)
   })
 })
@@ -136,8 +156,12 @@ describe("parseResource — PDFs", () => {
   it("parses a PDF the server mislabels as text/plain (magic bytes decide)", async () => {
     // The detection order's whole purpose: mislabeled as text, this would
     // otherwise reach the markdown fallback and become paragraphs of binary.
-    const pdf = buildPdf([{ lines: ["Mislabeled but readable."] }], { info: { Title: "Mislabeled" } })
-    const doc = await parseResource(asResource(pdf, { contentType: "text/plain", charset: "utf-8" }))
+    const pdf = buildPdf([{ lines: ["Mislabeled but readable."] }], {
+      info: { Title: "Mislabeled" },
+    })
+    const doc = await parseResource(
+      asResource(pdf, { contentType: "text/plain", charset: "utf-8" }),
+    )
     expect(doc.title).toBe("Mislabeled")
     expect(doc.text).toBe("Mislabeled but readable.")
     expectOffsetContract(doc)
@@ -153,7 +177,10 @@ describe("parseResource — PDFs", () => {
 
   it("chunks end to end, the way the ingest worker will", async () => {
     const pdf = buildPdf(
-      [{ lines: ["Warranty Terms", "Coverage lasts twelve months from delivery."] }, { lines: ["Claims are filed online."] }],
+      [
+        { lines: ["Warranty Terms", "Coverage lasts twelve months from delivery."] },
+        { lines: ["Claims are filed online."] },
+      ],
       { info: { Title: "Warranty" } },
     )
     const doc = await parseResource(asResource(pdf))
@@ -162,7 +189,7 @@ describe("parseResource — PDFs", () => {
     // Every chunk's span still points at its own text in the document — the
     // property that makes a citation deep-link truthfully.
     for (const chunk of chunks) {
-      expect(doc.text.slice(chunk.charStart, chunk.charEnd)).toContain(chunk.text.split("\n\n")[0] as string)
+      expect(doc.text.slice(chunk.charStart, chunk.charEnd)).toContain(chunk.text.split("\n\n")[0])
     }
     expect(chunks.map((c) => c.text).join(" ")).toContain("Coverage lasts twelve months")
   })

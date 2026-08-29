@@ -34,7 +34,13 @@ describe("Histogram", () => {
     const histogram = new Histogram()
     for (const value of [10, 20, 30, 40]) histogram.record(value)
     expect(histogram.summary()).toEqual({
-      count: 4, min: 10, p50: 20, p95: 40, p99: 40, max: 40, mean: 25,
+      count: 4,
+      min: 10,
+      p50: 20,
+      p95: 40,
+      p99: 40,
+      max: 40,
+      mean: 25,
     })
   })
 

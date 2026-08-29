@@ -22,7 +22,12 @@
 class LLMHttpError extends Error {
   readonly status: number
   readonly retryAfterMs: number | null
-  constructor(options: { provider: string; status: number; detail: string; retryAfterMs?: number | null }) {
+  constructor(options: {
+    provider: string
+    status: number
+    detail: string
+    retryAfterMs?: number | null
+  }) {
     super(`${options.provider}: HTTP ${options.status}: ${options.detail}`)
     this.name = "LLMHttpError"
     this.status = options.status
@@ -73,7 +78,11 @@ async function postStream(options: {
     })
   }
   if (response.body === null) {
-    throw new LLMHttpError({ provider: options.provider, status: response.status, detail: "response has no body" })
+    throw new LLMHttpError({
+      provider: options.provider,
+      status: response.status,
+      detail: "response has no body",
+    })
   }
   return response.body
 }

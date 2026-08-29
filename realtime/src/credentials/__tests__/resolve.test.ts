@@ -65,7 +65,10 @@ beforeAll(async () => {
   orgId = newId("org")
   bareOrgId = newId("org")
   await db.insertInto("organizations").values({ id: orgId, name: "Resolve Suite" }).execute()
-  await db.insertInto("organizations").values({ id: bareOrgId, name: "Resolve Suite (bare)" }).execute()
+  await db
+    .insertInto("organizations")
+    .values({ id: bareOrgId, name: "Resolve Suite (bare)" })
+    .execute()
 })
 
 afterAll(async () => {
@@ -98,7 +101,13 @@ describe.skipIf(!DB_CONFIGURED)("credential resolution", () => {
 
   it("falls back to the adapter's default when the row names no model", async () => {
     await db.deleteFrom("org_provider_credentials").where("org_id", "=", orgId).execute()
-    await seedCredential({ orgId, role: "generation", provider: "anthropic", model: null, apiKey: TENANT_KEY })
+    await seedCredential({
+      orgId,
+      role: "generation",
+      provider: "anthropic",
+      model: null,
+      apiKey: TENANT_KEY,
+    })
     const provider = await resolveGenerationProvider(db, orgId)
     expect(provider!.model).toBe("claude-haiku-4-5-20251001")
   })
@@ -116,9 +125,15 @@ describe.skipIf(!DB_CONFIGURED)("credential resolution", () => {
     // the route, and a loud stop beats embedding a corpus with a provider
     // that has no embeddings endpoint.
     await seedCredential({
-      orgId, role: "embedding", provider: "anthropic", model: "claude-haiku-4-5-20251001",
-      apiKey: TENANT_KEY, dim: 768,
+      orgId,
+      role: "embedding",
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+      apiKey: TENANT_KEY,
+      dim: 768,
     })
-    await expect(resolveEmbeddingProvider(db, orgId)).rejects.toThrow(/anthropic has no embedding endpoint/)
+    await expect(resolveEmbeddingProvider(db, orgId)).rejects.toThrow(
+      /anthropic has no embedding endpoint/,
+    )
   })
 })

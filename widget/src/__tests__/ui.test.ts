@@ -26,7 +26,10 @@ function fakeClient(script: Array<AnswerEvent[] | Error>, stored: StoredHandoff 
   let hints = 0
   let handlers: HandoffHandlers | null = null
   let closed = false
-  let escalateResult: { status: string; created: boolean } | Error = { status: "pending", created: true }
+  let escalateResult: { status: string; created: boolean } | Error = {
+    status: "pending",
+    created: true,
+  }
   /** What send() answers — false is "not attached", the case where the UI
    *  must keep the visitor's text. */
   let sendable = true
@@ -60,17 +63,29 @@ function fakeClient(script: Array<AnswerEvent[] | Error>, stored: StoredHandoff 
           sent.push(text)
           return true
         },
-        hintTyping: () => { hints += 1 },
-        close: () => { closed = true },
+        hintTyping: () => {
+          hints += 1
+        },
+        close: () => {
+          closed = true
+        },
       }
     },
-    rememberHandoff: (conversationId, panelOpen) => { bookmarks.push({ conversationId, panelOpen }) },
-    forgetHandoff: () => { bookmarks.push(null) },
+    rememberHandoff: (conversationId, panelOpen) => {
+      bookmarks.push({ conversationId, panelOpen })
+    },
+    forgetHandoff: () => {
+      bookmarks.push(null)
+    },
     storedHandoff: () => stored,
   }
 
   return {
-    client, askCalls, escalateCalls, sent, opened,
+    client,
+    askCalls,
+    escalateCalls,
+    sent,
+    opened,
     /** Every bookmark write in order — an object for remember, null for
      *  forget — so a test can assert what the NEXT page load will find. */
     bookmarks,
@@ -83,8 +98,12 @@ function fakeClient(script: Array<AnswerEvent[] | Error>, stored: StoredHandoff 
       if (handlers === null) throw new Error("handoff was never opened")
       return handlers
     },
-    setEscalateResult: (result: { status: string; created: boolean } | Error) => { escalateResult = result },
-    setSendable: (value: boolean) => { sendable = value },
+    setEscalateResult: (result: { status: string; created: boolean } | Error) => {
+      escalateResult = result
+    },
+    setSendable: (value: boolean) => {
+      sendable = value
+    },
   }
 }
 
@@ -167,7 +186,8 @@ describe("mountWidget", () => {
 
   it("renders the visitor question, then claims with citation links", async () => {
     const claim: AnswerEvent = {
-      type: "claim", ord: 0,
+      type: "claim",
+      ord: 0,
       text: "Refunds take five business days.",
       url: "https://docs.example.com/refunds",
       headingPath: "Billing > Refunds",
@@ -187,7 +207,10 @@ describe("mountWidget", () => {
   })
 
   it("threads the conversation id from meta into the NEXT question", async () => {
-    const { client, askCalls } = fakeClient([[META, DONE], [META, DONE]])
+    const { client, askCalls } = fakeClient([
+      [META, DONE],
+      [META, DONE],
+    ])
     mountWidget(host, client)
     query<HTMLButtonElement>(".bubble").click()
     await askThrough("first")
@@ -198,9 +221,11 @@ describe("mountWidget", () => {
 
   it("never uses claim text as markup — the XSS probe renders inert", async () => {
     const hostile: AnswerEvent = {
-      type: "claim", ord: 0,
+      type: "claim",
+      ord: 0,
       text: '<img src=x onerror="window.__pwned=1"> <b>bold?</b>',
-      url: null, headingPath: null,
+      url: null,
+      headingPath: null,
     }
     const { client } = fakeClient([[META, hostile, DONE]])
     mountWidget(host, client)
@@ -215,7 +240,11 @@ describe("mountWidget", () => {
 
   it("drops citation links with non-http(s) schemes but keeps the claim text", async () => {
     const sneaky: AnswerEvent = {
-      type: "claim", ord: 0, text: "Click here.", url: "javascript:alert(1)", headingPath: "Docs",
+      type: "claim",
+      ord: 0,
+      text: "Click here.",
+      url: "javascript:alert(1)",
+      headingPath: "Docs",
     }
     const { client } = fakeClient([[META, sneaky, DONE]])
     mountWidget(host, client)
@@ -235,7 +264,7 @@ describe("mountWidget", () => {
     // positional selector would be asserting the offer's absence by
     // accident.
     const bubbles = shadow().querySelectorAll(".msg.assistant")
-    expect(bubbles[bubbles.length - 1]!.textContent).toContain("I don't know that one.")
+    expect(bubbles[bubbles.length - 1].textContent).toContain("I don't know that one.")
   })
 
   it("renders the three failure shapes distinctly: error event, quota, rate limit", async () => {
@@ -259,7 +288,10 @@ describe("mountWidget", () => {
 
   //#region Handoff (M4.4)
   it("offers a person only after a refusal, and only one offer at a time", async () => {
-    const fake = fakeClient([[META, REFUSAL, NO_CLAIMS], [META, REFUSAL, NO_CLAIMS]])
+    const fake = fakeClient([
+      [META, REFUSAL, NO_CLAIMS],
+      [META, REFUSAL, NO_CLAIMS],
+    ])
     mountWidget(host, fake.client)
     query<HTMLButtonElement>(".bubble").click()
 
@@ -291,12 +323,22 @@ describe("mountWidget", () => {
     // the source of truth, and the bot's own turns are part of it.
     fake.server().onHistory([
       { id: "msg_1", role: "visitor", text: "something obscure", at: "2026-01-01T00:00:00.000Z" },
-      { id: "msg_2", role: "assistant", text: "I don't know that one.", at: "2026-01-01T00:00:01.000Z" },
+      {
+        id: "msg_2",
+        role: "assistant",
+        text: "I don't know that one.",
+        at: "2026-01-01T00:00:01.000Z",
+      },
     ])
     expect(shadow().querySelectorAll(".msg")).toHaveLength(2)
     expect(query(".msg.assistant").textContent).toContain("I don't know that one.")
 
-    fake.server().onMessage({ id: "msg_3", role: "agent", text: "Hi, I can help.", at: "2026-01-01T00:00:02.000Z" })
+    fake.server().onMessage({
+      id: "msg_3",
+      role: "agent",
+      text: "Hi, I can help.",
+      at: "2026-01-01T00:00:02.000Z",
+    })
     expect(query(".msg.agent").textContent).toContain("Hi, I can help.")
 
     fake.server().onTyping(true)
@@ -346,7 +388,10 @@ describe("mountWidget", () => {
   })
 
   it("hands the conversation back to the assistant when the handoff ends", async () => {
-    const fake = fakeClient([[META, REFUSAL, NO_CLAIMS], [META, DONE]])
+    const fake = fakeClient([
+      [META, REFUSAL, NO_CLAIMS],
+      [META, DONE],
+    ])
     mountWidget(host, fake.client)
     await escalateThrough(fake)
 
@@ -361,7 +406,10 @@ describe("mountWidget", () => {
   })
 
   it("returns the conversation to the assistant when the agent closes it", async () => {
-    const fake = fakeClient([[META, REFUSAL, NO_CLAIMS], [META, DONE]])
+    const fake = fakeClient([
+      [META, REFUSAL, NO_CLAIMS],
+      [META, DONE],
+    ])
     mountWidget(host, fake.client)
     await escalateThrough(fake)
 
@@ -385,7 +433,8 @@ describe("mountWidget", () => {
     await escalateThrough(fake)
 
     fake.server().onMessage({
-      id: "msg_x", role: "agent",
+      id: "msg_x",
+      role: "agent",
       text: '<img src=x onerror="window.__pwned_socket=1">',
       at: "2026-01-01T00:00:03.000Z",
     })
@@ -397,7 +446,12 @@ describe("mountWidget", () => {
 
   //#region Rejoin across a page load (M7.4)
   const STORED: StoredHandoff = { conversationId: "con_stored", panelOpen: true }
-  const AGENT_HELLO = { id: "msg_a1", role: "agent" as const, text: "Hello, still here?", at: "2026-01-01T00:00:05.000Z" }
+  const AGENT_HELLO = {
+    id: "msg_a1",
+    role: "agent" as const,
+    text: "Hello, still here?",
+    at: "2026-01-01T00:00:05.000Z",
+  }
 
   it("bookmarks a handoff on entering, follows the panel, and forgets it on ending — never the bot's thread", async () => {
     const fake = fakeClient([[META, REFUSAL, NO_CLAIMS]])
@@ -453,8 +507,18 @@ describe("mountWidget", () => {
     expect(fake.lastBookmark()).toEqual({ conversationId: "con_stored", panelOpen: true })
 
     fake.server().onHistory([
-      { id: "msg_1", role: "visitor", text: "my invoice is wrong", at: "2026-01-01T00:00:00.000Z" },
-      { id: "msg_2", role: "assistant", text: "I don't know that one.", at: "2026-01-01T00:00:01.000Z" },
+      {
+        id: "msg_1",
+        role: "visitor",
+        text: "my invoice is wrong",
+        at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "msg_2",
+        role: "assistant",
+        text: "I don't know that one.",
+        at: "2026-01-01T00:00:01.000Z",
+      },
       AGENT_HELLO,
     ])
     expect(shadow().querySelectorAll(".msg")).toHaveLength(3)
@@ -480,11 +544,18 @@ describe("mountWidget", () => {
     // The replayed backlog is not news, and neither is the visitor's own
     // echo from another tab.
     fake.server().onHistory([AGENT_HELLO])
-    fake.server().onMessage({ id: "msg_v", role: "visitor", text: "one sec", at: "2026-01-01T00:00:06.000Z" })
+    fake
+      .server()
+      .onMessage({ id: "msg_v", role: "visitor", text: "one sec", at: "2026-01-01T00:00:06.000Z" })
     expect(query(".bubble").classList.contains("unread")).toBe(false)
 
     // A person writing while the panel is closed is.
-    fake.server().onMessage({ id: "msg_a2", role: "agent", text: "Take your time.", at: "2026-01-01T00:00:07.000Z" })
+    fake.server().onMessage({
+      id: "msg_a2",
+      role: "agent",
+      text: "Take your time.",
+      at: "2026-01-01T00:00:07.000Z",
+    })
     expect(query(".bubble").classList.contains("unread")).toBe(true)
     expect(query(".bubble").getAttribute("aria-label")).toContain("new message")
 
@@ -525,10 +596,15 @@ describe("mountWidget", () => {
   it("gives up on an unconfirmed rejoin after the timeout and KEEPS the bookmark for the next page", async () => {
     vi.useFakeTimers()
     try {
-      const fake = fakeClient([[
-        { type: "meta", conversationId: "con_stored", messageId: "msg_q" },
-        { type: "handoff", status: "pending" },
-      ]], STORED)
+      const fake = fakeClient(
+        [
+          [
+            { type: "meta", conversationId: "con_stored", messageId: "msg_q" },
+            { type: "handoff", status: "pending" },
+          ],
+        ],
+        STORED,
+      )
       mountWidget(host, fake.client)
       fake.server().onStatus("connecting")
       // The server never answers (an outage at load, or a mint that keeps
@@ -560,10 +636,15 @@ describe("mountWidget", () => {
     // The stored id is adopted at once, so the question joins the same
     // thread — where a person owning it answers as `handoff` (§3.23), which
     // enterHandoff leaves to the socket already probing.
-    const fake = fakeClient([[
-      { type: "meta", conversationId: "con_stored", messageId: "msg_q" },
-      { type: "handoff", status: "active" },
-    ]], STORED)
+    const fake = fakeClient(
+      [
+        [
+          { type: "meta", conversationId: "con_stored", messageId: "msg_q" },
+          { type: "handoff", status: "active" },
+        ],
+      ],
+      STORED,
+    )
     mountWidget(host, fake.client)
     query<HTMLButtonElement>(".bubble").click()
     await askThrough("hello?")
@@ -579,7 +660,10 @@ describe("mountWidget", () => {
   })
 
   it("does not stack status lines: a handoff after the last one ended replaces the line", async () => {
-    const fake = fakeClient([[META, REFUSAL, NO_CLAIMS], [META, REFUSAL, NO_CLAIMS]])
+    const fake = fakeClient([
+      [META, REFUSAL, NO_CLAIMS],
+      [META, REFUSAL, NO_CLAIMS],
+    ])
     mountWidget(host, fake.client)
     await escalateThrough(fake)
     fake.server().onStatus("ended")

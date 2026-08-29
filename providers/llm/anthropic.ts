@@ -140,7 +140,8 @@ class AnthropicProvider implements LLMProvider {
             tools: [
               {
                 name: ANSWER_TOOL_NAME,
-                description: "Return the answer as structured claims. This is the only way to reply.",
+                description:
+                  "Return the answer as structured claims. This is the only way to reply.",
                 input_schema: request.responseSchema,
               },
             ],
@@ -187,7 +188,8 @@ class AnthropicProvider implements LLMProvider {
         event = JSON.parse(data) as AnthropicStreamEvent
       } catch {
         throw new LLMHttpError({
-          provider: "anthropic", status: 200,
+          provider: "anthropic",
+          status: 200,
           detail: `stream carried a non-JSON data line: ${data.slice(0, 120)}`,
         })
       }
@@ -226,8 +228,10 @@ class AnthropicProvider implements LLMProvider {
             // concatenation IS the response text the contract promises.
             yield { type: "delta", text: delta.partial_json }
           } else if (
-            typeof delta?.text === "string" && delta.text.length > 0 &&
-            !inToolBlock && !structured
+            typeof delta?.text === "string" &&
+            delta.text.length > 0 &&
+            !inToolBlock &&
+            !structured
           ) {
             yield { type: "delta", text: delta.text }
           }
@@ -249,7 +253,8 @@ class AnthropicProvider implements LLMProvider {
                   : "other"
           }
           // Cumulative, so the last one wins rather than summing.
-          if (typeof event.usage?.output_tokens === "number") outputTokens = event.usage.output_tokens
+          if (typeof event.usage?.output_tokens === "number")
+            outputTokens = event.usage.output_tokens
           break
         }
         default:

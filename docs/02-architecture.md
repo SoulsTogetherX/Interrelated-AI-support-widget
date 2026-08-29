@@ -55,19 +55,19 @@ Two ideas organize everything:
 
 ## Repo layout
 
-| Directory | What it is | Runtime deps |
-|---|---|---|
-| `realtime/` | The Express data plane. Owns schema, migrations, ingest, retrieval, answering, sockets. | `express`, `pg`+`kysely`, `undici`, `htmlparser2`, `ws`, `unpdf` |
-| `web/` | The Next.js dashboard. | `next`, `react`, `pg`+`kysely` |
-| `widget/` | The embeddable chat bubble. Vanilla TS → one 6.5 KB gzipped IIFE. | **zero** |
-| `shared/` | Code both sides must agree on: wire protocols, the claims contract + verifier, the chunker, RRF, DB types, plan/pricing tables, id formats. No package.json, no build step — consumers compile it via the `@shared/*` alias. | **zero** |
-| `providers/` | The `LLMProvider` / `EmbeddingProvider` interfaces and all adapters. Same no-package pattern. | zero (heavy deps load dynamically) |
-| `eval/` | The measurement assets: frozen corpus, golden set, scorers, published results. | — |
-| `loadtest/` | The WebSocket load harness + published results. | — |
-| `scripts/` | Zero-dependency `.mjs` probes: smoke, security, injection, widget-size, TTFT, playground. Run with no `npm install`. | — |
-| `database/` | The Postgres 18 + pgvector Docker image. | — |
+| Directory    | What it is                                                                                                                                                                                                                   | Runtime deps                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `realtime/`  | The Express data plane. Owns schema, migrations, ingest, retrieval, answering, sockets.                                                                                                                                      | `express`, `pg`+`kysely`, `undici`, `htmlparser2`, `ws`, `unpdf` |
+| `web/`       | The Next.js dashboard.                                                                                                                                                                                                       | `next`, `react`, `pg`+`kysely`                                   |
+| `widget/`    | The embeddable chat bubble. Vanilla TS → one 6.5 KB gzipped IIFE.                                                                                                                                                            | **zero**                                                         |
+| `shared/`    | Code both sides must agree on: wire protocols, the claims contract + verifier, the chunker, RRF, DB types, plan/pricing tables, id formats. No package.json, no build step — consumers compile it via the `@shared/*` alias. | **zero**                                                         |
+| `providers/` | The `LLMProvider` / `EmbeddingProvider` interfaces and all adapters. Same no-package pattern.                                                                                                                                | zero (heavy deps load dynamically)                               |
+| `eval/`      | The measurement assets: frozen corpus, golden set, scorers, published results.                                                                                                                                               | —                                                                |
+| `loadtest/`  | The WebSocket load harness + published results.                                                                                                                                                                              | —                                                                |
+| `scripts/`   | Zero-dependency `.mjs` probes: smoke, security, injection, widget-size, TTFT, playground. Run with no `npm install`.                                                                                                         | —                                                                |
+| `database/`  | The Postgres 18 + pgvector Docker image.                                                                                                                                                                                     | —                                                                |
 
-This is a *flat* layout joined by TypeScript path aliases — deliberately not
+This is a _flat_ layout joined by TypeScript path aliases — deliberately not
 a monorepo tool. (§2.1)
 
 ## The provider layer (`providers/`)
@@ -83,14 +83,14 @@ backends:
   question vs. a document should be embedded from different "sides" of an
   asymmetric model. (§2.4.5a)
 
-| Provider | Kind | Structured-output mechanism |
-|---|---|---|
-| `mock` | scripted / context-quoting | exact by construction (drives all keyless stacks and CI) |
-| Groq | preset of the generic adapter | `json_object` — "please emit JSON" |
-| OpenAI-compatible | generic (OpenRouter, Together, vLLM, LM Studio, xAI…) | `json_object` |
-| Gemini | native | **server-side JSON-schema enforcement** (`responseJsonSchema`) |
-| Ollama | native (self-hosted) | full-schema `format` constraint |
-| Anthropic | native | **forced tool call** whose input schema is the claims contract |
+| Provider          | Kind                                                  | Structured-output mechanism                                    |
+| ----------------- | ----------------------------------------------------- | -------------------------------------------------------------- |
+| `mock`            | scripted / context-quoting                            | exact by construction (drives all keyless stacks and CI)       |
+| Groq              | preset of the generic adapter                         | `json_object` — "please emit JSON"                             |
+| OpenAI-compatible | generic (OpenRouter, Together, vLLM, LM Studio, xAI…) | `json_object`                                                  |
+| Gemini            | native                                                | **server-side JSON-schema enforcement** (`responseJsonSchema`) |
+| Ollama            | native (self-hosted)                                  | full-schema `format` constraint                                |
+| Anthropic         | native                                                | **forced tool call** whose input schema is the claims contract |
 
 Four genuinely different mechanisms is why "schema violations per model" is
 an interesting metric rather than a constant zero. The pipeline validates
@@ -103,7 +103,7 @@ OpenAI-compatible, and Ollama. (§2.4.5f–n, §2.4.5j–m)
 
 About twenty tables, in groups (§3.3):
 
-- **Tenancy & auth**: `organizations` (with a `plan` column that *is* the
+- **Tenancy & auth**: `organizations` (with a `plan` column that _is_ the
   entitlement), `users` (emails AES-GCM-encrypted with a blind index for
   lookup), `org_members`, `sessions` (rows store only the sha256 of the
   cookie token), `api_keys` (publishable + secret widget keys; revocation by
@@ -114,11 +114,11 @@ About twenty tables, in groups (§3.3):
   uploaded files — the bytes are never stored).
 - **Chat**: `conversations` → `messages` → `message_citations` (one verdict
   per claim, stripped ones included). Citations **snapshot** what they cite
-  (URL, heading, quote) with deliberately *no* foreign key to `chunks`,
+  (URL, heading, quote) with deliberately _no_ foreign key to `chunks`,
   because chunks are mutable pipeline state and transcripts are immutable
   history — a re-crawl must never rot a transcript. (§3.3.2)
 - **Handoff**: `handoff_sessions` — one row per escalation, with a partial
-  unique index that makes double-escalation *unrepresentable*.
+  unique index that makes double-escalation _unrepresentable_.
 - **Ops**: `org_provider_credentials` (the encrypted vault),
   `usage_daily` (per-org counters read before every model call),
   `origin_daily` (traffic per origin), `subscriptions` + `stripe_events`
@@ -133,7 +133,7 @@ Three vector-storage decisions carry the retrieval layer (§3.3.1):
    vectors are different spaces; HNSW (unlike IVFFlat) builds incrementally
    under continuous ingest.
 3. **`org_id` denormalized onto `chunk_embeddings` + pgvector iterative
-   scans** — HNSW searches *then* filters, so without this a small tenant
+   scans** — HNSW searches _then_ filters, so without this a small tenant
    inside a big shared index silently gets fewer than k results. Measured:
    turning iterative scans off costs 52.5 points of recall at 16 tenants.
 
@@ -143,12 +143,12 @@ The pipeline is strictly layered; each layer is testable alone (§3.10):
 
 - **`safeFetch`** — every crawl fetch goes through an SSRF-guarded HTTP
   client: URLs are vetted (scheme, no embedded credentials, all DNS answers
-  publicly routable), the *connect-time* address is re-checked (defeats DNS
+  publicly routable), the _connect-time_ address is re-checked (defeats DNS
   rebinding), redirects are followed manually so each hop is re-vetted, and
   bodies are size-capped while streaming. Crawl targets are user-supplied
   URLs this server then fetches — the textbook SSRF shape.
 - **`robots.ts`** — a hand-written RFC 9309 implementation. Disallowed pages
-  are skipped *and recorded with the rule that decided it*, so the dashboard
+  are skipped _and recorded with the rule that decided it_, so the dashboard
   can show a tenant exactly why a page is missing.
 - **Parsers** (markdown, HTML, PDF) — all honor one contract:
   `block.text === canonicalText.slice(charStart, charEnd)`. Those offsets
@@ -172,9 +172,9 @@ Measured: embedding is ~98% of ingest wall-clock; everything else sustains
 Two arms run concurrently, then fuse (§3.12):
 
 - **Dense**: cosine nearest-neighbor over the per-model HNSW index — finds
-  *paraphrases* ("how do I undo a payment" → the refunds page).
+  _paraphrases_ ("how do I undo a payment" → the refunds page).
 - **Lexical**: Postgres full-text search (`ts_rank_cd` over a generated
-  `tsv` column) — finds *exact terms* ("ERR_STREAM_PREMATURE_CLOSE").
+  `tsv` column) — finds _exact terms_ ("ERR_STREAM_PREMATURE_CLOSE").
 - **Fusion**: Reciprocal Rank Fusion — each arm contributes `1/(60+rank)`
   per chunk; scores on incomparable scales are never mixed, only ranks.
   Hand-written, ~20 lines. (§2.4.3)
@@ -228,20 +228,20 @@ The snippet is public by design (a publishable key is the same category as
 a Stripe publishable key). What stops abuse (§3.17–3.18, README "trust
 model"):
 
-| # | Layer | What it stops |
-|---|---|---|
-| 1 | Server-enforced **origin allowlist** (browsers can't forge `Origin`) | The copy-pasted-snippet attack, outright |
-| 2 | **Session tokens** — the pk is spent once at bubble-open for a 30-min HMAC token bound to org+origin+visitor | Key use as a per-message bearer credential |
-| 3 | **Rate limits + daily caps** — per-IP and per-visitor token buckets, plus a per-org daily answer ceiling checked *before* the model call | Scripted abuse (curl forges Origin; this layer is what actually bounds it) |
-| 4 | **Per-origin analytics** — every mint counted per origin per day, refused ones included | Makes unauthorized use *visible* (the dashboard shows "your snippet loaded 340× from thief.example") |
-| 5 | **One-click key rotation** with a 24 h grace window | Makes rotation routine instead of an outage |
-| 6 | **Secret-key sessions** ("strong mode") — the customer's backend mints sessions for its own signed-in users; nothing on the page is worth copying | The determined attacker, properly |
+| #   | Layer                                                                                                                                             | What it stops                                                                                        |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 1   | Server-enforced **origin allowlist** (browsers can't forge `Origin`)                                                                              | The copy-pasted-snippet attack, outright                                                             |
+| 2   | **Session tokens** — the pk is spent once at bubble-open for a 30-min HMAC token bound to org+origin+visitor                                      | Key use as a per-message bearer credential                                                           |
+| 3   | **Rate limits + daily caps** — per-IP and per-visitor token buckets, plus a per-org daily answer ceiling checked _before_ the model call          | Scripted abuse (curl forges Origin; this layer is what actually bounds it)                           |
+| 4   | **Per-origin analytics** — every mint counted per origin per day, refused ones included                                                           | Makes unauthorized use _visible_ (the dashboard shows "your snippet loaded 340× from thief.example") |
+| 5   | **One-click key rotation** with a 24 h grace window                                                                                               | Makes rotation routine instead of an outage                                                          |
+| 6   | **Secret-key sessions** ("strong mode") — the customer's backend mints sessions for its own signed-in users; nothing on the page is worth copying | The determined attacker, properly                                                                    |
 
 ## Human handoff
 
 When the bot refuses, the widget offers a person (§3.23–3.25, §2.4.7):
 
-- **Escalation** is idempotent *by schema* — a partial unique index allows
+- **Escalation** is idempotent _by schema_ — a partial unique index allows
   one open handoff per conversation, so button-mashing and races resolve in
   Postgres, not application code.
 - **Sockets authenticate at upgrade** via a 60-second, single-use ticket
@@ -267,16 +267,16 @@ hashing, HIBP breached-password screening, emails AES-GCM-encrypted at rest
 with a slow-KDF blind index, hashed session tokens in an httpOnly cookie.
 The pages, all under `/dashboard/[orgId]` after org selection (§9):
 
-| Page | What it does |
-|---|---|
-| Overview | Plan, today's usage meter, publishable-key card with rotation, secret-key card |
-| Providers | Paste/Test/Save generation + embedding credentials (the vault) |
-| Sources | Connect crawls/sitemaps, upload files, re-crawl, delete; per-page skip reasons |
+| Page             | What it does                                                                                       |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| Overview         | Plan, today's usage meter, publishable-key card with rotation, secret-key card                     |
+| Providers        | Paste/Test/Save generation + embedding credentials (the vault)                                     |
+| Sources          | Connect crawls/sitemaps, upload files, re-crawl, delete; per-page skip reasons                     |
 | Widget (install) | Allowlist manager, the snippet, exact CSP directives, per-origin traffic table, strong-mode recipe |
-| Conversations | Transcripts with **every claim's verdict, stripped ones included** |
-| Inbox | The live handoff queue + chat view (the agent end of the socket) |
-| Metrics | Deflection, strip rate, latency percentiles, per-model table, cost |
-| Billing | Stripe test-mode checkout + portal |
+| Conversations    | Transcripts with **every claim's verdict, stripped ones included**                                 |
+| Inbox            | The live handoff queue + chat view (the agent end of the socket)                                   |
+| Metrics          | Deflection, strip rate, latency percentiles, per-model table, cost                                 |
+| Billing          | Stripe test-mode checkout + portal                                                                 |
 
 The dashboard never touches tenant provider keys at rest: writes go through
 a shared-secret internal API on realtime (the only surface that can encrypt
@@ -290,10 +290,10 @@ into the vault), reads return only a suffix. (§3.21–3.22, §9.8)
 - **Quotas are enforced pre-flight**: `usage_daily` counters are written in
   the same transaction as the answers they count and read as one
   primary-key lookup before every model call. A deployment override can
-  only *tighten* a plan, never widen it. (§3.26)
+  only _tighten_ a plan, never widen it. (§3.26)
 - **Billing** is Stripe test mode with a hand-rolled signature verifier and
   an event ledger keyed by Stripe's own event id (redelivery applies exactly
-  once *by schema*). Entitlement is a column, not a join — a billing outage
+  once _by schema_). Entitlement is a column, not a join — a billing outage
   can never reach the answer path. A live Stripe key is refused by name.
   (§3.3.7, §9.15)
 - **Metrics** are computed in SQL from columns the pipeline has written

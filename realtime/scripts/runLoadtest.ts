@@ -37,8 +37,8 @@ if (!process.env.POSTGRES_PASSWORD || !process.env.WIDGET_TOKEN_SECRET) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -69,7 +69,8 @@ function parseArgs(argv: string[]): Options {
     const value = argv[i + 1]
     const num = (): number => {
       const parsed = Number(value)
-      if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${flag} needs a positive number`)
+      if (!Number.isFinite(parsed) || parsed <= 0)
+        throw new Error(`${flag} needs a positive number`)
       i++
       return parsed
     }
@@ -77,15 +78,17 @@ function parseArgs(argv: string[]): Options {
     else if (flag === "--messages") options.messages = num()
     else if (flag === "--interval") options.intervalMs = num()
     else if (flag === "--drain") options.drainMs = num()
-    else if (flag === "--base" && value !== undefined) { options.base = value; i++ }
-    else if (flag === "--help") {
+    else if (flag === "--base" && value !== undefined) {
+      options.base = value
+      i++
+    } else if (flag === "--help") {
       console.log(
         "usage: npm run loadtest -- [--sessions 25] [--messages 10] [--interval 250]\n" +
-        "                          [--drain 2000] [--base http://localhost:3000]\n\n" +
-        "One session is one conversation: a visitor socket AND an agent socket.\n" +
-        "Requires a running realtime service started with the SAME\n" +
-        "WIDGET_TOKEN_SECRET this process reads (tickets are signed with a key\n" +
-        "derived from it), and POSTGRES_* pointing at that service's database.",
+          "                          [--drain 2000] [--base http://localhost:3000]\n\n" +
+          "One session is one conversation: a visitor socket AND an agent socket.\n" +
+          "Requires a running realtime service started with the SAME\n" +
+          "WIDGET_TOKEN_SECRET this process reads (tickets are signed with a key\n" +
+          "derived from it), and POSTGRES_* pointing at that service's database.",
       )
       process.exit(0)
     }
@@ -102,9 +105,9 @@ async function main(): Promise<void> {
   if (!secret || secret.length < 32) {
     console.error(
       "loadtest: WIDGET_TOKEN_SECRET must be set (≥32 chars) and must MATCH the\n" +
-      "running service — tickets are signed with a key derived from it, and an\n" +
-      "ephemeral server secret (the dev default when unset) would refuse every\n" +
-      "upgrade. Set it in .env and start realtime with it.",
+        "running service — tickets are signed with a key derived from it, and an\n" +
+        "ephemeral server secret (the dev default when unset) would refuse every\n" +
+        "upgrade. Set it in .env and start realtime with it.",
     )
     process.exit(1)
   }
@@ -130,18 +133,22 @@ async function main(): Promise<void> {
   try {
     console.log(
       `loadtest: ${options.sessions} sessions × ${options.messages} messages per side ` +
-      `every ${options.intervalMs}ms → ${wsBase}`,
+        `every ${options.intervalMs}ms → ${wsBase}`,
     )
 
     // ── Seed ───────────────────────────────────────────────────────────────
     await db.insertInto("organizations").values({ id: orgId, name: "Loadtest Org" }).execute()
-    await db.insertInto("users").values({
-      id: agentId,
-      email_index: `idx_${agentId}`,
-      email_ciphertext: "v1.loadtest",
-      password_hash: "scrypt$loadtest",
-    }).execute()
-    await db.insertInto("org_members")
+    await db
+      .insertInto("users")
+      .values({
+        id: agentId,
+        email_index: `idx_${agentId}`,
+        email_ciphertext: "v1.loadtest",
+        password_hash: "scrypt$loadtest",
+      })
+      .execute()
+    await db
+      .insertInto("org_members")
       .values({ org_id: orgId, user_id: agentId, role: "agent" })
       .execute()
 
@@ -152,14 +159,17 @@ async function main(): Promise<void> {
       visitor_id: `vis_load_${i}`,
     }))
     await db.insertInto("conversations").values(conversations).execute()
-    await db.insertInto("handoff_sessions").values(
-      conversations.map((conversation) => ({
-        id: newId("hnd"),
-        org_id: orgId,
-        conversation_id: conversation.id,
-        reason: "visitor_request" as const,
-      })),
-    ).execute()
+    await db
+      .insertInto("handoff_sessions")
+      .values(
+        conversations.map((conversation) => ({
+          id: newId("hnd"),
+          org_id: orgId,
+          conversation_id: conversation.id,
+          reason: "visitor_request" as const,
+        })),
+      )
+      .execute()
 
     for (const conversation of conversations) {
       sessions.push({
@@ -191,14 +201,16 @@ async function main(): Promise<void> {
     const seconds = result.elapsedMs / 1000
     console.log("")
     console.log(`concurrent sockets sustained : ${result.connected}`)
-    console.log(`messages persisted+broadcast : ${totalMessages} in ${seconds.toFixed(1)}s ` +
-      `(${(totalMessages / seconds).toFixed(0)}/s)`)
+    console.log(
+      `messages persisted+broadcast : ${totalMessages} in ${seconds.toFixed(1)}s ` +
+        `(${(totalMessages / seconds).toFixed(0)}/s)`,
+    )
     // "unfinished", not "dropped": past the knee these are messages still in
     // the queue when the drain window expired — the sockets were open and no
     // error was raised, so calling them lost would overstate what happened.
     console.log(
       `unfinished at drain / send errors / socket errors: ` +
-      `${result.lost} / ${result.sendErrors} / ${result.socketErrors}`,
+        `${result.lost} / ${result.sendErrors} / ${result.socketErrors}`,
     )
     console.log("")
     console.log(formatSummary("connect (ready+history)", result.connect.summary()))

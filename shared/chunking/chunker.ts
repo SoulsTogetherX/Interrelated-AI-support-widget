@@ -148,8 +148,8 @@ function chunkBlocks(blocks: readonly Block[], options: ChunkOptions = {}): Chun
       // Counted over the JOINED text (separators included) because that is
       // the exact string the embedding provider will see.
       tokenCount: approxTokens(text),
-      charStart: (pending[0] as Piece).charStart,
-      charEnd: (pending[pending.length - 1] as Piece).charEnd,
+      charStart: pending[0].charStart,
+      charEnd: pending[pending.length - 1].charEnd,
     })
     pending = []
     pendingTokens = 0
@@ -162,7 +162,10 @@ function chunkBlocks(blocks: readonly Block[], options: ChunkOptions = {}): Chun
       // previous h2 AND its h3 children), then push itself.
       flush()
       const level = block.level ?? 1
-      while (headingStack.length && (headingStack[headingStack.length - 1] as { level: number }).level >= level) {
+      while (
+        headingStack.length &&
+        (headingStack[headingStack.length - 1] as { level: number }).level >= level
+      ) {
         headingStack.pop()
       }
       headingStack.push({ level, text: block.text })

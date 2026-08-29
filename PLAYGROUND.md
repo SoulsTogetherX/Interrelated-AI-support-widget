@@ -77,7 +77,7 @@ Now open the dashboard at **http://localhost:3001**, sign in with the
 credentials the banner printed, and go to **Inbox**. Your escalation is
 waiting, sorted by who has waited longest.
 
-Open it. The conversation replays — *including what the bot already said*,
+Open it. The conversation replays — _including what the bot already said_,
 because that is what an arriving agent needs to read. Type a reply: it appears
 in the widget instantly over a WebSocket. Type in the widget: "Visitor is
 typing…" appears in the dashboard and expires on its own.
@@ -110,7 +110,7 @@ npm run ask -- "How do I make Fastify listen on all network interfaces?" --org "
 ```
 
 `--tamper` corrupts one quote before verification. The transcript will show it
-marked *stripped — quote not found in the cited source*.
+marked _stripped — quote not found in the cited source_.
 
 ### 4. Indexing your own documentation
 
@@ -127,8 +127,8 @@ For a site that refuses everything, try `https://www.reddit.com/` — it fails
 with `nothing crawlable — disallowed by robots.txt`, before a single page is
 fetched.
 
-**Upload a file.** Any PDF or Markdown file. The file is parsed *in the upload
-request*, so a refusal reaches you while the file is still in front of you —
+**Upload a file.** Any PDF or Markdown file. The file is parsed _in the upload
+request_, so a refusal reaches you while the file is still in front of you —
 try a scanned PDF and it will tell you it has no text layer and needs OCR
 rather than silently indexing an empty document. The bytes are never stored;
 the extracted text is.
@@ -169,7 +169,7 @@ worth reading rather than skimming:
   that the browser sends an `Origin` header that page JavaScript cannot forge,
   and an unlisted origin is refused before any database read. Try it: add
   `https://example.com` to the allowlist, then remove it, and watch the widget
-  keep working (its session was already minted) while a *new* session from
+  keep working (its session was already minted) while a _new_ session from
   that origin is refused.
 - **"Where your snippet loaded — last 7 days"**. Every session mint is counted
   per origin: allowed ones and refused ones. If somebody copies your snippet
@@ -181,7 +181,7 @@ On the **Overview** page, rotate the publishable key. The old one keeps
 working for 24 hours so a customer can redeploy without downtime — and
 "Revoke now" ends that window immediately. Generate a **secret key** too, and
 the Install page grows a fourth section: your own server mints widget sessions
-for users *it* has signed in, and the page carries no public key at all.
+for users _it_ has signed in, and the page carries no public key at all.
 
 To see that mode running, export the secret key and restart the fixture
 server; `http://localhost:4400/fixtures/strong.html` has no key in its source
@@ -219,15 +219,15 @@ the same public routes as everything above.
 
 Everything below assumes the playground is running (it uses the same database).
 
-| Command | What it does |
-|---|---|
-| `npm run playground -- --skip-seed` | Boot without re-seeding (much faster) |
-| `npm run ask -- "<question>" --org "Widget Demo Org"` | The whole answer pipeline from the CLI, printing tokens, cost and citations |
-| `npm run ask -- "<q>" --org "Widget Demo Org" --tamper` | Same, with one quote corrupted, to watch verification strip it |
-| `npm run search -- "<question>" --org "Widget Demo Org"` | Retrieval only: what the model would have been shown |
-| `npm run eval` | Score retrieval against the 80-question golden set |
-| `npm run tenant-scan` | Measure what multi-tenant iterative scans are worth |
-| `node scripts/smoke-test.mjs` | The probe CI runs against the shipped image |
+| Command                                                  | What it does                                                                |
+| -------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `npm run playground -- --skip-seed`                      | Boot without re-seeding (much faster)                                       |
+| `npm run ask -- "<question>" --org "Widget Demo Org"`    | The whole answer pipeline from the CLI, printing tokens, cost and citations |
+| `npm run ask -- "<q>" --org "Widget Demo Org" --tamper`  | Same, with one quote corrupted, to watch verification strip it              |
+| `npm run search -- "<question>" --org "Widget Demo Org"` | Retrieval only: what the model would have been shown                        |
+| `npm run eval`                                           | Score retrieval against the 80-question golden set                          |
+| `npm run tenant-scan`                                    | Measure what multi-tenant iterative scans are worth                         |
+| `node scripts/smoke-test.mjs`                            | The probe CI runs against the shipped image                                 |
 
 (The `npm run` entries above live in `realtime/`.)
 

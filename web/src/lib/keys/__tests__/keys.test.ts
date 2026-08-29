@@ -57,7 +57,7 @@ async function secondsUntilRevocation(keyId: string): Promise<number> {
     SELECT EXTRACT(EPOCH FROM (revoked_at - NOW()))::float8 AS seconds
     FROM api_keys WHERE id = ${keyId}
   `.execute(db)
-  return row.rows[0]!.seconds
+  return row.rows[0].seconds
 }
 
 async function currentKeys(orgId: string) {
@@ -78,7 +78,7 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
     orgB = b.orgId
     firstPk = a.publishableKey
     const [only] = await listPublishableKeys(orgA)
-    firstKeyId = only!.id
+    firstKeyId = only.id
   })
 
   afterAll(async () => {
@@ -108,8 +108,8 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
 
     const keys = await listPublishableKeys(orgA)
     expect(keys.map((k) => k.status)).toEqual(["current", "retiring"]) // newest first
-    expect(keys[0]!.publishableKey).toBe(result.publishableKey)
-    expect(keys[1]!.id).toBe(firstKeyId)
+    expect(keys[0].publishableKey).toBe(result.publishableKey)
+    expect(keys[1].id).toBe(firstKeyId)
     // The snippet page follows the current key immediately.
     expect(await getPublishableKey(orgA)).toBe(result.publishableKey)
 
@@ -120,7 +120,7 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
     expect(seconds).toBeGreaterThan(ROTATION_GRACE_HOURS * 3600 - 60)
     expect(seconds).toBeLessThanOrEqual(ROTATION_GRACE_HOURS * 3600)
     // …and the returned instant is that same row's value.
-    expect(keys[1]!.revokedAt?.getTime()).toBe(result.graceEndsAt.getTime())
+    expect(keys[1].revokedAt?.getTime()).toBe(result.graceEndsAt.getTime())
   })
 
   it("is idempotent per page view: rotating from a key that is no longer current writes nothing", async () => {
@@ -138,7 +138,7 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
     // this would produce up to five current keys.
     const [current] = await currentKeys(orgA)
     const results = await Promise.all(
-      Array.from({ length: 5 }, () => rotatePublishableKey(orgA, current!.id)),
+      Array.from({ length: 5 }, () => rotatePublishableKey(orgA, current.id)),
     )
     expect(results.filter((r) => r.rotated)).toHaveLength(1)
     expect(results.filter((r) => !r.rotated)).toHaveLength(4)
@@ -157,11 +157,13 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
     // The current key cannot be revoked by this path — the org must never be
     // left keyless by a click; the way to retire it is to rotate.
     expect(await revokePublishableKeyNow(orgA, current.id)).toBe(false)
-    expect((await listPublishableKeys(orgA)).find((k) => k.id === current.id)!.status).toBe("current")
+    expect((await listPublishableKeys(orgA)).find((k) => k.id === current.id)!.status).toBe(
+      "current",
+    )
 
     // A retiring key ends its window at once, on the database's clock.
-    expect(await revokePublishableKeyNow(orgA, retiring[0]!.id)).toBe(true)
-    const revoked = (await listPublishableKeys(orgA)).find((k) => k.id === retiring[0]!.id)!
+    expect(await revokePublishableKeyNow(orgA, retiring[0].id)).toBe(true)
+    const revoked = (await listPublishableKeys(orgA)).find((k) => k.id === retiring[0].id)!
     expect(revoked.status).toBe("revoked")
     expect(await secondsUntilRevocation(revoked.id)).toBeLessThanOrEqual(0)
 
@@ -172,7 +174,9 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
     expect(still.revokedAt?.getTime()).toBe(revoked.revokedAt?.getTime())
 
     // The other retiring key was not touched.
-    expect((await listPublishableKeys(orgA)).find((k) => k.id === retiring[1]!.id)!.status).toBe("retiring")
+    expect((await listPublishableKeys(orgA)).find((k) => k.id === retiring[1].id)!.status).toBe(
+      "retiring",
+    )
   })
 
   it("scopes both mutations to the org — another tenant's key id is a no-op", async () => {
@@ -181,10 +185,14 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
     const bBefore = await listPublishableKeys(orgB)
 
     // Org B naming org A's key ids: nothing happens to A, nothing to B.
-    expect(await rotatePublishableKey(orgB, aCurrent!.id)).toEqual({ rotated: false })
+    expect(await rotatePublishableKey(orgB, aCurrent.id)).toEqual({ rotated: false })
     expect(await revokePublishableKeyNow(orgB, aRetiring.id)).toBe(false)
-    expect((await listPublishableKeys(orgA)).find((k) => k.id === aCurrent!.id)!.status).toBe("current")
-    expect((await listPublishableKeys(orgA)).find((k) => k.id === aRetiring.id)!.status).toBe("retiring")
+    expect((await listPublishableKeys(orgA)).find((k) => k.id === aCurrent.id)!.status).toBe(
+      "current",
+    )
+    expect((await listPublishableKeys(orgA)).find((k) => k.id === aRetiring.id)!.status).toBe(
+      "retiring",
+    )
     expect(await listPublishableKeys(orgB)).toEqual(bBefore)
   })
 
@@ -198,7 +206,7 @@ describe.skipIf(!hasDb)("publishable key rotation (integration)", () => {
   it("lists another tenant's keys as their own, unaffected by A's history", async () => {
     const keys = await listPublishableKeys(orgB)
     expect(keys).toHaveLength(1)
-    expect(keys[0]!.status).toBe("current")
+    expect(keys[0].status).toBe("current")
   })
 })
 
@@ -239,12 +247,25 @@ describe.skipIf(!hasDb)("secret key lifecycle (integration, M7.3)", () => {
 
     // What the dashboard may know …
     const [key] = await listSecretKeys(orgS)
-    expect(key).toMatchObject({ id: firstSecretId, suffix: result.suffix, status: "current", revokedAt: null, lastUsedAt: null })
+    expect(key).toMatchObject({
+      id: firstSecretId,
+      suffix: result.suffix,
+      status: "current",
+      revokedAt: null,
+      lastUsedAt: null,
+    })
     // … and what the row actually holds: the sha256, and NOT the value.
-    const row = await db.selectFrom("api_keys")
+    const row = await db
+      .selectFrom("api_keys")
       .select(["kind", "public_id", "secret_hash", "secret_suffix"])
-      .where("id", "=", firstSecretId).executeTakeFirstOrThrow()
-    expect(row).toEqual({ kind: "secret", public_id: null, secret_hash: hashSecretKey(firstSecret), secret_suffix: result.suffix })
+      .where("id", "=", firstSecretId)
+      .executeTakeFirstOrThrow()
+    expect(row).toEqual({
+      kind: "secret",
+      public_id: null,
+      secret_hash: hashSecretKey(firstSecret),
+      secret_suffix: result.suffix,
+    })
     const dump = JSON.stringify(row)
     expect(dump).not.toContain(firstSecret)
     expect(dump).not.toContain(firstSecret.slice(8, 20))
@@ -269,13 +290,13 @@ describe.skipIf(!hasDb)("secret key lifecycle (integration, M7.3)", () => {
 
     const keys = await listSecretKeys(orgS)
     expect(keys.map((k) => k.status)).toEqual(["current", "retiring"]) // newest first
-    expect(keys[0]!.id).toBe(result.keyId)
-    expect(keys[0]!.suffix).toBe(result.suffix)
-    expect(keys[1]!.id).toBe(firstSecretId)
+    expect(keys[0].id).toBe(result.keyId)
+    expect(keys[0].suffix).toBe(result.suffix)
+    expect(keys[1].id).toBe(firstSecretId)
     const seconds = await secondsUntilRevocation(firstSecretId)
     expect(seconds).toBeGreaterThan(ROTATION_GRACE_HOURS * 3600 - 60)
     expect(seconds).toBeLessThanOrEqual(ROTATION_GRACE_HOURS * 3600)
-    expect(keys[1]!.revokedAt?.getTime()).toBe(result.graceEndsAt.getTime())
+    expect(keys[1].revokedAt?.getTime()).toBe(result.graceEndsAt.getTime())
   })
 
   it("is idempotent per page view: rotating from a key no longer current writes nothing", async () => {
@@ -286,7 +307,9 @@ describe.skipIf(!hasDb)("secret key lifecycle (integration, M7.3)", () => {
 
   it("resolves five concurrent rotations from one key into exactly one", async () => {
     const current = (await listSecretKeys(orgS)).find((k) => k.status === "current")!
-    const results = await Promise.all(Array.from({ length: 5 }, () => rotateSecretKey(orgS, current.id)))
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => rotateSecretKey(orgS, current.id)),
+    )
     expect(results.filter((r) => r.rotated)).toHaveLength(1)
     const keys = await listSecretKeys(orgS)
     expect(keys.filter((k) => k.status === "current")).toHaveLength(1)
@@ -301,14 +324,17 @@ describe.skipIf(!hasDb)("secret key lifecycle (integration, M7.3)", () => {
 
     // A retiring key ends its window at once, on the database's clock, and
     // revoking it again is a no-op that keeps the honest instant.
-    expect(await revokeSecretKeyNow(orgS, retiring[0]!.id)).toBe(true)
-    const revoked = (await listSecretKeys(orgS)).find((k) => k.id === retiring[0]!.id)!
+    expect(await revokeSecretKeyNow(orgS, retiring[0].id)).toBe(true)
+    const revoked = (await listSecretKeys(orgS)).find((k) => k.id === retiring[0].id)!
     expect(revoked.status).toBe("revoked")
     expect(await secondsUntilRevocation(revoked.id)).toBeLessThanOrEqual(0)
     expect(await revokeSecretKeyNow(orgS, revoked.id)).toBe(false)
-    expect((await listSecretKeys(orgS)).find((k) => k.id === revoked.id)!.revokedAt?.getTime())
-      .toBe(revoked.revokedAt?.getTime())
-    expect((await listSecretKeys(orgS)).find((k) => k.id === retiring[1]!.id)!.status).toBe("retiring")
+    expect(
+      (await listSecretKeys(orgS)).find((k) => k.id === revoked.id)!.revokedAt?.getTime(),
+    ).toBe(revoked.revokedAt?.getTime())
+    expect((await listSecretKeys(orgS)).find((k) => k.id === retiring[1].id)!.status).toBe(
+      "retiring",
+    )
 
     // The CURRENT secret key can be revoked outright: an org with none is
     // simply not using server-side sessions, which is a legitimate state
@@ -349,6 +375,8 @@ describe.skipIf(!hasDb)("secret key lifecycle (integration, M7.3)", () => {
     expect(await revokePublishableKeyNow(orgS, sCurrent.id)).toBe(false)
     expect(await revokeSecretKeyNow(orgS, pCurrent.id)).toBe(false)
     expect((await listSecretKeys(orgS)).find((k) => k.id === sCurrent.id)!.status).toBe("current")
-    expect((await listPublishableKeys(orgS)).find((k) => k.id === pCurrent.id)!.status).toBe("current")
+    expect((await listPublishableKeys(orgS)).find((k) => k.id === pCurrent.id)!.status).toBe(
+      "current",
+    )
   })
 })

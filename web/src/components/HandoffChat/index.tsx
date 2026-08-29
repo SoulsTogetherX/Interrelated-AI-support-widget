@@ -55,9 +55,8 @@ export default function HandoffChat({
   if (!apiBase) {
     return (
       <p className="handoff-setup">
-        This deployment has no <code>NEXT_PUBLIC_WIDGET_API_URL</code>, so the dashboard
-        does not know where the realtime service is. Set it to the widget API&apos;s public
-        URL and reload.
+        This deployment has no <code>NEXT_PUBLIC_WIDGET_API_URL</code>, so the dashboard does not
+        know where the realtime service is. Set it to the widget API&apos;s public URL and reload.
       </p>
     )
   }

@@ -22,22 +22,37 @@ async function daysAgo(n: number): Promise<string> {
   const r = await sql<{ d: string }>`
     SELECT ((NOW() AT TIME ZONE 'UTC')::date - make_interval(days => ${n}))::date::text AS d
   `.execute(db)
-  return r.rows[0]!.d
+  return r.rows[0].d
 }
 
-async function counter(orgId: string, day: string, origin: string, minted: number, refused: number) {
-  await db.insertInto("origin_daily").values({ org_id: orgId, day, origin, minted, refused }).execute()
+async function counter(
+  orgId: string,
+  day: string,
+  origin: string,
+  minted: number,
+  refused: number,
+) {
+  await db
+    .insertInto("origin_daily")
+    .values({ org_id: orgId, day, origin, minted, refused })
+    .execute()
 }
 
 describe.skipIf(!hasDb)("origin traffic (integration)", () => {
   beforeAll(async () => {
     orgA = newId("org")
     orgB = newId("org")
-    await db.insertInto("organizations").values([
-      { id: orgA, name: "Traffic Co" },
-      { id: orgB, name: "Other Tenant" },
-    ]).execute()
-    await db.insertInto("allowed_origins").values({ org_id: orgA, origin: "https://docs.acme.example" }).execute()
+    await db
+      .insertInto("organizations")
+      .values([
+        { id: orgA, name: "Traffic Co" },
+        { id: orgB, name: "Other Tenant" },
+      ])
+      .execute()
+    await db
+      .insertInto("allowed_origins")
+      .values({ org_id: orgA, origin: "https://docs.acme.example" })
+      .execute()
 
     const today = await daysAgo(0)
     const twoAgo = await daysAgo(2)
@@ -70,11 +85,11 @@ describe.skipIf(!hasDb)("origin traffic (integration)", () => {
   it("sums the window per origin, refused first, and flags what is allowlisted now", async () => {
     const rows = await listOriginTraffic(orgA, 7)
     expect(rows.map((r) => r.origin)).toEqual([
-      "(malformed)",                 // 9 refused
-      "https://thief.example",       // 7 refused
-      "null",                        // 2 refused
+      "(malformed)", // 9 refused
+      "https://thief.example", // 7 refused
+      "null", // 2 refused
       "https://staging.acme.example", // 1 refused
-      "https://docs.acme.example",   // 0 refused, 100 minted
+      "https://docs.acme.example", // 0 refused, 100 minted
     ])
     const thief = rows.find((r) => r.origin === "https://thief.example")!
     expect(thief).toMatchObject({ minted: 0, refused: 7, allowlisted: false })

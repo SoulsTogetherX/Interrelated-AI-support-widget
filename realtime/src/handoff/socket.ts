@@ -276,20 +276,25 @@ function createHandoffServer(options: HandoffServerOptions): {
       }
 
       wss.handleUpgrade(req, socket, head, (ws) => {
-        void onConnection(ws, {
-          socket: ws,
-          conversationId: payload.con,
-          orgId: payload.org,
-          role: payload.role,
-          subject: payload.sub,
-          alive: true,
-          // Buffering starts at construction, before the room join below —
-          // there must be no instant in which this attachment is in a room
-          // and unable to hold a message back.
-          pending: [],
-          typing: false,
-          typingRelayedAt: 0,
-        }, row.handoff_id, row.status)
+        void onConnection(
+          ws,
+          {
+            socket: ws,
+            conversationId: payload.con,
+            orgId: payload.org,
+            role: payload.role,
+            subject: payload.sub,
+            alive: true,
+            // Buffering starts at construction, before the room join below —
+            // there must be no instant in which this attachment is in a room
+            // and unable to hold a message back.
+            pending: [],
+            typing: false,
+            typingRelayedAt: 0,
+          },
+          row.handoff_id,
+          row.status,
+        )
       })
     })().catch((err) => {
       console.error("[handoff] upgrade failed:", err)
@@ -337,9 +342,14 @@ function createHandoffServer(options: HandoffServerOptions): {
     // is a millisecond the other members will not notice and buys every
     // client a deterministic opening sequence.
     await replay(attachment)
-    rooms.broadcast(attachment.conversationId, { type: "presence", ...rooms.presence(attachment.conversationId) })
+    rooms.broadcast(attachment.conversationId, {
+      type: "presence",
+      ...rooms.presence(attachment.conversationId),
+    })
 
-    ws.on("pong", () => { attachment.alive = true })
+    ws.on("pong", () => {
+      attachment.alive = true
+    })
     ws.on("message", (raw) => {
       // ws RawData is Buffer | ArrayBuffer | Buffer[]; only a plain Buffer
       // stringifies as text. A fragmented or ArrayBuffer frame would decode
@@ -360,10 +370,15 @@ function createHandoffServer(options: HandoffServerOptions): {
       // seconds later; saying so immediately is free and exact.
       if (attachment.typing) {
         rooms.broadcastExcept(attachment.conversationId, attachment, {
-          type: "typing", role: attachment.role, active: false,
+          type: "typing",
+          role: attachment.role,
+          active: false,
         })
       }
-      rooms.broadcast(attachment.conversationId, { type: "presence", ...rooms.presence(attachment.conversationId) })
+      rooms.broadcast(attachment.conversationId, {
+        type: "presence",
+        ...rooms.presence(attachment.conversationId),
+      })
     })
     ws.on("error", (err) => {
       console.error("[handoff] socket error:", err.message)
@@ -480,7 +495,10 @@ function createHandoffServer(options: HandoffServerOptions): {
     }
     const text = frame.text.trim()
     if (text.length === 0 || text.length > MAX_HANDOFF_MESSAGE_CHARS) {
-      send(attachment.socket, { type: "error", reason: `message must be 1-${MAX_HANDOFF_MESSAGE_CHARS} characters` })
+      send(attachment.socket, {
+        type: "error",
+        reason: `message must be 1-${MAX_HANDOFF_MESSAGE_CHARS} characters`,
+      })
       return
     }
 
@@ -500,16 +518,21 @@ function createHandoffServer(options: HandoffServerOptions): {
         // clock for both makes a reconnecting client's merged thread
         // ordered by construction, and matches the answer pipeline's rows,
         // which take the column default.
-        const inserted = await trx.insertInto("messages").values({
-          id,
-          conversation_id: attachment.conversationId,
-          org_id: attachment.orgId,
-          // The role comes from the TICKET, never from the frame — a client
-          // that could name its own role could impersonate an agent.
-          role: attachment.role,
-          content: text,
-        }).returning("created_at").executeTakeFirstOrThrow()
-        await trx.updateTable("conversations")
+        const inserted = await trx
+          .insertInto("messages")
+          .values({
+            id,
+            conversation_id: attachment.conversationId,
+            org_id: attachment.orgId,
+            // The role comes from the TICKET, never from the frame — a client
+            // that could name its own role could impersonate an agent.
+            role: attachment.role,
+            content: text,
+          })
+          .returning("created_at")
+          .executeTakeFirstOrThrow()
+        await trx
+          .updateTable("conversations")
           .set({ last_message_at: inserted.created_at })
           .where("id", "=", attachment.conversationId)
           .execute()
@@ -538,7 +561,9 @@ function createHandoffServer(options: HandoffServerOptions): {
       attachment.typing = false
       attachment.typingRelayedAt = Date.now()
       rooms.broadcastExcept(attachment.conversationId, attachment, {
-        type: "typing", role: attachment.role, active: false,
+        type: "typing",
+        role: attachment.role,
+        active: false,
       })
     }
   }
@@ -550,18 +575,19 @@ function createHandoffServer(options: HandoffServerOptions): {
   // through the ordinary path. Liveness lives on the Attachment rather than
   // on a property bolted to the ws object — the same object the library
   // owns — so there is one place that knows what a connection is.
-  const timer = heartbeatMs > 0
-    ? setInterval(() => {
-        for (const attachment of attachments) {
-          if (!attachment.alive) {
-            attachment.socket.terminate()
-            continue
+  const timer =
+    heartbeatMs > 0
+      ? setInterval(() => {
+          for (const attachment of attachments) {
+            if (!attachment.alive) {
+              attachment.socket.terminate()
+              continue
+            }
+            attachment.alive = false
+            attachment.socket.ping()
           }
-          attachment.alive = false
-          attachment.socket.ping()
-        }
-      }, heartbeatMs)
-    : null
+        }, heartbeatMs)
+      : null
   // unref so a live heartbeat never holds the process open during shutdown.
   timer?.unref()
   //#endregion

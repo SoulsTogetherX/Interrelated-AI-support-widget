@@ -9,7 +9,12 @@ import { RateLimiter } from "@/widget/rateLimit"
  *  unverified. */
 function clockAt(start: number) {
   let now = start
-  return { now: () => now, advance: (ms: number) => { now += ms } }
+  return {
+    now: () => now,
+    advance: (ms: number) => {
+      now += ms
+    },
+  }
 }
 //#endregion
 

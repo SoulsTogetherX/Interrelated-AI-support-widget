@@ -35,10 +35,10 @@ function groundedMockResponder(tamper = false): (request: LLMRequest) => MockLLM
     const user = request.messages.at(-1)?.content ?? ""
     const blocks = [...user.matchAll(/\[chunk (chk_[0-9a-z]{32}) \|[^\]]*\]\n([^\n]+)/g)]
     const claims = blocks.slice(0, 2).map(([, chunkId, firstLine], i) => {
-      const quote = (firstLine as string).slice(0, 90)
+      const quote = firstLine.slice(0, 90)
       return {
         text: `According to the documentation: ${quote}`,
-        chunkId: chunkId as string,
+        chunkId: chunkId,
         quote: tamper && i === 0 ? `${quote} (embellished)` : quote,
       }
     })

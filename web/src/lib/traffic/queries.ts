@@ -67,7 +67,11 @@ export async function listOriginTraffic(orgId: string, days = 7): Promise<Origin
       )`.as("allowlisted"),
     ])
     .where("org_id", "=", orgId)
-    .where("day", ">=", sql<string>`((NOW() AT TIME ZONE 'UTC')::date - make_interval(days => ${days - 1}))`)
+    .where(
+      "day",
+      ">=",
+      sql<string>`((NOW() AT TIME ZONE 'UTC')::date - make_interval(days => ${days - 1}))`,
+    )
     .groupBy(["origin_daily.org_id", "origin"])
     .orderBy(sql`sum(refused)`, "desc")
     .orderBy(sql`sum(minted)`, "desc")
@@ -94,7 +98,11 @@ export async function refusedSummary(orgId: string, days = 7): Promise<RefusedSu
       sql<string>`count(distinct origin) filter (where refused > 0)`.as("origins"),
     ])
     .where("org_id", "=", orgId)
-    .where("day", ">=", sql<string>`((NOW() AT TIME ZONE 'UTC')::date - make_interval(days => ${days - 1}))`)
+    .where(
+      "day",
+      ">=",
+      sql<string>`((NOW() AT TIME ZONE 'UTC')::date - make_interval(days => ${days - 1}))`,
+    )
     .executeTakeFirst()
   return { refused: Number(row?.refused ?? 0), origins: Number(row?.origins ?? 0) }
 }

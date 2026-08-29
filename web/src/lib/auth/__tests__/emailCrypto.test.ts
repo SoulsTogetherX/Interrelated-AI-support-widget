@@ -4,12 +4,7 @@
 // instrumentation.ts's job).
 import { describe, expect, it } from "vitest"
 
-import {
-  blindIndexEquals,
-  decryptEmail,
-  emailBlindIndex,
-  encryptEmail,
-} from "../emailCrypto"
+import { blindIndexEquals, decryptEmail, emailBlindIndex, encryptEmail } from "../emailCrypto"
 
 const USER_ID = "usr_00000000000000000000000000000000"
 const OTHER_ID = "usr_11111111111111111111111111111111"

@@ -73,8 +73,8 @@ describe("ndcgAtK", () => {
 describe("scoreRun", () => {
   it("macro-averages across queries", () => {
     const run = scoreRun([
-      j(["g"], ["g"]),        // recall@1 = 1, mrr = 1, ndcg = 1
-      j(["h"], ["x", "h"]),   // recall@1 = 0, mrr = 1/2, ndcg = 1/log2(3)
+      j(["g"], ["g"]), // recall@1 = 1, mrr = 1, ndcg = 1
+      j(["h"], ["x", "h"]), // recall@1 = 0, mrr = 1/2, ndcg = 1/log2(3)
     ])
     expect(run.queries).toBe(2)
     expect(run.recall[1]).toBeCloseTo(0.5, 12)

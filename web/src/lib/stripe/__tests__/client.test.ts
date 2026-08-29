@@ -23,7 +23,10 @@ interface Recorded {
 let server: Server
 let baseUrl: string
 let recorded: Recorded[] = []
-let reply: { status: number; body: unknown } = { status: 200, body: { url: "https://checkout.stripe.test/c/pay/x" } }
+let reply: { status: number; body: unknown } = {
+  status: 200,
+  body: { url: "https://checkout.stripe.test/c/pay/x" },
+}
 
 const TEST_KEY = "sk_test_fake_0123456789"
 
@@ -46,7 +49,9 @@ describe("stripe client", () => {
   beforeAll(async () => {
     server = createServer((req, res) => {
       let body = ""
-      req.on("data", (chunk) => { body += chunk })
+      req.on("data", (chunk) => {
+        body += chunk
+      })
       req.on("end", () => {
         recorded.push({
           path: req.url ?? "",
@@ -67,8 +72,11 @@ describe("stripe client", () => {
 
   afterAll(async () => {
     setEnv({
-      STRIPE_SECRET_KEY: undefined, STRIPE_WEBHOOK_SECRET: undefined,
-      STRIPE_PRICE_STARTER: undefined, STRIPE_PRICE_PRO: undefined, STRIPE_API_BASE: undefined,
+      STRIPE_SECRET_KEY: undefined,
+      STRIPE_WEBHOOK_SECRET: undefined,
+      STRIPE_PRICE_STARTER: undefined,
+      STRIPE_PRICE_PRO: undefined,
+      STRIPE_API_BASE: undefined,
     })
     await new Promise((resolve) => server.close(resolve))
   })
@@ -99,12 +107,14 @@ describe("stripe client", () => {
 
   it("creates a subscription Checkout carrying org and plan on the SUBSCRIPTION", async () => {
     const result = await createCheckoutSession({
-      orgId: "org_abc", plan: "pro",
-      successUrl: "https://app.test/done", cancelUrl: "https://app.test/cancel",
+      orgId: "org_abc",
+      plan: "pro",
+      successUrl: "https://app.test/done",
+      cancelUrl: "https://app.test/cancel",
     })
     expect(result).toEqual({ ok: true, value: { url: "https://checkout.stripe.test/c/pay/x" } })
 
-    const call = recorded[0]!
+    const call = recorded[0]
     expect(call.path).toBe("/checkout/sessions")
     expect(call.auth).toBe(`Bearer ${TEST_KEY}`)
     // Pinned so a Stripe upgrade cannot silently change a response shape.
@@ -125,18 +135,23 @@ describe("stripe client", () => {
 
   it("reuses an existing customer so a returning tenant has one billing history", async () => {
     await createCheckoutSession({
-      orgId: "org_abc", plan: "starter", customerId: "cus_existing",
-      successUrl: "https://app.test/done", cancelUrl: "https://app.test/cancel",
+      orgId: "org_abc",
+      plan: "starter",
+      customerId: "cus_existing",
+      successUrl: "https://app.test/done",
+      cancelUrl: "https://app.test/cancel",
     })
-    expect(recorded[0]!.form.get("customer")).toBe("cus_existing")
-    expect(recorded[0]!.form.get("line_items[0][price]")).toBe("price_starter_123")
+    expect(recorded[0].form.get("customer")).toBe("cus_existing")
+    expect(recorded[0].form.get("line_items[0][price]")).toBe("price_starter_123")
   })
 
   it("refuses a plan with no configured price rather than checking out the wrong one", async () => {
     setEnv({ STRIPE_PRICE_PRO: undefined })
     const result = await createCheckoutSession({
-      orgId: "org_abc", plan: "pro",
-      successUrl: "https://app.test/done", cancelUrl: "https://app.test/cancel",
+      orgId: "org_abc",
+      plan: "pro",
+      successUrl: "https://app.test/done",
+      cancelUrl: "https://app.test/cancel",
     })
     expect(result).toEqual({ ok: false, error: "No Stripe price is configured for the pro plan." })
     expect(recorded).toHaveLength(0)
@@ -145,8 +160,10 @@ describe("stripe client", () => {
   it("surfaces Stripe's own error message and never the key", async () => {
     reply = { status: 400, body: { error: { message: "No such price: 'price_pro_456'" } } }
     const result = await createCheckoutSession({
-      orgId: "org_abc", plan: "pro",
-      successUrl: "https://app.test/done", cancelUrl: "https://app.test/cancel",
+      orgId: "org_abc",
+      plan: "pro",
+      successUrl: "https://app.test/done",
+      cancelUrl: "https://app.test/cancel",
     })
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -159,8 +176,10 @@ describe("stripe client", () => {
   it("treats a 200 with no URL as a failure rather than redirecting nowhere", async () => {
     reply = { status: 200, body: { id: "cs_test_1" } }
     const result = await createCheckoutSession({
-      orgId: "org_abc", plan: "pro",
-      successUrl: "https://app.test/done", cancelUrl: "https://app.test/cancel",
+      orgId: "org_abc",
+      plan: "pro",
+      successUrl: "https://app.test/done",
+      cancelUrl: "https://app.test/cancel",
     })
     expect(result).toEqual({ ok: false, error: "Stripe returned a session with no checkout URL." })
   })
@@ -168,18 +187,21 @@ describe("stripe client", () => {
   it("opens a portal session for an existing customer", async () => {
     reply = { status: 200, body: { url: "https://billing.stripe.test/p/session/x" } }
     const result = await createPortalSession({
-      customerId: "cus_existing", returnUrl: "https://app.test/dashboard/org_abc/billing",
+      customerId: "cus_existing",
+      returnUrl: "https://app.test/dashboard/org_abc/billing",
     })
     expect(result).toEqual({ ok: true, value: { url: "https://billing.stripe.test/p/session/x" } })
-    expect(recorded[0]!.path).toBe("/billing_portal/sessions")
-    expect(recorded[0]!.form.get("customer")).toBe("cus_existing")
+    expect(recorded[0].path).toBe("/billing_portal/sessions")
+    expect(recorded[0].form.get("customer")).toBe("cus_existing")
   })
 
   it("says billing is unconfigured instead of calling an unauthenticated Stripe", async () => {
     setEnv({ STRIPE_SECRET_KEY: undefined })
     const result = await createCheckoutSession({
-      orgId: "org_abc", plan: "pro",
-      successUrl: "https://app.test/done", cancelUrl: "https://app.test/cancel",
+      orgId: "org_abc",
+      plan: "pro",
+      successUrl: "https://app.test/done",
+      cancelUrl: "https://app.test/cancel",
     })
     expect(result.ok).toBe(false)
     if (result.ok) return

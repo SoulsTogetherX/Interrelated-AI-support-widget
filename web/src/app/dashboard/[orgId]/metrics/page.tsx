@@ -58,8 +58,8 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
     <div className="metrics">
       <h1 className="metrics-title">Metrics</h1>
       <p className="metrics-lede">
-        The last {metrics.windowDays} days. Every number comes from what the answer pipeline
-        already records per message — no sampling, no estimates.
+        The last {metrics.windowDays} days. Every number comes from what the answer pipeline already
+        records per message — no sampling, no estimates.
       </p>
 
       <section className="metrics-section">
@@ -131,8 +131,16 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
             value={ms(answers.ttftP50Ms)}
             hint="measured in the pipeline at the first delta, so every provider is measured identically"
           />
-          <Stat label="Time to first token (p95)" value={ms(answers.ttftP95Ms)} hint="the slow tail visitors feel" />
-          <Stat label="Full answer (p50)" value={ms(answers.totalP50Ms)} hint={`p95 ${ms(answers.totalP95Ms)}`} />
+          <Stat
+            label="Time to first token (p95)"
+            value={ms(answers.ttftP95Ms)}
+            hint="the slow tail visitors feel"
+          />
+          <Stat
+            label="Full answer (p50)"
+            value={ms(answers.totalP50Ms)}
+            hint={`p95 ${ms(answers.totalP95Ms)}`}
+          />
         </div>
       </section>
 
@@ -180,8 +188,8 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
           What this usage <em>would</em> cost at the provider&rsquo;s published list price — not
           what you were billed. Every provider here has a free tier, so a demo org&rsquo;s real
           spend is $0 while this number is positive; read it as &ldquo;what does this cost at
-          scale?&rdquo;. Refusals are excluded from the denominator, because a refusal never calls
-          a model — otherwise a bot that refuses more would look cheaper rather than more cautious.
+          scale?&rdquo;. Refusals are excluded from the denominator, because a refusal never calls a
+          model — otherwise a bot that refuses more would look cheaper rather than more cautious.
           Generation only: query embeddings are not metered, so folding a guess at them in would
           trade a known-partial number for an unknown-wrong one.
         </p>
@@ -208,7 +216,9 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
             <tbody>
               {byModel.map((row) => (
                 <tr key={row.model}>
-                  <td><code>{row.model}</code></td>
+                  <td>
+                    <code>{row.model}</code>
+                  </td>
                   <td>{row.answers}</td>
                   <td>{tokens(row.inputTokens)}</td>
                   <td>{tokens(row.outputTokens)}</td>
@@ -227,8 +237,8 @@ export default async function MetricsPage({ params }: { params: Promise<{ orgId:
         <p className="metrics-note">
           Switching provider changes this table, not the schema: the model is recorded per answer,
           so a comparison is a query rather than a migration. There is no refusal column here on
-          purpose — the groundedness gate refuses before a model is chosen, so those answers have
-          no model to attribute, and the refusal rate above is where they are counted.
+          purpose — the groundedness gate refuses before a model is chosen, so those answers have no
+          model to attribute, and the refusal rate above is where they are counted.
         </p>
         <p className="metrics-note">
           <strong>Schema violations</strong> counts answers this model had to be asked twice for,

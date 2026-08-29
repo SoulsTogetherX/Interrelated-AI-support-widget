@@ -140,12 +140,20 @@ async function upsert(
 ): Promise<void> {
   await db
     .insertInto("origin_daily")
-    .values({ org_id: key.orgId, day: key.day, origin: key.origin, minted: amounts.minted, refused: amounts.refused })
-    .onConflict((oc) => oc.columns(["org_id", "day", "origin"]).doUpdateSet({
-      minted: sql`origin_daily.minted + excluded.minted`,
-      refused: sql`origin_daily.refused + excluded.refused`,
-      updated_at: sql`NOW()`,
-    }))
+    .values({
+      org_id: key.orgId,
+      day: key.day,
+      origin: key.origin,
+      minted: amounts.minted,
+      refused: amounts.refused,
+    })
+    .onConflict((oc) =>
+      oc.columns(["org_id", "day", "origin"]).doUpdateSet({
+        minted: sql`origin_daily.minted + excluded.minted`,
+        refused: sql`origin_daily.refused + excluded.refused`,
+        updated_at: sql`NOW()`,
+      }),
+    )
     .execute()
 }
 //#endregion

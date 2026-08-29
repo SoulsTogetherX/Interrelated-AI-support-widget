@@ -23,14 +23,8 @@
 //#region Imports
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import {
-  TYPING_HINT_INTERVAL_MS,
-  TYPING_TTL_MS,
-} from "@shared/handoff/protocol"
-import type {
-  HandoffHistoryMessage,
-  HandoffServerFrame,
-} from "@shared/handoff/protocol"
+import { TYPING_HINT_INTERVAL_MS, TYPING_TTL_MS } from "@shared/handoff/protocol"
+import type { HandoffHistoryMessage, HandoffServerFrame } from "@shared/handoff/protocol"
 
 import type { TicketResult } from "@/lib/handoff/actions"
 //#endregion

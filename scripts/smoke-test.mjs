@@ -99,9 +99,18 @@ await check("WebSocket upgrade without a ticket is refused, not accepted", async
       },
       timeout: 10_000,
     })
-    req.on("response", (res) => { res.resume(); resolve(res.statusCode) })
-    req.on("upgrade", (_res, socket) => { socket.destroy(); resolve(101) })
-    req.on("timeout", () => { req.destroy(); reject(new Error("timed out")) })
+    req.on("response", (res) => {
+      res.resume()
+      resolve(res.statusCode)
+    })
+    req.on("upgrade", (_res, socket) => {
+      socket.destroy()
+      resolve(101)
+    })
+    req.on("timeout", () => {
+      req.destroy()
+      reject(new Error("timed out"))
+    })
     req.on("error", reject)
     req.end()
   })
@@ -131,7 +140,8 @@ await check("POST /v1/sessions without a secret key returns 401 and no CORS", as
     signal: AbortSignal.timeout(10_000),
   })
   if (res.status !== 401) throw new Error(`status ${res.status}`)
-  if (res.headers.get("access-control-allow-origin") !== null) throw new Error("CORS header on the secret-key route")
+  if (res.headers.get("access-control-allow-origin") !== null)
+    throw new Error("CORS header on the secret-key route")
 })
 
 // ── Demo surface (M2.7) ─────────────────────────────────────────────────────

@@ -27,16 +27,18 @@ const SECRETS = {
 
 describe("parseDotenv", () => {
   it("mirrors web/next.config.ts's loader: comments, blanks, first =, trim, verbatim values", () => {
-    const parsed = parseDotenv([
-      "# a comment",
-      "",
-      "POSTGRES_HOST=localhost",
-      "  POSTGRES_PORT = 5433  ",
-      "WEIRD=a=b=c",
-      "EMPTY=",
-      "no_equals_line",
-      "QUOTED=\"kept-verbatim\"",
-    ].join("\n"))
+    const parsed = parseDotenv(
+      [
+        "# a comment",
+        "",
+        "POSTGRES_HOST=localhost",
+        "  POSTGRES_PORT = 5433  ",
+        "WEIRD=a=b=c",
+        "EMPTY=",
+        "no_equals_line",
+        'QUOTED="kept-verbatim"',
+      ].join("\n"),
+    )
     expect(parsed).toEqual({
       POSTGRES_HOST: "localhost",
       POSTGRES_PORT: "5433",
@@ -45,7 +47,7 @@ describe("parseDotenv", () => {
       EMPTY: "",
       // No quote stripping: the root .env never quotes, and inventing
       // stripping here would make this parser disagree with next.config's.
-      QUOTED: "\"kept-verbatim\"",
+      QUOTED: '"kept-verbatim"',
     })
   })
 
@@ -78,7 +80,7 @@ describe("generateSecrets / reconcileSecrets", () => {
   it("regenerates whole on a missing or unparseable file", () => {
     expect(reconcileSecrets(null, bytes(7)).changed).toBe(true)
     expect(reconcileSecrets("not json{", bytes(7)).changed).toBe(true)
-    expect(reconcileSecrets("\"a string\"", bytes(7)).changed).toBe(true)
+    expect(reconcileSecrets('"a string"', bytes(7)).changed).toBe(true)
   })
 
   it("fills only the MISSING fields of a partial file — the master key survives", () => {
@@ -113,7 +115,9 @@ describe("assembleEnv", () => {
     expect(env.LLM_PROVIDER).toBe("groq")
     // Hard overrides win even over the shell, with a warning naming it.
     expect(env.EMBEDDING_PROVIDER).toBe("local")
-    expect(warnings.some((w) => w.includes("EMBEDDING_PROVIDER=mock overridden to local"))).toBe(true)
+    expect(warnings.some((w) => w.includes("EMBEDDING_PROVIDER=mock overridden to local"))).toBe(
+      true,
+    )
     expect(env.INGEST_WORKER).toBe("1")
     expect(env.BACKEND_PORT).toBe("3000")
     expect(env.FIXTURE_PORT).toBe("4400")
@@ -160,12 +164,17 @@ describe("assembleEnv", () => {
 })
 
 describe("parseSeedResult / buildBanner", () => {
-  const RESULT = { email: "play@interrelated.local", role: "owner", passwordChanged: false, orgId: "org_x" }
+  const RESULT = {
+    email: "play@interrelated.local",
+    role: "owner",
+    passwordChanged: false,
+    orgId: "org_x",
+  }
 
   it("round-trips the machine line out of mixed human output, last occurrence winning", () => {
     const stdout = [
       "checking the demo org…",
-      "PLAYGROUND_RESULT {\"stale\":true}",
+      'PLAYGROUND_RESULT {"stale":true}',
       "user ready",
       `PLAYGROUND_RESULT ${JSON.stringify(RESULT)}`,
       "",

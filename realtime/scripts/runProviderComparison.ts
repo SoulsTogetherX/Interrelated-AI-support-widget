@@ -61,8 +61,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -122,7 +122,10 @@ async function main(): Promise<void> {
     return i === -1 ? undefined : args[i + 1]
   }
 
-  const providers = (flag("--providers") ?? ALL_PROVIDERS.join(",")).split(",").map((p) => p.trim()).filter(Boolean)
+  const providers = (flag("--providers") ?? ALL_PROVIDERS.join(","))
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean)
   const questionCount = Number(flag("--questions") ?? DEFAULT_QUESTIONS)
   const embedderChoice = flag("--embedder") ?? "local"
   const paceMs = Number(flag("--pace-ms") ?? DEFAULT_PACE_MS)
@@ -133,7 +136,9 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   if (embedderChoice !== "local" && embedderChoice !== "gemini") {
-    console.error(`--embedder must be local or gemini (got "${embedderChoice}") — the same choices runEval offers`)
+    console.error(
+      `--embedder must be local or gemini (got "${embedderChoice}") — the same choices runEval offers`,
+    )
     process.exit(1)
   }
   for (const p of providers) {
@@ -156,12 +161,13 @@ async function main(): Promise<void> {
   await migrateToLatest(db)
 
   // The embedder is fixed for the whole sweep — the fairness rule above.
-  const embedder = embedderChoice === "gemini"
-    ? new (await import("@providers/embedding/gemini")).GeminiEmbeddingProvider({
-        apiKey: process.env.GEMINI_API_KEY as string,
-        ...(process.env.GEMINI_EMBED_MODEL ? { model: process.env.GEMINI_EMBED_MODEL } : {}),
-      })
-    : new LocalEmbeddingProvider()
+  const embedder =
+    embedderChoice === "gemini"
+      ? new (await import("@providers/embedding/gemini")).GeminiEmbeddingProvider({
+          apiKey: process.env.GEMINI_API_KEY as string,
+          ...(process.env.GEMINI_EMBED_MODEL ? { model: process.env.GEMINI_EMBED_MODEL } : {}),
+        })
+      : new LocalEmbeddingProvider()
   if (embedderChoice === "gemini" && !process.env.GEMINI_API_KEY) {
     console.error("--embedder gemini needs GEMINI_API_KEY (see .env.example)")
     process.exit(1)
@@ -171,7 +177,11 @@ async function main(): Promise<void> {
   // The corpus is runEval's to ingest, not this harness's to duplicate — the
   // glue-only rule the sibling CLIs follow (§3.11): a second ingest path
   // would drift from the one whose output is published.
-  const org = await db.selectFrom("organizations").select(["id"]).where("name", "=", EVAL_ORG_NAME).executeTakeFirst()
+  const org = await db
+    .selectFrom("organizations")
+    .select(["id"])
+    .where("name", "=", EVAL_ORG_NAME)
+    .executeTakeFirst()
   if (!org) {
     console.error(`no "${EVAL_ORG_NAME}" org — run \`npm run eval\` first to ingest the corpus`)
     process.exit(1)
@@ -185,8 +195,8 @@ async function main(): Promise<void> {
   if (Number(embedded?.n ?? 0) === 0) {
     console.error(
       `the eval corpus has no embeddings under "${embedder.model}" — run ` +
-      `\`npm run eval -- --embedder ${embedderChoice}\` first. Asking questions against a corpus ` +
-      `this model cannot see would measure the gate refusing, not the provider answering.`,
+        `\`npm run eval -- --embedder ${embedderChoice}\` first. Asking questions against a corpus ` +
+        `this model cannot see would measure the gate refusing, not the provider answering.`,
     )
     process.exit(1)
   }
@@ -195,7 +205,9 @@ async function main(): Promise<void> {
   //#region Questions
   const goldenPath = resolve(__dirname, "../../eval/golden.jsonl")
   const golden: GoldenEntry[] = readFileSync(goldenPath, "utf8")
-    .split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as GoldenEntry)
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map((l) => JSON.parse(l) as GoldenEntry)
   // The FIRST n, never a sample: a published comparison has to be
   // re-runnable into the same table, and a random subset would move the
   // numbers between runs for reasons that have nothing to do with the
@@ -243,17 +255,24 @@ async function main(): Promise<void> {
       const visitorId = `cmp_${runStamp}`
       try {
         const result = await answerQuestion({
-          db, embedder, llm, orgId: org.id, visitorId, question: entry.question,
+          db,
+          embedder,
+          llm,
+          orgId: org.id,
+          visitorId,
+          question: entry.question,
         })
         // The product's own record of the contract, not a private counter.
-        const row = await db.selectFrom("messages")
+        const row = await db
+          .selectFrom("messages")
           .select(["schema_violations", "model"])
           .where("id", "=", result.messageId)
           .executeTakeFirst()
         const verified = result.claims.filter((c) => c.verdict.status === "verified").length
-        const cost = result.usage === null
-          ? null
-          : costUsd(llm.model, result.usage.inputTokens, result.usage.outputTokens)
+        const cost =
+          result.usage === null
+            ? null
+            : costUsd(llm.model, result.usage.inputTokens, result.usage.outputTokens)
         outcomes.push({
           questionId: entry.id,
           outcome: result.refused ? "refused" : "answered",
@@ -277,8 +296,14 @@ async function main(): Promise<void> {
         outcomes.push({
           questionId: entry.id,
           outcome: isContract ? "contract_failure" : "error",
-          claimsTotal: 0, claimsVerified: 0, schemaViolations: null,
-          ttftMs: null, totalMs: 0, inputTokens: null, outputTokens: null, costUsd: null,
+          claimsTotal: 0,
+          claimsVerified: 0,
+          schemaViolations: null,
+          ttftMs: null,
+          totalMs: 0,
+          inputTokens: null,
+          outputTokens: null,
+          costUsd: null,
         })
         process.stdout.write(isContract ? "X" : "!")
         if (!isContract) {
@@ -298,8 +323,10 @@ async function main(): Promise<void> {
   // above — §10.3's stance, and here it also keeps the eval org's own
   // published numbers from drifting: a corpus with a thousand harness
   // conversations in it is no longer the corpus RESULTS.md describes.
-  const deleted = await db.deleteFrom("conversations")
-    .where("org_id", "=", org.id).where("visitor_id", "=", `cmp_${runStamp}`)
+  const deleted = await db
+    .deleteFrom("conversations")
+    .where("org_id", "=", org.id)
+    .where("visitor_id", "=", `cmp_${runStamp}`)
     .executeTakeFirst()
   //#endregion
 
@@ -309,41 +336,79 @@ async function main(): Promise<void> {
   const usd = (v: number | null): string => (v === null ? "—" : `$${v.toFixed(4)}`)
 
   if (asJson) {
-    console.log(JSON.stringify({ questions: questions.length, embedder: embedder.model, pricesAsOf: PRICES_AS_OF, summaries, skipped }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          questions: questions.length,
+          embedder: embedder.model,
+          pricesAsOf: PRICES_AS_OF,
+          summaries,
+          skipped,
+        },
+        null,
+        2,
+      ),
+    )
   } else {
     console.log("\n" + "=".repeat(112))
     console.log("PROVIDER COMPARISON".padEnd(112))
     console.log("=".repeat(112))
     const head = [
-      "provider".padEnd(10), "model".padEnd(26), "ans".padStart(4), "ref".padStart(4),
-      "fail".padStart(5), "cite✓".padStart(7), "strip".padStart(7), "viol".padStart(6),
-      "ttft p50".padStart(9), "ttft p95".padStart(9), "$/1k".padStart(9),
+      "provider".padEnd(10),
+      "model".padEnd(26),
+      "ans".padStart(4),
+      "ref".padStart(4),
+      "fail".padStart(5),
+      "cite✓".padStart(7),
+      "strip".padStart(7),
+      "viol".padStart(6),
+      "ttft p50".padStart(9),
+      "ttft p95".padStart(9),
+      "$/1k".padStart(9),
     ].join(" ")
     console.log(head)
     console.log("-".repeat(112))
     for (const s of summaries) {
-      console.log([
-        s.provider.padEnd(10), s.model.slice(0, 26).padEnd(26),
-        String(s.answered).padStart(4), String(s.refused).padStart(4),
-        String(s.contractFailures + s.errors).padStart(5),
-        pct(s.citationVerificationRate).padStart(7),
-        pct(s.claimStripRate).padStart(7),
-        (s.schemaViolationRate === null ? "—" : s.schemaViolationRate.toFixed(2)).padStart(6),
-        ms(s.ttftP50Ms).padStart(9), ms(s.ttftP95Ms).padStart(9),
-        usd(s.costPer1kAnswersUsd).padStart(9),
-      ].join(" "))
+      console.log(
+        [
+          s.provider.padEnd(10),
+          s.model.slice(0, 26).padEnd(26),
+          String(s.answered).padStart(4),
+          String(s.refused).padStart(4),
+          String(s.contractFailures + s.errors).padStart(5),
+          pct(s.citationVerificationRate).padStart(7),
+          pct(s.claimStripRate).padStart(7),
+          (s.schemaViolationRate === null ? "—" : s.schemaViolationRate.toFixed(2)).padStart(6),
+          ms(s.ttftP50Ms).padStart(9),
+          ms(s.ttftP95Ms).padStart(9),
+          usd(s.costPer1kAnswersUsd).padStart(9),
+        ].join(" "),
+      )
     }
-    for (const s of skipped) console.log(`${s.provider.padEnd(10)} ${"—".padEnd(26)}  SKIPPED: ${s.why}`)
+    for (const s of skipped)
+      console.log(`${s.provider.padEnd(10)} ${"—".padEnd(26)}  SKIPPED: ${s.why}`)
     console.log("-".repeat(112))
-    console.log(`ans/ref/fail = answered / gate-refused / contract-failed+errored, over ${questions.length} questions each.`)
-    console.log("cite✓ = claims whose quoted span was found verbatim in the chunk they cited; strip = its complement.")
-    console.log("viol = schema violations per generated answer (messages.schema_violations); a contract failure writes no row and lands in `fail`.")
-    console.log(`$/1k = list price per 1,000 answers, generation only, prices as of ${PRICES_AS_OF}; "—" = unpriced model or no usage reported.`)
+    console.log(
+      `ans/ref/fail = answered / gate-refused / contract-failed+errored, over ${questions.length} questions each.`,
+    )
+    console.log(
+      "cite✓ = claims whose quoted span was found verbatim in the chunk they cited; strip = its complement.",
+    )
+    console.log(
+      "viol = schema violations per generated answer (messages.schema_violations); a contract failure writes no row and lands in `fail`.",
+    )
+    console.log(
+      `$/1k = list price per 1,000 answers, generation only, prices as of ${PRICES_AS_OF}; "—" = unpriced model or no usage reported.`,
+    )
     for (const s of summaries) {
       if (s.unpricedAnswers > 0 && s.answered > 0) {
-        console.log(`note: ${s.provider} — ${s.unpricedAnswers} of ${s.answered} answers could not be priced (${s.model} has no row in the price table).`)
+        console.log(
+          `note: ${s.provider} — ${s.unpricedAnswers} of ${s.answered} answers could not be priced (${s.model} has no row in the price table).`,
+        )
       }
-      console.log(`      ${s.provider}: ${s.inputTokens} input / ${s.outputTokens} output tokens over ${s.answered} answers.`)
+      console.log(
+        `      ${s.provider}: ${s.inputTokens} input / ${s.outputTokens} output tokens over ${s.answered} answers.`,
+      )
     }
     // The slowest answer, named. At small n the nearest-rank p95 IS the
     // worst sample (rank ceil(0.95 × 19) = 19 of 19), so a single slow
@@ -360,8 +425,8 @@ async function main(): Promise<void> {
       if (slowest && (slowest.ttftMs ?? 0) > 30_000) {
         console.log(
           `slow: ${r.provider} — ${slowest.questionId} reached its first token after ` +
-          `${Math.round((slowest.ttftMs ?? 0) / 1000)}s, inside the pipeline's deadline ` +
-          `(ANSWER_DEADLINE_MS, 60 s default — §3.15.6) but far past the p50.`,
+            `${Math.round((slowest.ttftMs ?? 0) / 1000)}s, inside the pipeline's deadline ` +
+            `(ANSWER_DEADLINE_MS, 60 s default — §3.15.6) but far past the p50.`,
         )
       }
     }
@@ -369,15 +434,24 @@ async function main(): Promise<void> {
   // The raw run, written before the summary is trusted — see RESULTS_DIR.
   mkdirSync(RESULTS_DIR, { recursive: true })
   const resultsPath = resolve(RESULTS_DIR, "provider-comparison.json")
-  writeFileSync(resultsPath, JSON.stringify({
-    ranAt: new Date().toISOString(),
-    questions: questions.length,
-    questionIds: questions.map((q) => q.id),
-    embedder: embedder.model,
-    paceMs,
-    pricesAsOf: PRICES_AS_OF,
-    summaries, skipped, raw: rawOutcomes,
-  }, null, 2))
+  writeFileSync(
+    resultsPath,
+    JSON.stringify(
+      {
+        ranAt: new Date().toISOString(),
+        questions: questions.length,
+        questionIds: questions.map((q) => q.id),
+        embedder: embedder.model,
+        paceMs,
+        pricesAsOf: PRICES_AS_OF,
+        summaries,
+        skipped,
+        raw: rawOutcomes,
+      },
+      null,
+      2,
+    ),
+  )
   console.log(`\nraw per-question outcomes written to ${resultsPath}`)
   console.log(`cleaned up ${Number(deleted?.numDeletedRows ?? 0)} harness conversations.`)
   await db.destroy()

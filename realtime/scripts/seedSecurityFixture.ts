@@ -46,8 +46,8 @@ if (!process.env.POSTGRES_PASSWORD) {
     const envFile = readFileSync(resolve(__dirname, "../../.env"), "utf8")
     for (const line of envFile.split("\n")) {
       const match = /^([A-Z_]+)=(.*)$/.exec(line.trim())
-      if (match && process.env[match[1] as string] === undefined) {
-        process.env[match[1] as string] = match[2] as string
+      if (match && process.env[match[1]] === undefined) {
+        process.env[match[1]] = match[2]
       }
     }
   } catch {
@@ -138,14 +138,39 @@ const ORG_C = "Security Probe Org C (credential canary)"
  *  vocabulary, so a cross-tenant retrieval attempt cannot be explained away
  *  as topical overlap. */
 const CORPUS_A = [
-  { url: "https://probe-a.example/refunds", title: "Refunds", heading: "Billing > Refunds", text: "Refunds are processed within five business days of the request." },
-  { url: "https://probe-a.example/invoices", title: "Invoices", heading: "Billing > Invoices", text: "Invoices can be downloaded as PDF from the billing tab of the dashboard." },
-  { url: "https://probe-a.example/tracking", title: "Tracking", heading: "Shipping > Tracking", text: "A tracking link is emailed as soon as the carrier scans the parcel." },
+  {
+    url: "https://probe-a.example/refunds",
+    title: "Refunds",
+    heading: "Billing > Refunds",
+    text: "Refunds are processed within five business days of the request.",
+  },
+  {
+    url: "https://probe-a.example/invoices",
+    title: "Invoices",
+    heading: "Billing > Invoices",
+    text: "Invoices can be downloaded as PDF from the billing tab of the dashboard.",
+  },
+  {
+    url: "https://probe-a.example/tracking",
+    title: "Tracking",
+    heading: "Shipping > Tracking",
+    text: "A tracking link is emailed as soon as the carrier scans the parcel.",
+  },
 ]
 
 const CORPUS_B = [
-  { url: "https://probe-b.example/greenhouse", title: "Greenhouse", heading: "Growing > Greenhouse", text: "Tomato seedlings should be hardened off for a week before transplanting outdoors." },
-  { url: "https://probe-b.example/compost", title: "Compost", heading: "Growing > Compost", text: "A compost heap needs a roughly even mix of green and brown material to heat up." },
+  {
+    url: "https://probe-b.example/greenhouse",
+    title: "Greenhouse",
+    heading: "Growing > Greenhouse",
+    text: "Tomato seedlings should be hardened off for a week before transplanting outdoors.",
+  },
+  {
+    url: "https://probe-b.example/compost",
+    title: "Compost",
+    heading: "Growing > Compost",
+    text: "A compost heap needs a roughly even mix of green and brown material to heat up.",
+  },
 ]
 
 /** One line of eval/injection.jsonl (§7.7). Its invariants are pinned by
@@ -165,7 +190,10 @@ interface InjectionEntry {
 
 function loadInjectionCorpus(): InjectionEntry[] {
   const raw = readFileSync(resolve(__dirname, "../../eval/injection.jsonl"), "utf8")
-  return raw.split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line) as InjectionEntry)
+  return raw
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as InjectionEntry)
 }
 //#endregion
 
@@ -180,7 +208,8 @@ async function main(): Promise<void> {
   }
 
   const { db } = await import("@/db/pool")
-  const { hashSecretKey, newId, newPublishableKey, newSecretKey, secretKeySuffix } = await import("@shared/utils/ids")
+  const { hashSecretKey, newId, newPublishableKey, newSecretKey, secretKeySuffix } =
+    await import("@shared/utils/ids")
   const { padVector, toPgvector } = await import("@shared/utils/vectors")
   const { MockEmbeddingProvider } = await import("@providers/embedding/mock")
   const { SYSTEM_PROMPT } = await import("@/answer/prompt")
@@ -212,10 +241,27 @@ async function main(): Promise<void> {
     const publishableKey = newPublishableKey()
     const revokedKey = newPublishableKey()
     const revokedRowId = newId("key")
-    await db.insertInto("api_keys").values([
-      { id: newId("key"), org_id: id, kind: "public", public_id: publishableKey, secret_hash: null, secret_suffix: null },
-      { id: revokedRowId, org_id: id, kind: "public", public_id: revokedKey, secret_hash: null, secret_suffix: null },
-    ]).execute()
+    await db
+      .insertInto("api_keys")
+      .values([
+        {
+          id: newId("key"),
+          org_id: id,
+          kind: "public",
+          public_id: publishableKey,
+          secret_hash: null,
+          secret_suffix: null,
+        },
+        {
+          id: revokedRowId,
+          org_id: id,
+          kind: "public",
+          public_id: revokedKey,
+          secret_hash: null,
+          secret_suffix: null,
+        },
+      ])
+      .execute()
     // The rotated-out key: created live and then revoked, the rows a real
     // rotation writes (revoked_at is update-only in the schema types — a key
     // is never born revoked). Since M7.1 the dashboard performs rotation
@@ -225,8 +271,11 @@ async function main(): Promise<void> {
     // never existed. Revoked on Postgres's clock, the clock the session
     // route compares against; a `new Date()` from this process could sit
     // ahead of a drifted database and leave the key live for the drift.
-    await db.updateTable("api_keys").set({ revoked_at: sql`NOW()` })
-      .where("id", "=", revokedRowId).execute()
+    await db
+      .updateTable("api_keys")
+      .set({ revoked_at: sql`NOW()` })
+      .where("id", "=", revokedRowId)
+      .execute()
 
     // The SECRET keys (M7.3): stored as the dashboard stores them — hash and
     // suffix, never the value — and in the order real history writes them,
@@ -234,25 +283,49 @@ async function main(): Promise<void> {
     // CURRENT secret per org. Revoked on Postgres's clock, as above.
     const revokedSecretKey = newSecretKey()
     const revokedSecretRowId = newId("key")
-    await db.insertInto("api_keys").values({
-      id: revokedSecretRowId, org_id: id, kind: "secret", public_id: null,
-      secret_hash: hashSecretKey(revokedSecretKey), secret_suffix: secretKeySuffix(revokedSecretKey),
-    }).execute()
-    await db.updateTable("api_keys").set({ revoked_at: sql`NOW()` })
-      .where("id", "=", revokedSecretRowId).execute()
+    await db
+      .insertInto("api_keys")
+      .values({
+        id: revokedSecretRowId,
+        org_id: id,
+        kind: "secret",
+        public_id: null,
+        secret_hash: hashSecretKey(revokedSecretKey),
+        secret_suffix: secretKeySuffix(revokedSecretKey),
+      })
+      .execute()
+    await db
+      .updateTable("api_keys")
+      .set({ revoked_at: sql`NOW()` })
+      .where("id", "=", revokedSecretRowId)
+      .execute()
     const secretKey = newSecretKey()
-    await db.insertInto("api_keys").values({
-      id: newId("key"), org_id: id, kind: "secret", public_id: null,
-      secret_hash: hashSecretKey(secretKey), secret_suffix: secretKeySuffix(secretKey),
-    }).execute()
+    await db
+      .insertInto("api_keys")
+      .values({
+        id: newId("key"),
+        org_id: id,
+        kind: "secret",
+        public_id: null,
+        secret_hash: hashSecretKey(secretKey),
+        secret_suffix: secretKeySuffix(secretKey),
+      })
+      .execute()
 
     const origin = `https://${host}`
     await db.insertInto("allowed_origins").values({ org_id: id, origin }).execute()
 
     const sourceId = newId("src")
-    await db.insertInto("sources").values({
-      id: sourceId, org_id: id, kind: "url", location: `${origin}/`, status: "ready",
-    }).execute()
+    await db
+      .insertInto("sources")
+      .values({
+        id: sourceId,
+        org_id: id,
+        kind: "url",
+        location: `${origin}/`,
+        status: "ready",
+      })
+      .execute()
 
     // One document per chunk keeps url ↔ text one-to-one, which is what lets
     // a probe say "this citation must point at THAT url". Trail-free
@@ -267,37 +340,70 @@ async function main(): Promise<void> {
     const pages = [
       ...corpus,
       ...poisoned.map((entry) => ({
-        url: entry.url, title: entry.title, heading: entry.heading,
+        url: entry.url,
+        title: entry.title,
+        heading: entry.heading,
         text: `${entry.legit}\n\n${entry.injected}`,
       })),
     ]
     const vectors = await embedder.embed(pages.map((c) => c.text))
     for (const [i, page] of pages.entries()) {
       const documentId = newId("doc")
-      await db.insertInto("documents").values({
-        id: documentId, org_id: id, source_id: sourceId, url: page.url, title: page.title,
-        content_hash: createHash("sha256").update(page.text).digest("hex"),
-      }).execute()
+      await db
+        .insertInto("documents")
+        .values({
+          id: documentId,
+          org_id: id,
+          source_id: sourceId,
+          url: page.url,
+          title: page.title,
+          content_hash: createHash("sha256").update(page.text).digest("hex"),
+        })
+        .execute()
       const chunkId = newId("chk")
-      await db.insertInto("chunks").values({
-        id: chunkId, org_id: id, document_id: documentId, ord: 0,
-        heading_path: page.heading, text: page.text,
-        token_count: Math.max(1, Math.ceil(page.text.length / 4)),
-        char_start: 0, char_end: page.text.length,
-      }).execute()
-      await db.insertInto("chunk_embeddings").values({
-        chunk_id: chunkId, org_id: id, model: embedder.model, dim: embedder.dim,
-        embedding: toPgvector(padVector(vectors[i] as number[])),
-      }).execute()
+      await db
+        .insertInto("chunks")
+        .values({
+          id: chunkId,
+          org_id: id,
+          document_id: documentId,
+          ord: 0,
+          heading_path: page.heading,
+          text: page.text,
+          token_count: Math.max(1, Math.ceil(page.text.length / 4)),
+          char_start: 0,
+          char_end: page.text.length,
+        })
+        .execute()
+      await db
+        .insertInto("chunk_embeddings")
+        .values({
+          chunk_id: chunkId,
+          org_id: id,
+          model: embedder.model,
+          dim: embedder.dim,
+          embedding: toPgvector(padVector(vectors[i])),
+        })
+        .execute()
     }
 
     return {
-      id, name, publishableKey, revokedKey, secretKey, revokedSecretKey, origin,
+      id,
+      name,
+      publishableKey,
+      revokedKey,
+      secretKey,
+      revokedSecretKey,
+      origin,
       corpus: corpus.map((c) => ({ url: c.url, text: c.text })),
       poisoned: poisoned.map((entry) => ({
-        id: entry.id, category: entry.category, url: entry.url,
+        id: entry.id,
+        category: entry.category,
+        url: entry.url,
         text: `${entry.legit}\n\n${entry.injected}`,
-        question: entry.question, canary: entry.canary, attackerUrls: entry.attackerUrls,
+        question: entry.question,
+        canary: entry.canary,
+        attackerUrls: entry.attackerUrls,
       })),
     }
   }
@@ -322,14 +428,22 @@ async function main(): Promise<void> {
   if (hasMasterKey()) {
     credentialCanary = `gsk_probe_canary_${newId("key").slice(4)}`
     const credentialId = newId("prv")
-    await db.insertInto("org_provider_credentials").values({
-      id: credentialId, org_id: c.id, role: "generation", provider: "groq",
-      model: null, base_url: null, dim: null,
-      key_ciphertext: encryptProviderKey(credentialCanary, credentialId),
-      key_suffix: keySuffix(credentialCanary),
-      last_validated_at: new Date(),
-      last_validation: "seeded by seed-security (never validated live)",
-    }).execute()
+    await db
+      .insertInto("org_provider_credentials")
+      .values({
+        id: credentialId,
+        org_id: c.id,
+        role: "generation",
+        provider: "groq",
+        model: null,
+        base_url: null,
+        dim: null,
+        key_ciphertext: encryptProviderKey(credentialCanary, credentialId),
+        key_suffix: keySuffix(credentialCanary),
+        last_validated_at: new Date(),
+        last_validation: "seeded by seed-security (never validated live)",
+      })
+      .execute()
   }
 
   // ── System-prompt markers ────────────────────────────────────────────────
@@ -355,9 +469,15 @@ async function main(): Promise<void> {
   writeFileSync(resolve(outPath), `${JSON.stringify(fixture, null, 2)}\n`)
 
   console.log(`seeded ${ORG_A} (${a.id}), ${ORG_B} (${b.id}), ${ORG_C} (${c.id})`)
-  console.log(`  org A: pk ${a.publishableKey}, revoked ${a.revokedKey}, sk …${a.secretKey.slice(-4)}, origin ${a.origin}, ${a.corpus.length} chunks`)
-  console.log(`  org B: pk ${b.publishableKey}, revoked ${b.revokedKey}, sk …${b.secretKey.slice(-4)}, origin ${b.origin}, ${b.corpus.length} chunks`)
-  console.log(`  credential canary: ${credentialCanary === null ? "none (CREDENTIAL_MASTER_KEY unset)" : "stored on org C"}`)
+  console.log(
+    `  org A: pk ${a.publishableKey}, revoked ${a.revokedKey}, sk …${a.secretKey.slice(-4)}, origin ${a.origin}, ${a.corpus.length} chunks`,
+  )
+  console.log(
+    `  org B: pk ${b.publishableKey}, revoked ${b.revokedKey}, sk …${b.secretKey.slice(-4)}, origin ${b.origin}, ${b.corpus.length} chunks`,
+  )
+  console.log(
+    `  credential canary: ${credentialCanary === null ? "none (CREDENTIAL_MASTER_KEY unset)" : "stored on org C"}`,
+  )
   console.log(`  system-prompt markers: ${systemPromptMarkers.length}`)
   console.log(`fixture written to ${resolve(outPath)}`)
   await db.destroy()

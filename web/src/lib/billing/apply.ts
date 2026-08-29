@@ -35,15 +35,30 @@ import type { StripeEvent } from "@/lib/stripe/signature"
 //#region Types
 export type ApplyOutcome =
   | { applied: true; orgId: string; plan: PlanId; status: string }
-  | { applied: false; reason: "duplicate" | "ignored_type" | "unknown_org" | "malformed" | "terminal" }
+  | {
+      applied: false
+      reason: "duplicate" | "ignored_type" | "unknown_org" | "malformed" | "terminal"
+    }
 
 type SubscriptionStatus =
-  | "trialing" | "active" | "past_due" | "canceled"
-  | "incomplete" | "incomplete_expired" | "unpaid" | "paused"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "incomplete"
+  | "incomplete_expired"
+  | "unpaid"
+  | "paused"
 
 const STATUSES: readonly SubscriptionStatus[] = [
-  "trialing", "active", "past_due", "canceled",
-  "incomplete", "incomplete_expired", "unpaid", "paused",
+  "trialing",
+  "active",
+  "past_due",
+  "canceled",
+  "incomplete",
+  "incomplete_expired",
+  "unpaid",
+  "paused",
 ]
 
 const APPLIED_TYPES = new Set([
@@ -96,9 +111,10 @@ function periodEnd(object: Record<string, unknown>): Date | null {
   if (typeof direct === "number") return new Date(direct * 1000)
   const items = object.items as { data?: unknown } | undefined
   const first: unknown = Array.isArray(items?.data) ? items.data[0] : undefined
-  const nested = typeof first === "object" && first !== null
-    ? (first as Record<string, unknown>).current_period_end
-    : undefined
+  const nested =
+    typeof first === "object" && first !== null
+      ? (first as Record<string, unknown>).current_period_end
+      : undefined
   return typeof nested === "number" ? new Date(nested * 1000) : null
 }
 
@@ -163,14 +179,18 @@ export async function applyStripeEvent(event: StripeEvent): Promise<ApplyOutcome
     // A deleted subscription is canceled whatever its object says; for the
     // others the status must be one Stripe documents, or we would write a
     // value the CHECK rejects and turn a routine event into a retry loop.
-    const status: SubscriptionStatus = event.type === "customer.subscription.deleted"
-      ? "canceled"
-      : STATUSES.includes(rawStatus as SubscriptionStatus)
-        ? (rawStatus as SubscriptionStatus)
-        : "incomplete"
+    const status: SubscriptionStatus =
+      event.type === "customer.subscription.deleted"
+        ? "canceled"
+        : STATUSES.includes(rawStatus as SubscriptionStatus)
+          ? (rawStatus as SubscriptionStatus)
+          : "incomplete"
 
-    const org = await trx.selectFrom("organizations").select("id")
-      .where("id", "=", meta.orgId).executeTakeFirst()
+    const org = await trx
+      .selectFrom("organizations")
+      .select("id")
+      .where("id", "=", meta.orgId)
+      .executeTakeFirst()
     if (!org) {
       // The org was deleted while a subscription lived on. Nothing to
       // apply, and nothing Stripe can do about it — 2xx and move on. (The
@@ -179,9 +199,11 @@ export async function applyStripeEvent(event: StripeEvent): Promise<ApplyOutcome
       return { applied: false, reason: "unknown_org" } as const
     }
 
-    const existing = await trx.selectFrom("subscriptions")
+    const existing = await trx
+      .selectFrom("subscriptions")
       .select(["stripe_subscription_id", "status"])
-      .where("org_id", "=", meta.orgId).executeTakeFirst()
+      .where("org_id", "=", meta.orgId)
+      .executeTakeFirst()
 
     // Out-of-order delivery is possible — Stripe does not promise ordering —
     // and the case that would actually hurt is a late `updated` arriving
@@ -192,9 +214,9 @@ export async function applyStripeEvent(event: StripeEvent): Promise<ApplyOutcome
     // the live object from Stripe on every webhook — costs an API call per
     // event to order a stream that is already almost always in order.
     if (
-      existing?.stripe_subscription_id === subscriptionId
-      && existing.status === "canceled"
-      && event.type !== "customer.subscription.deleted"
+      existing?.stripe_subscription_id === subscriptionId &&
+      existing.status === "canceled" &&
+      event.type !== "customer.subscription.deleted"
     ) {
       return { applied: false, reason: "terminal" } as const
     }
@@ -215,19 +237,20 @@ export async function applyStripeEvent(event: StripeEvent): Promise<ApplyOutcome
         cancel_at_period_end: object.cancel_at_period_end === true,
         current_period_end: periodEnd(object),
       })
-      .onConflict((oc) => oc.column("org_id").doUpdateSet({
-        stripe_customer_id: customerId,
-        stripe_subscription_id: subscriptionId,
-        plan: meta.plan,
-        status,
-        cancel_at_period_end: object.cancel_at_period_end === true,
-        current_period_end: periodEnd(object),
-        updated_at: sql`NOW()`,
-      }))
+      .onConflict((oc) =>
+        oc.column("org_id").doUpdateSet({
+          stripe_customer_id: customerId,
+          stripe_subscription_id: subscriptionId,
+          plan: meta.plan,
+          status,
+          cancel_at_period_end: object.cancel_at_period_end === true,
+          current_period_end: periodEnd(object),
+          updated_at: sql`NOW()`,
+        }),
+      )
       .execute()
 
-    await trx.updateTable("organizations").set({ plan })
-      .where("id", "=", meta.orgId).execute()
+    await trx.updateTable("organizations").set({ plan }).where("id", "=", meta.orgId).execute()
 
     return { applied: true, orgId: meta.orgId, plan, status } as const
   })

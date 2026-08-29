@@ -127,7 +127,12 @@ function isRetryable(err: unknown): boolean {
  * synchronized herd; the tighter variants still leave every client waiting
  * roughly the same time and re-colliding.
  */
-function delayFor(attempt: number, err: unknown, policy: RetryPolicy, random: () => number): number {
+function delayFor(
+  attempt: number,
+  err: unknown,
+  policy: RetryPolicy,
+  random: () => number,
+): number {
   if (err instanceof LLMHttpError && err.retryAfterMs !== null && err.retryAfterMs >= 0) {
     return err.retryAfterMs
   }

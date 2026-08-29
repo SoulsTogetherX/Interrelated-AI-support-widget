@@ -93,8 +93,7 @@ interface StoredHandoff {
  * token stays invisible there too.
  */
 type SessionSource =
-  | { kind: "publishable"; publishableKey: string }
-  | { kind: "url"; sessionUrl: string }
+  { kind: "publishable"; publishableKey: string } | { kind: "url"; sessionUrl: string }
 
 interface ApiClientOptions {
   apiBase: string
@@ -183,7 +182,11 @@ function loadHandoffBookmark(): HandoffBookmark | null {
     const parsed = JSON.parse(raw) as Partial<HandoffBookmark> | null
     if (parsed === null || typeof parsed !== "object") return null
     if (typeof parsed.conversationId !== "string" || typeof parsed.at !== "number") return null
-    return { conversationId: parsed.conversationId, panelOpen: parsed.panelOpen !== false, at: parsed.at }
+    return {
+      conversationId: parsed.conversationId,
+      panelOpen: parsed.panelOpen !== false,
+      at: parsed.at,
+    }
   } catch {
     return null
   }
@@ -247,26 +250,29 @@ class ApiClient implements WidgetClient {
    */
   ensureSession(): Promise<void> {
     if (this.#token !== null) return Promise.resolve()
-    this.#minting ??= this.#mint().finally(() => { this.#minting = null })
+    this.#minting ??= this.#mint().finally(() => {
+      this.#minting = null
+    })
     return this.#minting
   }
 
   async #mint(): Promise<void> {
-    const response = this.#source.kind === "url"
-      ? await this.#fetchServerMintedSession(this.#source.sessionUrl)
-      : await this.#fetch(`${this.#apiBase}/v1/widget/session`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          publishableKey: this.#source.publishableKey,
-          ...(this.#visitorId !== null ? { visitorId: this.#visitorId } : {}),
-        }),
-      })
+    const response =
+      this.#source.kind === "url"
+        ? await this.#fetchServerMintedSession(this.#source.sessionUrl)
+        : await this.#fetch(`${this.#apiBase}/v1/widget/session`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              publishableKey: this.#source.publishableKey,
+              ...(this.#visitorId !== null ? { visitorId: this.#visitorId } : {}),
+            }),
+          })
     if (response.status === 429) throw new RateLimitError("rate limited")
     if (!response.ok) throw new Error(`session mint failed (${response.status})`)
     // Both sources answer the same shape — the customer's endpoint proxies
     // realtime's response verbatim — so one parse serves both.
-    const body = await response.json() as { token: string; visitorId?: string }
+    const body = (await response.json()) as { token: string; visitorId?: string }
     this.#token = body.token
     if (this.#source.kind === "publishable" && typeof body.visitorId === "string") {
       // The anonymous handle is persisted so a reload keeps its thread. A
@@ -313,7 +319,7 @@ class ApiClient implements WidgetClient {
       ...(conversationId !== undefined ? { conversationId } : {}),
     })
     if (response.status === 429) {
-      const body = await response.json().catch(() => null) as { error?: string } | null
+      const body = (await response.json().catch(() => null)) as { error?: string } | null
       if (body?.error === "daily quota reached") throw new QuotaError(body.error)
       throw new RateLimitError(body?.error ?? "too many requests")
     }
@@ -334,7 +340,7 @@ class ApiClient implements WidgetClient {
     // which no model call is being made against.
     if (response.status === 429) throw new RateLimitError("too many requests")
     if (!response.ok) throw new Error(`escalate failed (${response.status})`)
-    return await response.json() as { status: string; created: boolean }
+    return (await response.json()) as { status: string; created: boolean }
   }
 
   async handoffTicket(conversationId: string): Promise<string | null> {
@@ -348,7 +354,7 @@ class ApiClient implements WidgetClient {
     // forever would be the failure mode a bounded rejoin exists to avoid.
     if (response.status === 404 || response.status === 400) return null
     if (!response.ok) throw new Error(`handoff ticket failed (${response.status})`)
-    const body = await response.json() as { ticket: string }
+    const body = (await response.json()) as { ticket: string }
     return body.ticket
   }
 

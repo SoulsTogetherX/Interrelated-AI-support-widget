@@ -32,11 +32,15 @@ let agentId: string
 /** Everything a test needs to talk on one conversation. */
 async function escalatedConversation(visitorId: string): Promise<string> {
   const conversationId = newId("con")
-  await db.insertInto("conversations")
+  await db
+    .insertInto("conversations")
     .values({ id: conversationId, org_id: orgId, visitor_id: visitorId })
     .execute()
   const outcome = await requestHandoff(db, {
-    orgId, conversationId, visitorId, reason: "visitor_request",
+    orgId,
+    conversationId,
+    visitorId,
+    reason: "visitor_request",
   })
   if (!outcome.ok) throw new Error("fixture failed to escalate")
   return conversationId
@@ -71,8 +75,11 @@ function connect(ticket: string): Promise<Client> {
 
     socket.on("message", (raw) => {
       const frame = JSON.parse((raw as Buffer).toString("utf8")) as HandoffServerFrame
-      if (waiting) { const w = waiting; waiting = null; w(frame) }
-      else queue.push(frame)
+      if (waiting) {
+        const w = waiting
+        waiting = null
+        w(frame)
+      } else queue.push(frame)
     })
     socket.on("error", reject)
     socket.on("unexpected-response", (_req, res) => {
@@ -81,16 +88,24 @@ function connect(ticket: string): Promise<Client> {
     socket.on("open", () => {
       resolve({
         socket,
-        next: () => new Promise<HandoffServerFrame>((r) => {
-          const queued = queue.shift()
-          if (queued) r(queued)
-          else waiting = r
-        }),
+        next: () =>
+          new Promise<HandoffServerFrame>((r) => {
+            const queued = queue.shift()
+            if (queued) r(queued)
+            else waiting = r
+          }),
         send: (frame: unknown) => socket.send(JSON.stringify(frame)),
-        close: () => new Promise<void>((r) => { socket.once("close", () => r()); socket.close() }),
-        closed: () => socket.readyState === socket.CLOSED
-          ? Promise.resolve()
-          : new Promise<void>((r) => { socket.once("close", () => r()) }),
+        close: () =>
+          new Promise<void>((r) => {
+            socket.once("close", () => r())
+            socket.close()
+          }),
+        closed: () =>
+          socket.readyState === socket.CLOSED
+            ? Promise.resolve()
+            : new Promise<void>((r) => {
+                socket.once("close", () => r())
+              }),
       })
     })
   })
@@ -145,16 +160,19 @@ async function seedMessage(
   content: string,
 ): Promise<string> {
   const id = newId("msg")
-  await db.insertInto("messages").values({
-    id,
-    conversation_id: conversationId,
-    org_id: orgId,
-    role,
-    content,
-    // A model and its contract-violation count are paired by CHECK since
-    // migration 010: a bot turn names both, a human turn neither.
-    ...(role === "assistant" ? { model: "mock-llm", schema_violations: 0 } : {}),
-  }).execute()
+  await db
+    .insertInto("messages")
+    .values({
+      id,
+      conversation_id: conversationId,
+      org_id: orgId,
+      role,
+      content,
+      // A model and its contract-violation count are paired by CHECK since
+      // migration 010: a bot turn names both, a human turn neither.
+      ...(role === "assistant" ? { model: "mock-llm", schema_violations: 0 } : {}),
+    })
+    .execute()
   return id
 }
 
@@ -164,7 +182,10 @@ function refusalStatus(ticket: string, path = "/v1/handoff"): Promise<number> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`${wsBase}${path}?ticket=${encodeURIComponent(ticket)}`)
     socket.on("unexpected-response", (_req, res) => resolve(res.statusCode ?? 0))
-    socket.on("open", () => { socket.close(); reject(new Error("upgrade unexpectedly succeeded")) })
+    socket.on("open", () => {
+      socket.close()
+      reject(new Error("upgrade unexpectedly succeeded"))
+    })
     socket.on("error", (err) => reject(err))
   })
 }
@@ -176,14 +197,27 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     orgId = newId("org")
     agentId = newId("usr")
     await db.insertInto("organizations").values({ id: orgId, name: "Socket Co" }).execute()
-    await db.insertInto("users").values({
-      id: agentId, email_index: `idx_${agentId}`, email_ciphertext: "x", password_hash: "x",
-    }).execute()
+    await db
+      .insertInto("users")
+      .values({
+        id: agentId,
+        email_index: `idx_${agentId}`,
+        email_ciphertext: "x",
+        password_hash: "x",
+      })
+      .execute()
 
     // heartbeatMs 0: no timer in the test process. The heartbeat's job is
     // reaping half-open sockets, which a loopback test cannot produce.
-    handoff = createHandoffServer({ db, ticketSecret: SECRET, tickets: new TicketRegistry(), heartbeatMs: 0 })
-    server = createServer((_req, res) => { res.writeHead(426).end() })
+    handoff = createHandoffServer({
+      db,
+      ticketSecret: SECRET,
+      tickets: new TicketRegistry(),
+      heartbeatMs: 0,
+    })
+    server = createServer((_req, res) => {
+      res.writeHead(426).end()
+    })
     server.on("upgrade", (req, socket, head) => handoff.handleUpgrade(req, socket, head))
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
     const address = server.address() as { port: number }
@@ -223,16 +257,19 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     const conversationId = await escalatedConversation("vis_owner")
 
     // Right conversation, wrong tenant.
-    await expect(refusalStatus(ticketFor(conversationId, "visitor", "vis_owner", newId("org"))))
-      .resolves.toBe(404)
+    await expect(
+      refusalStatus(ticketFor(conversationId, "visitor", "vis_owner", newId("org"))),
+    ).resolves.toBe(404)
     // Right tenant, wrong visitor — the binding that stops one visitor
     // listening to another's conversation with staff.
-    await expect(refusalStatus(ticketFor(conversationId, "visitor", "vis_someone_else")))
-      .resolves.toBe(404)
+    await expect(
+      refusalStatus(ticketFor(conversationId, "visitor", "vis_someone_else")),
+    ).resolves.toBe(404)
 
     // And once the handoff closes there is nothing to join.
     const closed = await escalatedConversation("vis_closed")
-    await db.updateTable("handoff_sessions")
+    await db
+      .updateTable("handoff_sessions")
       .set({ status: "closed", closed_at: new Date() })
       .where("conversation_id", "=", closed)
       .execute()
@@ -255,13 +292,21 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     const agent = await connect(ticketFor(conversationId, "agent", agentId))
     // The agent's own ready says active — attaching IS claiming, so there
     // is no separate button to forget to press.
-    expect(await agent.next()).toEqual({ type: "ready", role: "agent", conversationId, status: "active" })
+    expect(await agent.next()).toEqual({
+      type: "ready",
+      role: "agent",
+      conversationId,
+      status: "active",
+    })
     expect(await agent.next()).toEqual({ type: "history", messages: [] })
     // …and the visitor learns a person is here.
     expect(await visitor.next()).toEqual({ type: "presence", agents: 1, visitors: 1 })
 
-    const row = await db.selectFrom("handoff_sessions").selectAll()
-      .where("conversation_id", "=", conversationId).executeTakeFirstOrThrow()
+    const row = await db
+      .selectFrom("handoff_sessions")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .executeTakeFirstOrThrow()
     expect(row.status).toBe("active")
     expect(row.claimed_by).toBe(agentId)
     expect(row.claimed_at).not.toBeNull()
@@ -287,18 +332,31 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     visitor.send({ type: "message", text: "my order never arrived", role: "agent" })
     const heardByAgent = await agent.next()
     const echoedToVisitor = await visitor.next()
-    expect(heardByAgent).toMatchObject({ type: "message", role: "visitor", text: "my order never arrived" })
+    expect(heardByAgent).toMatchObject({
+      type: "message",
+      role: "visitor",
+      text: "my order never arrived",
+    })
     // The sender sees its own message through the same broadcast, so both
     // ends render one order from one source of truth.
     expect(echoedToVisitor).toEqual(heardByAgent)
 
     agent.send({ type: "message", text: "I can see it — reshipping now." })
-    expect(await visitor.next()).toMatchObject({ type: "message", role: "agent", text: "I can see it — reshipping now." })
+    expect(await visitor.next()).toMatchObject({
+      type: "message",
+      role: "agent",
+      text: "I can see it — reshipping now.",
+    })
     await agent.next()
 
     // Persisted, in order, with the roles the tickets said.
-    const rows = await db.selectFrom("messages").selectAll()
-      .where("conversation_id", "=", conversationId).orderBy("created_at").orderBy("id").execute()
+    const rows = await db
+      .selectFrom("messages")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute()
     expect(rows.map((r) => [r.role, r.content])).toEqual([
       ["visitor", "my order never arrived"],
       ["agent", "I can see it — reshipping now."],
@@ -307,9 +365,14 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     // reserve those for the assistant role, and a human is not one.
     expect(rows.every((r) => r.model === null && r.refused === false)).toBe(true)
     // The thread rose to the top of the dashboard's list.
-    const conversation = await db.selectFrom("conversations").selectAll()
-      .where("id", "=", conversationId).executeTakeFirstOrThrow()
-    expect(conversation.last_message_at.getTime()).toBeGreaterThan(conversation.created_at.getTime() - 1)
+    const conversation = await db
+      .selectFrom("conversations")
+      .selectAll()
+      .where("id", "=", conversationId)
+      .executeTakeFirstOrThrow()
+    expect(conversation.last_message_at.getTime()).toBeGreaterThan(
+      conversation.created_at.getTime() - 1,
+    )
 
     await visitor.close()
     await agent.close()
@@ -321,7 +384,10 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     await open(visitor)
 
     visitor.socket.send("not json at all")
-    expect(await visitor.next()).toMatchObject({ type: "error", reason: expect.stringContaining("JSON") })
+    expect(await visitor.next()).toMatchObject({
+      type: "error",
+      reason: expect.stringContaining("JSON"),
+    })
 
     visitor.send({ type: "whisper", text: "hello" })
     expect(await visitor.next()).toMatchObject({ type: "error", reason: "unsupported frame" })
@@ -329,7 +395,10 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     // A typing frame without its flag is refused rather than assumed: the
     // two things it could have meant are opposites.
     visitor.send({ type: "typing" })
-    expect(await visitor.next()).toMatchObject({ type: "error", reason: expect.stringContaining("active") })
+    expect(await visitor.next()).toMatchObject({
+      type: "error",
+      reason: expect.stringContaining("active"),
+    })
 
     visitor.send({ type: "message", text: "   " })
     expect((await visitor.next()).type).toBe("error")
@@ -341,8 +410,13 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     // mid-support-conversation.
     visitor.send({ type: "message", text: "sorry, hello?" })
     expect(await visitor.next()).toMatchObject({ type: "message", text: "sorry, hello?" })
-    expect(await db.selectFrom("messages").selectAll()
-      .where("conversation_id", "=", conversationId).execute()).toHaveLength(1)
+    expect(
+      await db
+        .selectFrom("messages")
+        .selectAll()
+        .where("conversation_id", "=", conversationId)
+        .execute(),
+    ).toHaveLength(1)
 
     await visitor.close()
   })
@@ -372,7 +446,11 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
   it("replays the conversation — the bot's half included — to whoever attaches", async () => {
     const conversationId = await escalatedConversation("vis_history")
     const asked = await seedMessage(conversationId, "visitor", "how do I cancel my plan?")
-    const answered = await seedMessage(conversationId, "assistant", "Cancel from Settings → Billing.")
+    const answered = await seedMessage(
+      conversationId,
+      "assistant",
+      "Cancel from Settings → Billing.",
+    )
     const helped = await seedMessage(conversationId, "agent", "I can do that for you now.")
 
     const visitor = await connect(ticketFor(conversationId, "visitor", "vis_history"))
@@ -384,7 +462,7 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
       [answered, "assistant", "Cancel from Settings → Billing."],
       [helped, "agent", "I can do that for you now."],
     ])
-    expect(Number.isNaN(Date.parse(backlog[0]!.at))).toBe(false)
+    expect(Number.isNaN(Date.parse(backlog[0].at))).toBe(false)
 
     // The agent gets the same backlog: reading what the bot already told
     // this visitor IS the job, and the socket must not make an arriving
@@ -421,25 +499,28 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
     const conversationId = await escalatedConversation("vis_long")
     const overflow = 5
     const base = Date.now() - 60 * 60 * 1000
-    await db.insertInto("messages").values(
-      Array.from({ length: HANDOFF_HISTORY_LIMIT + overflow }, (_, i) => ({
-        id: newId("msg"),
-        conversation_id: conversationId,
-        org_id: orgId,
-        role: "visitor" as const,
-        content: `turn ${i}`,
-        // Explicit timestamps: one bulk insert shares a transaction clock,
-        // and rows tying on created_at would order by a random id.
-        created_at: new Date(base + i * 1000),
-      })),
-    ).execute()
+    await db
+      .insertInto("messages")
+      .values(
+        Array.from({ length: HANDOFF_HISTORY_LIMIT + overflow }, (_, i) => ({
+          id: newId("msg"),
+          conversation_id: conversationId,
+          org_id: orgId,
+          role: "visitor" as const,
+          content: `turn ${i}`,
+          // Explicit timestamps: one bulk insert shares a transaction clock,
+          // and rows tying on created_at would order by a random id.
+          created_at: new Date(base + i * 1000),
+        })),
+      )
+      .execute()
 
     const visitor = await connect(ticketFor(conversationId, "visitor", "vis_long"))
     const backlog = await open(visitor)
     expect(backlog).toHaveLength(HANDOFF_HISTORY_LIMIT)
     // The NEWEST window, still in reading order — the oldest turns are what
     // a bounded backlog drops.
-    expect(backlog[0]!.text).toBe(`turn ${overflow}`)
+    expect(backlog[0].text).toBe(`turn ${overflow}`)
     expect(backlog.at(-1)!.text).toBe(`turn ${HANDOFF_HISTORY_LIMIT + overflow - 1}`)
     await visitor.close()
   })
@@ -559,7 +640,11 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
 
     visitor.send({ type: "message", text: "still there?" })
     // If the other four had been relayed, THIS would be a typing frame.
-    expect(await agent.next()).toMatchObject({ type: "message", role: "visitor", text: "still there?" })
+    expect(await agent.next()).toMatchObject({
+      type: "message",
+      role: "visitor",
+      text: "still there?",
+    })
     // Sending ends composing: the indicator cannot outlive the sentence it
     // was announcing.
     expect(await agent.next()).toEqual({ type: "typing", role: "visitor", active: false })
@@ -570,8 +655,11 @@ describe.skipIf(!DB_CONFIGURED)("handoff socket", () => {
 
     // And nothing about composing reached the transcript — typing is not
     // something anyone said.
-    const rows = await db.selectFrom("messages").selectAll()
-      .where("conversation_id", "=", conversationId).execute()
+    const rows = await db
+      .selectFrom("messages")
+      .selectAll()
+      .where("conversation_id", "=", conversationId)
+      .execute()
     expect(rows.map((r) => r.content)).toEqual(["still there?"])
 
     await visitor.close()

@@ -76,8 +76,8 @@ function parseMarkdown(source: string): ParsedDocument {
     // Trim to non-whitespace bounds via offsets so text stays a verbatim slice.
     let from = paraStartOffset
     let to = endOffset
-    while (from < to && /\s/.test(source[from] as string)) from++
-    while (to > from && /\s/.test(source[to - 1] as string)) to--
+    while (from < to && /\s/.test(source[from])) from++
+    while (to > from && /\s/.test(source[to - 1])) to--
     if (to > from) {
       blocks.push({ kind: "paragraph", text: source.slice(from, to), charStart: from, charEnd: to })
     }
@@ -85,17 +85,17 @@ function parseMarkdown(source: string): ParsedDocument {
   }
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] as Line
+    const line = lines[i]
 
     // ── Fenced code ──────────────────────────────────────────────────────
     const fence = FENCE.exec(line.text)
     if (fence) {
       closeParagraph(line.start)
-      const marker = fence[1] as string
+      const marker = fence[1]
       // The block spans the lines BETWEEN the fences; the fence lines are
       // scaffolding, not content someone would cite.
       let j = i + 1
-      while (j < lines.length && !(lines[j] as Line).text.trimStart().startsWith(marker)) j++
+      while (j < lines.length && !lines[j].text.trimStart().startsWith(marker)) j++
       const first = lines[i + 1]
       const last = lines[j - 1]
       if (first && last && j > i + 1) {
@@ -114,12 +114,12 @@ function parseMarkdown(source: string): ParsedDocument {
     const heading = ATX_HEADING.exec(line.text)
     if (heading) {
       closeParagraph(line.start)
-      const level = (heading[2] as string).length
-      const contentStart = line.start + (heading[1] as string).length
+      const level = heading[2].length
+      const contentStart = line.start + heading[1].length
       // Strip an optional CLOSING hash sequence ("## Title ##") and trailing
       // whitespace — again by moving the end offset, never by editing text.
       let end = line.end
-      const content = heading[3] as string
+      const content = heading[3]
       const closing = /[ \t]+#+[ \t]*$|[ \t]+$/.exec(content)
       if (closing) end = contentStart + (closing.index ?? content.length)
       if (end > contentStart) {
@@ -141,7 +141,7 @@ function parseMarkdown(source: string): ParsedDocument {
     if (item) {
       closeParagraph(line.start)
       paraStart = i
-      paraStartOffset = line.start + (item[1] as string).length
+      paraStartOffset = line.start + item[1].length
       continue
     }
 

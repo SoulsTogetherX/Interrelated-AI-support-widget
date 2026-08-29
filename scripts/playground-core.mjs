@@ -83,7 +83,13 @@ function reconcileSecrets(jsonText, randomBytes) {
 
   let changed = false
   const secrets = { ...parsed }
-  for (const field of ["version", "createdAt", "credentialMasterKey", "internalApiSecret", "widgetTokenSecret"]) {
+  for (const field of [
+    "version",
+    "createdAt",
+    "credentialMasterKey",
+    "internalApiSecret",
+    "widgetTokenSecret",
+  ]) {
     if (secrets[field] === undefined || secrets[field] === null || secrets[field] === "") {
       secrets[field] = fresh[field]
       changed = true
@@ -167,8 +173,8 @@ function assembleEnv({ processEnv, dotenv, secrets }) {
   ) {
     warnings.push(
       "CREDENTIAL_MASTER_KEY is set in your environment and differs from .playground/secrets.json — " +
-      "provider keys saved in earlier playground sessions cannot decrypt under it. " +
-      "If the Providers page starts failing, delete and re-save the credential.",
+        "provider keys saved in earlier playground sessions cannot decrypt under it. " +
+        "If the Providers page starts failing, delete and re-save the credential.",
     )
   }
   for (const [name, value] of Object.entries({ ...secretFills, ...FILL_DEFAULTS })) {
@@ -181,7 +187,9 @@ function assembleEnv({ processEnv, dotenv, secrets }) {
 
   for (const [name, value] of Object.entries(HARD_OVERRIDES)) {
     if (env[name] !== undefined && env[name] !== "" && env[name] !== value) {
-      warnings.push(`${name}=${env[name]} overridden to ${value} — the playground's fixtures and seed depend on it`)
+      warnings.push(
+        `${name}=${env[name]} overridden to ${value} — the playground's fixtures and seed depend on it`,
+      )
     }
     env[name] = value
   }
@@ -221,11 +229,12 @@ function parseSeedResult(stdout) {
  * seed that failed soft).
  */
 function buildBanner({ seed, llmProvider, skippedSeed }) {
-  const credentialLine = seed === null
-    ? "  sign in:    play@interrelated.local (seed skipped — credentials from your last run)"
-    : seed.passwordChanged
-      ? `  sign in:    ${seed.email} (with the password you set previously)`
-      : `  sign in:    ${seed.email} / play-with-interrelated  (${seed.role} of the demo org)`
+  const credentialLine =
+    seed === null
+      ? "  sign in:    play@interrelated.local (seed skipped — credentials from your last run)"
+      : seed.passwordChanged
+        ? `  sign in:    ${seed.email} (with the password you set previously)`
+        : `  sign in:    ${seed.email} / play-with-interrelated  (${seed.role} of the demo org)`
 
   return [
     "",

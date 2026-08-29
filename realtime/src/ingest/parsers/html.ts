@@ -39,8 +39,22 @@ import type { Block, ParsedDocument } from "@/ingest/parsers/types"
  *  chrome; `select`/`button`/`form` are controls whose text is UI, not
  *  documentation content. */
 const SKIP_SUBTREES = new Set([
-  "script", "style", "noscript", "template", "svg", "canvas", "iframe",
-  "object", "nav", "header", "footer", "aside", "form", "button", "select", "dialog",
+  "script",
+  "style",
+  "noscript",
+  "template",
+  "svg",
+  "canvas",
+  "iframe",
+  "object",
+  "nav",
+  "header",
+  "footer",
+  "aside",
+  "form",
+  "button",
+  "select",
+  "dialog",
 ])
 
 const HEADING_LEVEL: Record<string, number> = { h1: 1, h2: 2, h3: 3, h4: 4, h5: 5, h6: 6 }
@@ -49,13 +63,36 @@ const HEADING_LEVEL: Record<string, number> = { h1: 1, h2: 2, h3: 3, h4: 4, h5: 
  *  (not whole rows) — cell fragments read oddly alone, but the chunker packs
  *  adjacent blocks back together, and per-cell blocks keep offsets simple. */
 const PARAGRAPH_CONTAINERS = new Set([
-  "p", "li", "blockquote", "dd", "dt", "figcaption", "caption", "summary", "td", "th",
+  "p",
+  "li",
+  "blockquote",
+  "dd",
+  "dt",
+  "figcaption",
+  "caption",
+  "summary",
+  "td",
+  "th",
 ])
 
 /** Structural elements that close whatever block is open. */
 const FLUSH_BOUNDARIES = new Set([
-  "div", "section", "article", "main", "body", "ul", "ol", "dl", "table",
-  "thead", "tbody", "tfoot", "tr", "figure", "details", "hr",
+  "div",
+  "section",
+  "article",
+  "main",
+  "body",
+  "ul",
+  "ol",
+  "dl",
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "figure",
+  "details",
+  "hr",
 ])
 //#endregion
 
@@ -95,14 +132,22 @@ function parseHtml(html: string): ParsedDocument {
     // content_hash short-circuit.
     const prose = collector.parts.join("").replace(/\s+/g, " ").trim()
     emit(collector.kind === "heading" ? "heading" : "paragraph", prose, collector.level)
-    if (collector.kind === "heading" && collector.level === 1 && firstH1 === null && prose.length > 0) {
+    if (
+      collector.kind === "heading" &&
+      collector.level === 1 &&
+      firstH1 === null &&
+      prose.length > 0
+    ) {
       firstH1 = prose
     }
     collector = null
   }
 
   const flushCode = (): void => {
-    const code = codeParts.join("").replace(/^\n+|\n+$/g, "").trimEnd()
+    const code = codeParts
+      .join("")
+      .replace(/^\n+|\n+$/g, "")
+      .trimEnd()
     codeParts.length = 0
     emit("code", code)
   }
@@ -185,7 +230,11 @@ function parseHtml(html: string): ParsedDocument {
           return
         }
         if (preDepth > 0) return
-        if (HEADING_LEVEL[name] !== undefined || PARAGRAPH_CONTAINERS.has(name) || FLUSH_BOUNDARIES.has(name)) {
+        if (
+          HEADING_LEVEL[name] !== undefined ||
+          PARAGRAPH_CONTAINERS.has(name) ||
+          FLUSH_BOUNDARIES.has(name)
+        ) {
           flushProse()
         }
       },

@@ -117,8 +117,8 @@ async function start(): Promise<void> {
   // separately.
   const tokenSecret = resolveTokenSecret()
   console.log(
-    `[boot] widget: llm=${llm.model}${llmFallback ? ` fallback=${llmFallback.model}` : ""}`
-    + ` embeddings=${embedder.model}`,
+    `[boot] widget: llm=${llm.model}${llmFallback ? ` fallback=${llmFallback.model}` : ""}` +
+      ` embeddings=${embedder.model}`,
   )
 
   // The worker is CONSTRUCTED before the app so the internal API's enqueue
@@ -131,9 +131,8 @@ async function start(): Promise<void> {
   let worker: IngestWorker | null = null
   if (process.env.INGEST_WORKER === "1") {
     const pollRaw = process.env.INGEST_POLL_MS
-    const pollMs = pollRaw !== undefined && Number.isFinite(Number(pollRaw))
-      ? Number(pollRaw)
-      : undefined
+    const pollMs =
+      pollRaw !== undefined && Number.isFinite(Number(pollRaw)) ? Number(pollRaw) : undefined
     worker = new IngestWorker({
       db,
       embedder,
@@ -164,7 +163,9 @@ async function start(): Promise<void> {
 
   const app = createApp({
     widget: {
-      db, embedder, llm,
+      db,
+      embedder,
+      llm,
       ...(llmFallback ? { llmFallback } : {}),
       tokenSecret,
       ...(Number.isFinite(maxDistance) ? { maxDistance } : {}),

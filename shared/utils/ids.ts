@@ -17,20 +17,20 @@ import { createHash, randomBytes } from "node:crypto"
 // The union is closed on purpose: adding a new entity requires touching this
 // file, which keeps the prefix registry in one reviewable place.
 type IdPrefix =
-  | "org"   // organizations
-  | "usr"   // users
-  | "mem"   // org_members
-  | "ses"   // sessions (dashboard login)
-  | "key"   // api_keys (publishable + secret widget keys)
-  | "prv"   // org_provider_credentials (BYO provider key rows)
-  | "ori"   // allowed_origins
-  | "src"   // sources (a crawl target or upload)
-  | "doc"   // documents (one fetched page / uploaded file)
-  | "chk"   // chunks (one retrieval unit within a document)
-  | "job"   // ingest_jobs (queue rows for the ingest worker)
-  | "con"   // conversations (one widget chat thread)
-  | "msg"   // messages (one turn within a conversation)
-  | "hnd"   // handoff_sessions (one escalation of a conversation to a human)
+  | "org" // organizations
+  | "usr" // users
+  | "mem" // org_members
+  | "ses" // sessions (dashboard login)
+  | "key" // api_keys (publishable + secret widget keys)
+  | "prv" // org_provider_credentials (BYO provider key rows)
+  | "ori" // allowed_origins
+  | "src" // sources (a crawl target or upload)
+  | "doc" // documents (one fetched page / uploaded file)
+  | "chk" // chunks (one retrieval unit within a document)
+  | "job" // ingest_jobs (queue rows for the ingest worker)
+  | "con" // conversations (one widget chat thread)
+  | "msg" // messages (one turn within a conversation)
+  | "hnd" // handoff_sessions (one escalation of a conversation to a human)
 //#endregion
 
 //#region Constants

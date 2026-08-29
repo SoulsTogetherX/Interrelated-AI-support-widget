@@ -147,16 +147,20 @@ export function verifyStripeSignature(
     return { ok: false, reason: "malformed_body" }
   }
   const data = event.data
-  const object = typeof data === "object" && data !== null
-    ? (data as Record<string, unknown>).object
-    : undefined
+  const object =
+    typeof data === "object" && data !== null ? (data as Record<string, unknown>).object : undefined
 
   return {
     ok: true,
     event: {
       id: event.id,
       type: event.type,
-      data: { object: (typeof object === "object" && object !== null ? object : {}) as Record<string, unknown> },
+      data: {
+        object: (typeof object === "object" && object !== null ? object : {}) as Record<
+          string,
+          unknown
+        >,
+      },
     },
   }
 }
@@ -165,7 +169,11 @@ export function verifyStripeSignature(
  *  verifier tested against fixtures its own author generated proves the
  *  format was implemented consistently, which is exactly what a signature
  *  check must be. Nothing in the application signs webhooks. */
-export function signStripePayload(rawBody: string, secret: string, timestampSeconds: number): string {
+export function signStripePayload(
+  rawBody: string,
+  secret: string,
+  timestampSeconds: number,
+): string {
   const signature = createHmac("sha256", secret)
     .update(`${timestampSeconds}.${rawBody}`, "utf8")
     .digest("hex")

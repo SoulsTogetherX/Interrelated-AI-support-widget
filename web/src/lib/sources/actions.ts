@@ -43,9 +43,8 @@ export async function addSourceAction(
 
   const kindRaw = formData.get("kind")
   const kind = kindRaw === "sitemap" ? "sitemap" : "url"
-  const location = typeof formData.get("location") === "string"
-    ? (formData.get("location") as string).trim()
-    : ""
+  const location =
+    typeof formData.get("location") === "string" ? (formData.get("location") as string).trim() : ""
   const depthRaw = formData.get("crawlDepth")
   const crawlDepth = typeof depthRaw === "string" && depthRaw !== "" ? Number(depthRaw) : undefined
 
@@ -136,7 +135,8 @@ export async function uploadSourceAction(
  */
 export async function recrawlSourceAction(formData: FormData): Promise<void> {
   const orgId = typeof formData.get("orgId") === "string" ? (formData.get("orgId") as string) : ""
-  const sourceId = typeof formData.get("sourceId") === "string" ? (formData.get("sourceId") as string) : ""
+  const sourceId =
+    typeof formData.get("sourceId") === "string" ? (formData.get("sourceId") as string) : ""
   if (!isId("src", sourceId)) {
     return
   }
@@ -164,7 +164,8 @@ export async function recrawlSourceAction(formData: FormData): Promise<void> {
  */
 export async function deleteSourceAction(formData: FormData): Promise<void> {
   const orgId = typeof formData.get("orgId") === "string" ? (formData.get("orgId") as string) : ""
-  const sourceId = typeof formData.get("sourceId") === "string" ? (formData.get("sourceId") as string) : ""
+  const sourceId =
+    typeof formData.get("sourceId") === "string" ? (formData.get("sourceId") as string) : ""
   if (!isId("src", sourceId)) {
     return
   }

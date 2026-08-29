@@ -34,7 +34,11 @@ const ANONYMOUS_SHOWN_CHARS = 12
 
 export function describeVisitor(visitorId: string): VisitorDescription {
   if (isAnonymousVisitorId(visitorId)) {
-    return { noun: "visitor", name: `${visitorId.slice(0, ANONYMOUS_SHOWN_CHARS)}…`, identified: false }
+    return {
+      noun: "visitor",
+      name: `${visitorId.slice(0, ANONYMOUS_SHOWN_CHARS)}…`,
+      identified: false,
+    }
   }
   return { noun: "user", name: visitorId, identified: true }
 }

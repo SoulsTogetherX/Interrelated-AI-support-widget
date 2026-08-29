@@ -112,7 +112,15 @@ module.exports = {
   options: {
     doNotFollow: { path: "node_modules" },
     exclude: {
-      path: ["\\.probe/", "\\.playground/", "eval/corpus/", "eval/results/", "local_cache/", "/dist/", "\\.next/"].join("|"),
+      path: [
+        "\\.probe/",
+        "\\.playground/",
+        "eval/corpus/",
+        "eval/results/",
+        "local_cache/",
+        "/dist/",
+        "\\.next/",
+      ].join("|"),
     },
     // REQUIRED for the type-only dependency class to exist at all.
     tsPreCompilationDeps: true,

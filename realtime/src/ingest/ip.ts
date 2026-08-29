@@ -52,8 +52,8 @@ function parseV6(text: string): Uint8Array | null {
         // Embedded IPv4 — legal only as the final group pair.
         const v4 = parseV4(raw)
         if (!v4) return null
-        groups.push(((v4[0] as number) << 8) | (v4[1] as number))
-        groups.push(((v4[2] as number) << 8) | (v4[3] as number))
+        groups.push((v4[0] << 8) | v4[1])
+        groups.push((v4[2] << 8) | v4[3])
       } else {
         if (!/^[0-9a-fA-F]{1,4}$/.test(raw)) return null
         groups.push(parseInt(raw, 16))
@@ -62,8 +62,8 @@ function parseV6(text: string): Uint8Array | null {
     return groups
   }
 
-  const head = parseGroups(halves[0] as string)
-  const tail = halves.length === 2 ? parseGroups(halves[1] as string) : null
+  const head = parseGroups(halves[0])
+  const tail = halves.length === 2 ? parseGroups(halves[1]) : null
   if (head === null || (halves.length === 2 && tail === null)) return null
 
   let groups: number[]
@@ -115,18 +115,18 @@ function isPublicV6(bytes: Uint8Array): boolean {
   }
 
   // :: (unspecified) and ::1 (loopback)
-  if (allZeroThrough(14) && ((b[15] as number) === 0 || (b[15] as number) === 1)) return false
+  if (allZeroThrough(14) && (b[15] === 0 || b[15] === 1)) return false
   // ::ffff:a.b.c.d — v4-mapped: the verdict is the embedded address's
   if (allZeroThrough(9) && b[10] === 0xff && b[11] === 0xff) {
-    return isPublicV4([b[12] as number, b[13] as number, b[14] as number, b[15] as number])
+    return isPublicV4([b[12], b[13], b[14], b[15]])
   }
   // 64:ff9b::/96 — NAT64: likewise embeds a v4 address in the last 4 bytes
   if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) {
     for (let i = 4; i <= 11; i++) if (b[i] !== 0) return true // not the /96 — plain global
-    return isPublicV4([b[12] as number, b[13] as number, b[14] as number, b[15] as number])
+    return isPublicV4([b[12], b[13], b[14], b[15]])
   }
-  if (((b[0] as number) & 0xfe) === 0xfc) return false // ULA fc00::/7
-  if (b[0] === 0xfe && (((b[1] as number) & 0xc0)) === 0x80) return false // link-local fe80::/10
+  if ((b[0] & 0xfe) === 0xfc) return false // ULA fc00::/7
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return false // link-local fe80::/10
   if (b[0] === 0xff) return false // multicast ff00::/8
   if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) return false // doc 2001:db8::/32
   if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return false // Teredo 2001::/32

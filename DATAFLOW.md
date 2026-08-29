@@ -1,8 +1,8 @@
 # Interrelated — dataflow traces
 
 End-to-end walks of every path through the system, naming the actual file and
-function at each hop. `CLAUDE.md` describes what each file *is*; this
-document describes what *happens*, in order, when something occurs. Updated
+function at each hop. `CLAUDE.md` describes what each file _is_; this
+document describes what _happens_, in order, when something occurs. Updated
 as part of every step's definition of done.
 
 **Current milestone: M2 — COMPLETE.** Six paths exist: boot (§2), the
@@ -1145,34 +1145,36 @@ M3.6a to here, and a cap on an add-only resource would spend a free
 tenant's single slot forever on their first typo'd URL.
 
 ```
+
 Delete button (owner; hidden while a crawl is RUNNING — that delete would
 be refused, and a button that always refuses is worse than none)
-  → deleteSourceAction                 web/src/lib/sources/actions.ts
-    → isId("src") → currentUser → getOrgForMember → OWNER
-    → deleteSource                     web/src/lib/realtime/index.ts
-        DELETE …/internal/orgs/<org>/sources/<src>
-      → requireSecret → requireOrg     realtime/src/routes/internal.ts
-      → ONE transaction:
-          SELECT sources … FOR UPDATE  (this org's, else 404 — foreign,
-                                        fabricated, and malformed collapse)
-          DELETE ingest_jobs WHERE source_id AND state='queued'
-            · takes the row locks — the worker's FOR UPDATE SKIP LOCKED
-              claim cannot take a locked row, so a job cannot be claimed
-              mid-delete; the race resolves in Postgres (§3.23's playbook)
-          EXISTS ingest_jobs state='running'?
-            · yes → THROW → the whole transaction rolls back (the queued
-              rows come back too — a refused delete changes nothing)
-              → 409 "a crawl of this source is running"
-          DELETE sources               → CASCADE takes documents, chunks,
-                                         chunk_embeddings, source_uploads,
-                                         and job history
-      → no wake: nothing was enqueued
-    → revalidatePath(sources page)     the row is gone, a slot is free
+→ deleteSourceAction web/src/lib/sources/actions.ts
+→ isId("src") → currentUser → getOrgForMember → OWNER
+→ deleteSource web/src/lib/realtime/index.ts
+DELETE …/internal/orgs/<org>/sources/<src>
+→ requireSecret → requireOrg realtime/src/routes/internal.ts
+→ ONE transaction:
+SELECT sources … FOR UPDATE (this org's, else 404 — foreign,
+fabricated, and malformed collapse)
+DELETE ingest_jobs WHERE source_id AND state='queued'
+· takes the row locks — the worker's FOR UPDATE SKIP LOCKED
+claim cannot take a locked row, so a job cannot be claimed
+mid-delete; the race resolves in Postgres (§3.23's playbook)
+EXISTS ingest_jobs state='running'?
+· yes → THROW → the whole transaction rolls back (the queued
+rows come back too — a refused delete changes nothing)
+→ 409 "a crawl of this source is running"
+DELETE sources → CASCADE takes documents, chunks,
+chunk_embeddings, source_uploads,
+and job history
+→ no wake: nothing was enqueued
+→ revalidatePath(sources page) the row is gone, a slot is free
 
 what survives, deliberately: every transcript. message_citations snapshots
 url/heading/quote and carries NO chunk FK (§3.3.2) — the dashboard still
 shows each claim's verdict against content that no longer exists, which is
 exactly why the FK was left out.
+
 ```
     → "handbook.pdf read — 4,210 characters of text. Indexing starts now."
        (the character count is the only honest answer to "did that work?"
@@ -1910,12 +1912,12 @@ GET /dashboard/[orgId]/metrics          web/src/app/dashboard/[orgId]/metrics/pa
 
 The four definitions, and what each rejects:
 
-| Metric | Defined as | The easier version, and why not |
-|---|---|---|
-| Deflection | conversations with an answer and **no** handoff ÷ conversations with an answer | Per *message* would let one thread that ends in escalation contribute a dozen "deflected" answers. Conversations with no answer at all are excluded — a visitor who typed nothing is neither. |
-| Time to first human response | first **agent message** − `requested_at`, earliest turn per handoff | `claimed_at` is when someone *attached*, and attaching is automatic on opening the conversation (§8.6) — a team that opens tabs fast and answers slowly would score perfectly. |
-| Latency percentiles | over **answered** messages only | A gate refusal never calls a model, so it has `total_ms` but no `ttft_ms`; mixing them made a live page show a full answer (99 ms) faster than its own first token (110 ms). |
-| Cost per 1k answers | list price × measured tokens, over **generated** answers whose model is priced *and* whose provider reported usage | Including refusals in the denominator would make a bot that refuses more look cheaper rather than more cautious. Treating an unlisted model as free would state a specific falsehood about a self-hosted tenant's real bill; prefix-matching one onto a cheaper sibling would understate it ~10× and be believed. |
+| Metric                       | Defined as                                                                                                         | The easier version, and why not                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deflection                   | conversations with an answer and **no** handoff ÷ conversations with an answer                                     | Per _message_ would let one thread that ends in escalation contribute a dozen "deflected" answers. Conversations with no answer at all are excluded — a visitor who typed nothing is neither.                                                                                                                     |
+| Time to first human response | first **agent message** − `requested_at`, earliest turn per handoff                                                | `claimed_at` is when someone _attached_, and attaching is automatic on opening the conversation (§8.6) — a team that opens tabs fast and answers slowly would score perfectly.                                                                                                                                    |
+| Latency percentiles          | over **answered** messages only                                                                                    | A gate refusal never calls a model, so it has `total_ms` but no `ttft_ms`; mixing them made a live page show a full answer (99 ms) faster than its own first token (110 ms).                                                                                                                                      |
+| Cost per 1k answers          | list price × measured tokens, over **generated** answers whose model is priced _and_ whose provider reported usage | Including refusals in the denominator would make a bot that refuses more look cheaper rather than more cautious. Treating an unlisted model as free would state a specific falsehood about a self-hosted tenant's real bill; prefix-matching one onto a cheaper sibling would understate it ~10× and be believed. |
 
 Where the token numbers come from (M5.2), since this is the one metric that
 needed a column the pipeline was not already writing:
@@ -1999,11 +2001,11 @@ POST /v1/widget/chat                    realtime/src/routes/widget.ts
 
 Three decisions worth their lines:
 
-| Decision | Why, and what it rejects |
-|---|---|
-| Counter, not `COUNT(*)` over today's messages | The old check was a range scan on the (org_id, created_at) index — correct, but its cost grew with the tenant's traffic, and it runs before EVERY question including the ones that get refused or rate-limited. The counter's cost is the same on a customer's busiest day as on their first. |
-| Written in the answer's transaction, not rolled up nightly | A cap enforced against a number up to a day stale is not a cap. |
-| The env override can only TIGHTEN | A demo deployment must be able to cap every org below its plan; a mistyped variable must not be able to hand every tenant unlimited answers, which is the exact failure a quota exists to prevent. So the effective limit is the MINIMUM of plan and override. |
+| Decision                                                   | Why, and what it rejects                                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Counter, not `COUNT(*)` over today's messages              | The old check was a range scan on the (org_id, created_at) index — correct, but its cost grew with the tenant's traffic, and it runs before EVERY question including the ones that get refused or rate-limited. The counter's cost is the same on a customer's busiest day as on their first. |
+| Written in the answer's transaction, not rolled up nightly | A cap enforced against a number up to a day stale is not a cap.                                                                                                                                                                                                                               |
+| The env override can only TIGHTEN                          | A demo deployment must be able to cap every org below its plan; a mistyped variable must not be able to hand every tenant unlimited answers, which is the exact failure a quota exists to prevent. So the effective limit is the MINIMUM of plan and override.                                |
 
 **The honest imprecision, stated rather than hidden:** the check runs before
 the answer and the increment after it, so N requests in flight when the
@@ -2094,12 +2096,12 @@ POST /api/stripe/webhook            web/src/app/api/stripe/webhook/route.ts
 
 Four properties, and what each rejects:
 
-| Property | How | The easier version, and why not |
-|---|---|---|
-| Applied exactly once | Stripe's event id is the PRIMARY KEY of the ledger, inserted first inside the same transaction as the effect | A check-then-act read races itself under exactly the retry storm it exists to survive. Stripe redelivers by design, and more often when a response is slow. |
-| A payment outage cannot break answering | `organizations.plan` is the entitlement, read with no join and no third-party dependency; `subscriptions` is the record | Deriving entitlement from a join on Stripe state would put a billing outage on the answer path. |
-| Dunning does not cut a customer off mid-cycle | `past_due` keeps the plan; `unpaid`/`canceled` do not | Dropping on the first failed charge breaks a support widget the hour a card expires, while Stripe is still retrying. |
-| Out-of-order delivery cannot resurrect a cancellation | Deletion is terminal for a subscription id; a NEW id is a genuine resubscribe | The general fix — re-fetching the live object from Stripe on every webhook — costs an API call per event to order a stream that is already almost always ordered. |
+| Property                                              | How                                                                                                                     | The easier version, and why not                                                                                                                                   |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Applied exactly once                                  | Stripe's event id is the PRIMARY KEY of the ledger, inserted first inside the same transaction as the effect            | A check-then-act read races itself under exactly the retry storm it exists to survive. Stripe redelivers by design, and more often when a response is slow.       |
+| A payment outage cannot break answering               | `organizations.plan` is the entitlement, read with no join and no third-party dependency; `subscriptions` is the record | Deriving entitlement from a join on Stripe state would put a billing outage on the answer path.                                                                   |
+| Dunning does not cut a customer off mid-cycle         | `past_due` keeps the plan; `unpaid`/`canceled` do not                                                                   | Dropping on the first failed charge breaks a support widget the hour a card expires, while Stripe is still retrying.                                              |
+| Out-of-order delivery cannot resurrect a cancellation | Deletion is terminal for a subscription id; a NEW id is a genuine resubscribe                                           | The general fix — re-fetching the live object from Stripe on every webhook — costs an API call per event to order a stream that is already almost always ordered. |
 
 ### §11.3 What the tenant sees
 

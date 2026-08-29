@@ -61,10 +61,7 @@ export async function hashPassword(password: string): Promise<string> {
   return `scrypt$${SCRYPT_COST}$${salt.toString("hex")}$${derived.toString("hex")}`
 }
 
-export async function verifyPassword(
-  password: string,
-  stored: string,
-): Promise<boolean> {
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = stored.split("$")
   if (parts.length !== 4 || parts[0] !== "scrypt") {
     return false

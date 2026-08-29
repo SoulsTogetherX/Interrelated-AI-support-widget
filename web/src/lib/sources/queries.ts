@@ -58,7 +58,16 @@ export async function listSourcesWithProgress(orgId: string): Promise<SourceWith
   // (a tenant has a handful of sources; jobs per source stay small).
   const jobs = await db
     .selectFrom("ingest_jobs")
-    .select(["source_id", "state", "docs_done", "docs_total", "error", "skipped_count", "skipped_pages", "created_at"])
+    .select([
+      "source_id",
+      "state",
+      "docs_done",
+      "docs_total",
+      "error",
+      "skipped_count",
+      "skipped_pages",
+      "created_at",
+    ])
     .where("source_id", "in", sourceIds)
     .orderBy("created_at", "desc")
     .execute()
@@ -83,11 +92,14 @@ export async function listSourcesWithProgress(orgId: string): Promise<SourceWith
   // wire to render a row. (The same greppable rule providers/queries.ts
   // holds about key_ciphertext.)
   const uploadIds = sources.filter((s) => s.kind === "upload").map((s) => s.id)
-  const uploads = uploadIds.length === 0 ? [] : await db
-    .selectFrom("source_uploads")
-    .select(["source_id", "format", "byte_size", "uploaded_at"])
-    .where("source_id", "in", uploadIds)
-    .execute()
+  const uploads =
+    uploadIds.length === 0
+      ? []
+      : await db
+          .selectFrom("source_uploads")
+          .select(["source_id", "format", "byte_size", "uploaded_at"])
+          .where("source_id", "in", uploadIds)
+          .execute()
   const uploadBySource = new Map(uploads.map((u) => [u.source_id, u]))
 
   return sources.map((s) => {

@@ -52,7 +52,9 @@ function PlanCard({
       </p>
       <ul className="plancard-limits">
         <li>{plan.dailyAnswers.toLocaleString("en-US")} answers per day</li>
-        <li>{plan.sources} {plan.sources === 1 ? "source" : "sources"}</li>
+        <li>
+          {plan.sources} {plan.sources === 1 ? "source" : "sources"}
+        </li>
       </ul>
       <p className="plancard-blurb">{plan.blurb}</p>
       {current ? (

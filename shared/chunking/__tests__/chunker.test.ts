@@ -43,7 +43,7 @@ describe("chunkBlocks", () => {
     expect(chunk?.headingPath).toBeNull()
     // The offset contract: slicing the source at the chunk's span must
     // reproduce the chunk's text (single-piece case — exact identity).
-    expect(source.slice(chunk!.charStart, chunk!.charEnd)).toBe(chunk!.text)
+    expect(source.slice(chunk.charStart, chunk.charEnd)).toBe(chunk.text)
   })
 
   it("tracks the heading trail, replacing siblings and their children", () => {
@@ -95,7 +95,10 @@ describe("chunkBlocks", () => {
   })
 
   it("splits an oversized paragraph at sentence bounds with exact offsets", () => {
-    const sentences = Array.from({ length: 40 }, (_, i) => `Sentence number ${i} says something useful here.`)
+    const sentences = Array.from(
+      { length: 40 },
+      (_, i) => `Sentence number ${i} says something useful here.`,
+    )
     const big = sentences.join(" ")
     const { source, blocks } = buildDoc([{ kind: "paragraph", text: big }])
     const chunks = chunkBlocks(blocks, { targetTokens: 100, maxTokens: 100 })

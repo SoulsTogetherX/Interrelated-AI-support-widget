@@ -85,9 +85,15 @@ async function up(db: Kysely<unknown>): Promise<void> {
 
 async function down(db: Kysely<unknown>): Promise<void> {
   await sql`DROP INDEX IF EXISTS ingest_jobs_one_live_per_source`.execute(db)
-  await sql`ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS ingest_jobs_skipped_pages_shape`.execute(db)
-  await sql`ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS ingest_jobs_skipped_count_nonnegative`.execute(db)
-  await sql`ALTER TABLE ingest_jobs DROP COLUMN IF EXISTS skipped_pages, DROP COLUMN IF EXISTS skipped_count`.execute(db)
+  await sql`ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS ingest_jobs_skipped_pages_shape`.execute(
+    db,
+  )
+  await sql`ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS ingest_jobs_skipped_count_nonnegative`.execute(
+    db,
+  )
+  await sql`ALTER TABLE ingest_jobs DROP COLUMN IF EXISTS skipped_pages, DROP COLUMN IF EXISTS skipped_count`.execute(
+    db,
+  )
 }
 //#endregion
 

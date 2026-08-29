@@ -240,7 +240,10 @@ class HandoffSocket implements HandoffConnection {
         break
       case "message":
         this.#options.handlers.onMessage({
-          id: frame.id, role: frame.role, text: frame.text, at: frame.at,
+          id: frame.id,
+          role: frame.role,
+          text: frame.text,
+          at: frame.at,
         })
         break
       case "presence":

@@ -30,7 +30,11 @@ interface DemoRouteOptions {
  *  escape anyway — config is not user input, and this is still the cheap
  *  way to make that assumption unnecessary. */
 function escapeAttr(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
 }
 
 function demoPage(publishableKey: string): string {
@@ -99,7 +103,9 @@ const SETUP_PAGE = `<!doctype html>
 //#region Routes
 function configureDemoRoutes(app: Express, options: DemoRouteOptions): void {
   app.get("/demo", (_req: Request, res: Response) => {
-    res.type("html").send(options.publishableKey !== null ? demoPage(options.publishableKey) : SETUP_PAGE)
+    res
+      .type("html")
+      .send(options.publishableKey !== null ? demoPage(options.publishableKey) : SETUP_PAGE)
   })
 
   app.get("/widget.js", async (_req: Request, res: Response) => {
@@ -114,7 +120,10 @@ function configureDemoRoutes(app: Express, options: DemoRouteOptions): void {
       res.setHeader("cache-control", "public, max-age=300")
       res.send(bundle)
     } catch {
-      res.status(404).type("text/plain").send("widget bundle not built (run `npm run build` in widget/)")
+      res
+        .status(404)
+        .type("text/plain")
+        .send("widget bundle not built (run `npm run build` in widget/)")
     }
   })
 }

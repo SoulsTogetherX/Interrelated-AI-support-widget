@@ -3,18 +3,10 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "realtime/src/*"
-      ],
-      "@shared/*": [
-        "shared/*"
-      ],
-      "@providers/*": [
-        "providers/*"
-      ]
+      "@/*": ["realtime/src/*"],
+      "@shared/*": ["shared/*"],
+      "@providers/*": ["providers/*"]
     }
   },
-  "include": [
-    "shared/utils/ids.ts"
-  ]
+  "include": ["shared/utils/ids.ts"]
 }

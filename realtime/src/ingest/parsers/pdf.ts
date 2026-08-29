@@ -253,7 +253,7 @@ async function parsePdf(body: Buffer | Uint8Array): Promise<ParsedDocument> {
     )
   }
 
-  const blocks = cleaned.flatMap((page, i) => pageBlocks(page, starts[i] as number))
+  const blocks = cleaned.flatMap((page, i) => pageBlocks(page, starts[i]))
 
   // The Info title is the document's own claim about itself; failing that,
   // the first line is what a reader would call it (markdown's rule, §3.10.3).

@@ -490,8 +490,14 @@ interface SubscriptionsTable {
   stripe_subscription_id: string
   plan: PlanId
   status:
-    | "trialing" | "active" | "past_due" | "canceled"
-    | "incomplete" | "incomplete_expired" | "unpaid" | "paused"
+    | "trialing"
+    | "active"
+    | "past_due"
+    | "canceled"
+    | "incomplete"
+    | "incomplete_expired"
+    | "unpaid"
+    | "paused"
   cancel_at_period_end: Generated<boolean>
   /** Null while a subscription is incomplete — it has no period yet. */
   current_period_end: ColumnType<Date | null, string | Date | null, string | Date | null>

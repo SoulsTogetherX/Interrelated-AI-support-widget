@@ -8,7 +8,7 @@
 
 //#region Imports
 import { planFor } from "@shared/billing/plans"
-import type { Plan, PlanId } from "@shared/billing/plans"
+import type { Plan } from "@shared/billing/plans"
 
 import { db } from "@/lib/db"
 //#endregion
@@ -32,15 +32,13 @@ export interface OrgSubscription {
 export async function getSubscription(orgId: string): Promise<OrgSubscription | null> {
   const row = await db
     .selectFrom("subscriptions")
-    .select([
-      "plan", "status", "cancel_at_period_end", "current_period_end", "stripe_customer_id",
-    ])
+    .select(["plan", "status", "cancel_at_period_end", "current_period_end", "stripe_customer_id"])
     .where("org_id", "=", orgId)
     .executeTakeFirst()
   if (!row) return null
 
   return {
-    plan: planFor(row.plan as PlanId),
+    plan: planFor(row.plan),
     status: row.status,
     cancelAtPeriodEnd: row.cancel_at_period_end,
     currentPeriodEnd: row.current_period_end,

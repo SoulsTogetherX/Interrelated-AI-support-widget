@@ -122,9 +122,17 @@ function verifyHandoffTicket(
     typeof c["sub"] !== "string" ||
     typeof c["exp"] !== "number" ||
     typeof c["jti"] !== "string"
-  ) return null
+  )
+    return null
   if (c["exp"] <= now) return null
-  return { con: c["con"], org: c["org"], role: c["role"], sub: c["sub"], exp: c["exp"], jti: c["jti"] }
+  return {
+    con: c["con"],
+    org: c["org"],
+    role: c["role"],
+    sub: c["sub"],
+    exp: c["exp"],
+    jti: c["jti"],
+  }
 }
 //#endregion
 

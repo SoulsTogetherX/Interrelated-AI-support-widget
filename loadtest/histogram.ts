@@ -49,7 +49,7 @@ class Histogram {
     if (this.#samples.length === 0) return Number.NaN
     const sorted = [...this.#samples].sort((a, b) => a - b)
     const rank = Math.ceil((p / 100) * sorted.length)
-    return sorted[rank - 1] as number
+    return sorted[rank - 1]
   }
 
   summary(): Summary {
@@ -61,11 +61,11 @@ class Histogram {
     const total = sorted.reduce((sum, value) => sum + value, 0)
     return {
       count,
-      min: sorted[0] as number,
+      min: sorted[0],
       p50: this.percentile(50),
       p95: this.percentile(95),
       p99: this.percentile(99),
-      max: sorted[count - 1] as number,
+      max: sorted[count - 1],
       mean: total / count,
     }
   }
