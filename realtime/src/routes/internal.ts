@@ -393,6 +393,7 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
     "/internal/orgs/:orgId/sources",
     requireSecret,
     requireOrg,
+    // eslint-disable-next-line complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
     async (req: Request, res: Response) => {
       const b = (req.body ?? {}) as Record<string, unknown>
 
@@ -512,6 +513,7 @@ function configureInternalRoutes(app: Express, options: InternalRouteOptions): v
         next()
       })
     },
+    // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
     async (req: Request, res: Response) => {
       const rawName = req.header("x-upload-filename") ?? ""
       let filename = ""

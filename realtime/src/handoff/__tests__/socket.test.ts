@@ -70,7 +70,7 @@ function connect(ticket: string): Promise<Client> {
     let waiting: ((frame: HandoffServerFrame) => void) | null = null
 
     socket.on("message", (raw) => {
-      const frame = JSON.parse(raw.toString()) as HandoffServerFrame
+      const frame = JSON.parse((raw as Buffer).toString("utf8")) as HandoffServerFrame
       if (waiting) { const w = waiting; waiting = null; w(frame) }
       else queue.push(frame)
     })

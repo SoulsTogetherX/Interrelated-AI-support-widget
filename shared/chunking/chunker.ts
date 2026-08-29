@@ -125,6 +125,7 @@ function splitOversized(block: Block, maxTokens: number): Piece[] {
  * a section boundary, because a retrieval hit that mixes the tail of one
  * section with the head of the next cites both wrongly.
  */
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function chunkBlocks(blocks: readonly Block[], options: ChunkOptions = {}): Chunk[] {
   const targetTokens = options.targetTokens ?? 400
   const maxTokens = options.maxTokens ?? 800

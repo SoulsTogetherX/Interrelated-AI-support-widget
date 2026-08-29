@@ -131,6 +131,7 @@ export default async function SourcesPage({
           </p>
         ) : (
           <ul className="sources-list">
+            {/* eslint-disable-next-line complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches */}
             {sources.map((s) => {
               const skipped = s.job?.skippedPages ?? []
               const skippedCount = s.job?.skippedCount ?? 0

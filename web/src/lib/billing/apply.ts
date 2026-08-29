@@ -71,7 +71,11 @@ function entitlementFor(status: SubscriptionStatus, plan: PlanId): PlanId {
     case "active":
     case "past_due":
       return plan
-    default:
+    case "canceled":
+    case "incomplete":
+    case "incomplete_expired":
+    case "unpaid":
+    case "paused":
       return "free"
   }
 }
@@ -91,7 +95,7 @@ function periodEnd(object: Record<string, unknown>): Date | null {
   const direct = object.current_period_end
   if (typeof direct === "number") return new Date(direct * 1000)
   const items = object.items as { data?: unknown } | undefined
-  const first = Array.isArray(items?.data) ? items.data[0] : undefined
+  const first: unknown = Array.isArray(items?.data) ? items.data[0] : undefined
   const nested = typeof first === "object" && first !== null
     ? (first as Record<string, unknown>).current_period_end
     : undefined

@@ -260,6 +260,7 @@ function rootFailure(result: Extract<PageResult, { ok: false }>): CrawlError {
 
 /** Breadth-first over same-origin links. BFS (not DFS) so depth means "link
  *  distance from the root" — the intuitive meaning of a crawl_depth knob. */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function* crawlBfs(
   root: string,
   crawlDepth: number,
@@ -314,6 +315,7 @@ async function* crawlBfs(
  *  same-origin — a sitemap listing foreign URLs is out of scope by the same
  *  rule as everywhere else). One level of sitemapindex nesting is supported,
  *  because index files are how every generator ships large sites. */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function* crawlSitemap(
   root: string,
   maxPages: number,

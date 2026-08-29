@@ -30,6 +30,7 @@ function widgetApiUrl(): string | null {
   return raw && raw.trim() !== "" ? raw.trim().replace(/\/$/, "") : null
 }
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export default async function WidgetPage({
   params,
 }: {

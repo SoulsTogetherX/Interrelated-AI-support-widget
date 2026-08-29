@@ -69,6 +69,7 @@ const PROVIDERS = new Set(["groq", "gemini", "ollama", "openai_compatible", "ant
 const KEY_MIN = 8
 const KEY_MAX = 512
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export async function checkCredentialInput(
   body: unknown,
   vetUrl: UrlVet = (url) => assertPublicUrl(url),
@@ -288,6 +289,7 @@ function isTransient(error: unknown): boolean {
  *  the tenant will feel, not TTFT of a 16-token reply). Errors surface as
  *  human sentences — LLMHttpError's message already excludes the key and
  *  headers by construction (§2.4.5f), and that guarantee has its own test. */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export async function testGenerationRoundTrip(
   provider: LLMProvider,
   timeoutMs = TEST_TIMEOUT_MS,
@@ -357,6 +359,7 @@ export async function testGenerationRoundTrip(
  * error vocabulary, so the internal API tests and saves both roles through
  * one branch.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export async function testEmbeddingRoundTrip(
   provider: EmbeddingProvider,
   timeoutMs = TEST_TIMEOUT_MS,

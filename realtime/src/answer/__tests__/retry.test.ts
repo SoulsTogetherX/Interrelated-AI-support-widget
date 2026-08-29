@@ -124,8 +124,7 @@ describe("withRetry", () => {
 
   it("spends its budget across several waits and then stops", async () => {
     const { waits, sleep } = fakeSleep()
-    let calls = 0
-    const fn = async () => { calls++; throw http(429, 3_000) }
+    const fn = async () => { throw http(429, 3_000) }
     // 3 s + 3 s = 6 s fits inside 8 s; a third would not — but maxAttempts
     // ends it first, and the test pins the arithmetic either way.
     await expect(withRetry(fn, { sleep })).rejects.toMatchObject({ status: 429 })

@@ -85,6 +85,7 @@ function parseV6(text: string): Uint8Array | null {
 }
 
 /** IPv4 classification over octets. See the range list in the header. */
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function isPublicV4(o: number[]): boolean {
   const [a, b, c] = o as [number, number, number]
   if (a === 0 || a === 10 || a === 127) return false // "this" net, RFC1918, loopback
@@ -104,6 +105,7 @@ function isPublicV4(o: number[]): boolean {
  *  address (v4-mapped, NAT64) defer to the v4 verdict of the embedded
  *  address; ranges that merely tunnel (6to4, Teredo) are rejected wholesale
  *  because the guard cannot see through them. */
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function isPublicV6(bytes: Uint8Array): boolean {
   const b = bytes as unknown as number[] // indexed reads only
 

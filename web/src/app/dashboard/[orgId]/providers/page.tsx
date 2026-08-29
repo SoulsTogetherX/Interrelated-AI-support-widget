@@ -14,6 +14,7 @@ import "./page.css"
 
 export const metadata = { title: "Providers — Interrelated" }
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export default async function ProvidersPage({
   params,
 }: {

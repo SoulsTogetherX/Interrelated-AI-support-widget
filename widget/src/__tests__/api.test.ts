@@ -32,10 +32,10 @@ let script: Response[]
 
 const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   calls.push({
-    url: String(input),
+    url: input as string,
     method: init?.method ?? "GET",
     headers: (init?.headers ?? {}) as Record<string, string>,
-    body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    body: JSON.parse((init?.body as string | undefined) ?? "{}") as Record<string, unknown>,
     credentials: init?.credentials,
     cache: init?.cache,
   })

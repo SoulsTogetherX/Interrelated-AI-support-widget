@@ -198,6 +198,7 @@ function addUsage(a: LLMUsage | null, b: LLMUsage | null): LLMUsage | null {
 //#endregion
 
 //#region Pipeline
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function answerQuestion(options: AnswerPipelineOptions): Promise<AnswerResult> {
   const { db, embedder, llm, orgId, question } = options
   const emit = options.onEvent ?? (() => {})

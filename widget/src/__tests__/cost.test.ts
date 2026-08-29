@@ -43,7 +43,7 @@ let host: HTMLElement
  *  request the widget makes that this does not expect shows up as a
  *  recorded URL the assertions do not allow, which is the point. */
 const countingFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-  const url = String(input)
+  const url = input as string // the real ApiClient only ever fetches string URLs
   requests.push({ url, method: init?.method ?? "GET" })
   if (url.endsWith("/v1/widget/session")) {
     return new Response(JSON.stringify({ token: "tok_cost", visitorId: "vis_" + "a".repeat(32) }), {

@@ -49,6 +49,7 @@ class OllamaProvider implements LLMProvider {
     this.#baseUrl = (options.baseUrl ?? OLLAMA_DEFAULT_BASE_URL).replace(/\/$/, "")
   }
 
+  // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     const body = {
       model: this.model,

@@ -100,6 +100,7 @@ function productToken(value: string): string {
  * conflated. Applied identically to both sides, so the two can only agree
  * on what they mean.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function normalizeForMatch(input: string): string {
   let out = ""
   for (let i = 0; i < input.length; i++) {
@@ -153,6 +154,7 @@ function isUnreserved(code: number): boolean {
  *   - Crawl-delay attaches to the current group; a value that is not a
  *     non-negative number is ignored.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function parseRobotsTxt(text: string): RobotsFile {
   const groups: RobotsGroup[] = []
   let current: RobotsGroup | null = null

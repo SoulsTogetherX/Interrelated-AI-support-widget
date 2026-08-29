@@ -116,6 +116,7 @@ class AnthropicProvider implements LLMProvider {
     this.#baseUrl = (options.baseUrl ?? ANTHROPIC_BASE_URL).replace(/\/$/, "")
   }
 
+  // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     // System text is a top-level field, as in Gemini — but unlike Gemini
     // the turn roles are already ours ("assistant" is "assistant"), so only

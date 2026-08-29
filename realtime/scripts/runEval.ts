@@ -252,7 +252,7 @@ async function main(): Promise<void> {
     // Same decode normalization as the ingest path: BOM and CRLF must never
     // influence offsets or hashes (parsers/index.ts does this for crawls).
     const raw = readFileSync(join(CORPUS_DIR, file.relPath), "utf8")
-    const text = raw.replace(/^﻿/, "").replace(/\r\n/g, "\n")
+    const text = raw.replace(/^ /, "").replace(/\r\n/g, "\n")
     // targetTokens participates in the hash: an ablation run re-chunks even
     // though the text itself is unchanged.
     const contentHash = createHash("sha256")

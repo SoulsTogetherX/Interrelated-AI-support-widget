@@ -41,6 +41,7 @@ class HangingLLMProvider {
   async *stream(request: { signal?: AbortSignal }): AsyncGenerator<never> {
     this.calls++
     await new Promise<never>((_, reject) => {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a real fetch rejects with the signal's reason verbatim; the fixture must too
       const fail = () => reject(request.signal?.reason ?? new Error("aborted"))
       if (request.signal?.aborted) return fail()
       request.signal?.addEventListener("abort", fail, { once: true })

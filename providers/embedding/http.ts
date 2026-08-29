@@ -61,7 +61,7 @@ function toVector(value: unknown): number[] | null {
   if (!Array.isArray(value) || value.length === 0) return null
   const out = new Array<number>(value.length)
   for (let i = 0; i < value.length; i++) {
-    const component = value[i]
+    const component: unknown = value[i]
     if (typeof component !== "number" || !Number.isFinite(component)) return null
     out[i] = component
   }

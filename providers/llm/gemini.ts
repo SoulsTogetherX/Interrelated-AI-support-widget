@@ -89,6 +89,7 @@ class GeminiProvider implements LLMProvider {
     this.#baseUrl = (options.baseUrl ?? GEMINI_BASE_URL).replace(/\/$/, "")
   }
 
+  // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     // Gemini splits roles differently: system text is a dedicated
     // systemInstruction field, and the turn list uses "model" where the

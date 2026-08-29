@@ -61,6 +61,7 @@ const BLANK = /^[ \t]*$/
 /** Parses Markdown source into blocks whose offsets index into `source`
  *  itself — the returned `text` IS the input, so the contract is trivially
  *  exact and citations deep-link into what the author actually wrote. */
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function parseMarkdown(source: string): ParsedDocument {
   const lines = splitLines(source)
   const blocks: Block[] = []

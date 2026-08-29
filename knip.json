@@ -1,0 +1,78 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "paths": {
+    "@shared/*": [
+      "./shared/*"
+    ],
+    "@providers/*": [
+      "./providers/*"
+    ],
+    "@eval/*": [
+      "./eval/*"
+    ],
+    "@loadtest/*": [
+      "./loadtest/*"
+    ]
+  },
+  "workspaces": {
+    "realtime": {
+      "entry": [
+        "src/server.ts",
+        "src/db/migrations/*.ts",
+        "scripts/*.ts",
+        "src/**/__tests__/*.ts",
+        "vitest.config.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "scripts/**/*.ts"
+      ]
+    },
+    "web": {
+      "entry": [
+        "src/instrumentation.ts",
+        "next.config.ts",
+        "scripts/*.ts",
+        "src/**/__tests__/*.ts",
+        "vitest.config.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "scripts/**/*.ts"
+      ]
+    },
+    "widget": {
+      "entry": [
+        "src/index.ts",
+        "scripts/*.mjs",
+        "src/__tests__/*.ts",
+        "vitest.config.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    ".": {
+      "entry": [
+        "scripts/measure-ttft.mjs",
+        "scripts/*.mjs",
+        "eval/**/*.ts",
+        "loadtest/**/*.ts",
+        "shared/**/__tests__/*.ts",
+        "providers/**/__tests__/*.ts",
+        "vitest.config.ts"
+      ],
+      "project": [
+        "shared/**/*.ts",
+        "providers/**/*.ts",
+        "eval/**/*.ts",
+        "loadtest/**/*.ts",
+        "scripts/**/*.mjs"
+      ]
+    }
+  },
+  "ignoreDependencies": [
+    "unpdf",
+    "fastembed"
+  ]
+}

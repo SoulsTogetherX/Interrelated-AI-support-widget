@@ -106,6 +106,7 @@ function digestsMatch(expected: string, candidate: string): boolean {
  * telling an unauthenticated caller whether their signature was wrong or
  * merely stale is an oracle, so the route answers 400 either way.
  */
+// eslint-disable-next-line complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export function verifyStripeSignature(
   rawBody: string,
   header: string | null,

@@ -445,6 +445,7 @@ describe.skipIf(!DB_CONFIGURED)("ingest worker", () => {
   //#region Failure paths
   it("fails the job and the source when the crawl is unrunnable", async () => {
     const org5 = await makeOrg("Broken Co")
+    // eslint-disable-next-line require-yield -- throws before ever yielding: the fixture IS the failure
     const boom = async function* (): AsyncGenerator<CrawlEvent> {
       throw new CrawlError("root fetch failed: HTTP 500")
     }

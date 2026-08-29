@@ -172,7 +172,7 @@ async function main(): Promise<void> {
       for (const name of readdirSync(join(corpusDir, section)).sort()) {
         if (!name.endsWith(".md")) continue
         const raw = readFileSync(join(corpusDir, section, name), "utf8")
-        const text = raw.replace(/^﻿/, "").replace(/\r\n/g, "\n")
+        const text = raw.replace(/^ /, "").replace(/\r\n/g, "\n")
         const doc = parseMarkdown(text)
         const chunks = chunkBlocks(doc.blocks)
         const documentId = newId("doc")

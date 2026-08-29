@@ -215,7 +215,8 @@ async function readBodyCapped(res: Awaited<ReturnType<typeof undiciFetch>>, maxB
     throw new SafeFetchError("too-large", `declared ${declared} bytes exceeds cap ${maxBytes}`)
   }
   if (!res.body) return Buffer.alloc(0)
-  const reader = res.body.getReader()
+  // undici's stream generics erase to `any` here; the elements are bytes.
+  const reader = res.body.getReader() as ReadableStreamDefaultReader<Uint8Array>
   const chunks: Uint8Array[] = []
   let total = 0
   for (;;) {
@@ -238,6 +239,7 @@ async function readBodyCapped(res: Awaited<ReturnType<typeof undiciFetch>>, maxB
  * response whatever its status (a 404 is the CALLER's decision, not a fetch
  * failure); throws SafeFetchError for everything that prevented one.
  */
+// eslint-disable-next-line complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function safeFetch(url: string, options: SafeFetchOptions = {}): Promise<FetchedResource> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES

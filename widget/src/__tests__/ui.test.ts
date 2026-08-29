@@ -215,7 +215,6 @@ describe("mountWidget", () => {
 
   it("drops citation links with non-http(s) schemes but keeps the claim text", async () => {
     const sneaky: AnswerEvent = {
-      // eslint-disable-next-line no-script-url
       type: "claim", ord: 0, text: "Click here.", url: "javascript:alert(1)", headingPath: "Docs",
     }
     const { client } = fakeClient([[META, sneaky, DONE]])

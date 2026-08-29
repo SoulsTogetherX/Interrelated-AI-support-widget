@@ -450,6 +450,7 @@ function configureWidgetRoutes(app: Express, options: WidgetRouteOptions): void 
   })
 
   // ── Chat: token-authenticated SSE ────────────────────────────────────────
+  // eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
   app.post("/v1/widget/chat", async (req: Request, res: Response) => {
     try {
       const session = authenticate(req, res)

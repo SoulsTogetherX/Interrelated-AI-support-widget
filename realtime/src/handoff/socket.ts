@@ -340,7 +340,18 @@ function createHandoffServer(options: HandoffServerOptions): {
     rooms.broadcast(attachment.conversationId, { type: "presence", ...rooms.presence(attachment.conversationId) })
 
     ws.on("pong", () => { attachment.alive = true })
-    ws.on("message", (raw) => { void onFrame(attachment, raw.toString()) })
+    ws.on("message", (raw) => {
+      // ws RawData is Buffer | ArrayBuffer | Buffer[]; only a plain Buffer
+      // stringifies as text. A fragmented or ArrayBuffer frame would decode
+      // as comma-joined garbage / "[object ArrayBuffer]" and be blamed on
+      // the client's JSON - normalize before parsing.
+      const text = Array.isArray(raw)
+        ? Buffer.concat(raw).toString("utf8")
+        : Buffer.isBuffer(raw)
+          ? raw.toString("utf8")
+          : Buffer.from(raw).toString("utf8")
+      void onFrame(attachment, text)
+    })
     ws.on("close", () => {
       rooms.leave(attachment)
       attachments.delete(attachment)

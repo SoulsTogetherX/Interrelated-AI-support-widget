@@ -290,7 +290,7 @@ for (const provider of PROVIDERS) {
           return await attempt()
         } catch (error) {
           if (!allow429Wait || !(error instanceof LLMHttpError) || error.status !== 429) {
-            throw new Error(`${provider.name}: ${describeFailure(error)}`)
+            throw new Error(`${provider.name}: ${describeFailure(error)}`, { cause: error })
           }
           const waitMs = error.retryAfterMs ?? 60_000
           console.log(
@@ -301,7 +301,7 @@ for (const provider of PROVIDERS) {
           try {
             return await attempt()
           } catch (retryError) {
-            throw new Error(`${provider.name}: ${describeFailure(retryError)}`)
+            throw new Error(`${provider.name}: ${describeFailure(retryError)}`, { cause: retryError })
           }
         }
       }
@@ -399,7 +399,7 @@ describe.skipIf(!GEMINI_KEY)("live gemini embedding credential path", () => {
       asDocuments = await provider.embed(texts, { task: "document" })
       asQuery = await provider.embed([texts[0] as string], { task: "query" })
     } catch (error) {
-      throw new Error(`gemini: ${describeFailure(error)}`)
+      throw new Error(`gemini: ${describeFailure(error)}`, { cause: error })
     }
 
     expect(asDocuments).toHaveLength(2)

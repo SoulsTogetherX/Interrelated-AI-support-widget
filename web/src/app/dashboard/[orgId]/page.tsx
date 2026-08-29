@@ -21,6 +21,7 @@ function utcMinute(at: Date): string {
   return at.toISOString().slice(0, 16).replace("T", " ")
 }
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 export default async function OrgOverviewPage({
   params,
 }: {

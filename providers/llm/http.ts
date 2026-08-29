@@ -54,7 +54,7 @@ async function postStream(options: {
     // Read the body for the diagnostic (providers put "model not found" and
     // quota messages there), truncated so a hostile or broken server can't
     // balloon logs.
-    let detail = ""
+    let detail: string
     try {
       detail = (await response.text()).slice(0, 300)
     } catch {

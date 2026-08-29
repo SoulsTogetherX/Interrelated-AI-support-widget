@@ -24,6 +24,7 @@ import { groundedMockResponder } from "@/answer/mockResponder"
  * encrypted credentials — env-configured providers never ship to real
  * tenants.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 function buildLLMProvider(name: string): LLMProvider {
   switch (name) {
     case "mock":

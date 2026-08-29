@@ -64,7 +64,6 @@ function parseHtml(html: string): ParsedDocument {
   const blocks: Block[] = []
   const links: string[] = []
   let text = ""
-  let docTitle: string | null = null
   let firstH1: string | null = null
 
   // Appends a finished block to the constructed text; the offsets recorded
@@ -200,7 +199,7 @@ function parseHtml(html: string): ParsedDocument {
   flushProse() // text after the last close tag in malformed documents
 
   const titleText = titleParts.join("").replace(/\s+/g, " ").trim()
-  docTitle = titleText.length > 0 ? titleText : firstH1
+  const docTitle = titleText.length > 0 ? titleText : firstH1
 
   return { title: docTitle, text, blocks, links }
 }

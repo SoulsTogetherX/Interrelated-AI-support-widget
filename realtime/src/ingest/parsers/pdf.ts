@@ -207,6 +207,7 @@ function assemble(cleaned: string[]): { text: string; starts: number[] } {
  * about why — so the parser refuses with a sentence that names OCR, which
  * the crawler records against the page and the dashboard shows.
  */
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function parsePdf(body: Buffer | Uint8Array): Promise<ParsedDocument> {
   if (body.byteLength > PDF_MAX_BYTES) {
     throw new PdfParseError(

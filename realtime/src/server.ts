@@ -79,6 +79,7 @@ async function buildEmbedder(): Promise<EmbeddingProvider> {
 // on a platform that only speaks the generic convention.
 const port = Number(process.env.BACKEND_PORT ?? process.env.PORT ?? 3000)
 
+// eslint-disable-next-line complexity, sonarjs/cognitive-complexity -- grandfathered at the 2026-08 org overhaul: pre-existing hot spot, simplify when next touched; do not add branches
 async function start(): Promise<void> {
   const applied = await migrateToLatest(db)
   const names = applied.results?.map((r) => r.migrationName).join(", ") || "none"
