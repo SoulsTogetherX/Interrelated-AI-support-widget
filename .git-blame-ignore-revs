@@ -4,3 +4,6 @@
 
 # org overhaul phase 2: repo-wide prettier + eslint --fix (dev branch)
 a9866c0c00c9f8ffb01f0f397f2c42219f625957
+
+# same reformat as it landed on main (squash of phases 0-2)
+d77e0154a8ee0acfe5daadeceefbf44d20938d3e
