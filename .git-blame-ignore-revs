@@ -1,0 +1,6 @@
+# Mechanical, behavior-free commits, hidden from blame (GitHub reads this
+# file automatically at the repo root; locally, run once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# org overhaul phase 2: repo-wide prettier + eslint --fix (dev branch)
+a9866c0c00c9f8ffb01f0f397f2c42219f625957
