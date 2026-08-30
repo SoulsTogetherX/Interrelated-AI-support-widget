@@ -2,7 +2,11 @@
 import { createHmac } from "node:crypto"
 import { describe, expect, it } from "vitest"
 
-import { mintSessionToken, verifySessionToken, SESSION_TOKEN_TTL_MS } from "@/widget/sessionToken"
+import {
+  mintSessionToken,
+  verifySessionToken,
+  SESSION_TOKEN_TTL_MS,
+} from "@/widgetAuth/sessionToken"
 //#endregion
 
 //#region Test Setup

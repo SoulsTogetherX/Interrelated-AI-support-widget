@@ -20,9 +20,9 @@ import { mintHandoffTicket } from "@/handoff/ticket"
 import { getDailyQuota } from "@/usage/daily"
 import { looksLikeOrigin, recordOriginMint } from "@/usage/origins"
 import type { MintOutcome } from "@/usage/origins"
-import { RateLimiter } from "@/widget/rateLimit"
-import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
-import type { SessionTokenPayload } from "@/widget/sessionToken"
+import { RateLimiter } from "@/widgetAuth/rateLimit"
+import { mintSessionToken, verifySessionToken } from "@/widgetAuth/sessionToken"
+import type { SessionTokenPayload } from "@/widgetAuth/sessionToken"
 //#endregion
 
 //#region Type Defs

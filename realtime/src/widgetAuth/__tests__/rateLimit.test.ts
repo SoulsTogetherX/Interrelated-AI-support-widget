@@ -1,7 +1,7 @@
 //#region Imports
 import { describe, expect, it } from "vitest"
 
-import { RateLimiter } from "@/widget/rateLimit"
+import { RateLimiter } from "@/widgetAuth/rateLimit"
 //#endregion
 
 //#region Test Setup
