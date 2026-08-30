@@ -8,6 +8,53 @@ reference sections (docs/reference/) it touched.
 
 ---
 
+**The org overhaul is done — the repo enforces its own conventions
+(2026-08-26/27).** Requested as "stronger checks... primarily
+limitations", planned from a three-agent research survey (~90 primary
+sources; the plan and its evidence live in
+`~/.claude/plans/code-organization-overhaul.md`), executed in five
+phases, each ladder-green and squash-merged. What changed: the repo
+gained its first enforcement layer — Prettier 3.9 (the house style,
+mechanized), ESLint 10 + typescript-eslint strict-type-checked with
+complexity as ERRORS (cyclomatic/cognitive 15, params 4, depth 4) and
+size as WARN budgets (1000/file, 200/function, comments excluded; tests
+exempt by DAMP doctrine), dependency-cruiser turning the layering prose
+into nine forbidden-edge rules, knip for dead exports, lefthook
+pre-push, a PreToolUse hook that physically blocks editing applied
+migrations, and a keyless CI `quality` job gating all of it. The
+whole-repo reformat landed as one mechanical commit, blame-ignored on
+both branches (`.git-blame-ignore-revs` carries the dev SHA and the
+squash SHA — a squash changes the SHA, the trap the research flagged).
+CLAUDE.md shrank 6,985 → 124 lines: this file took the milestone
+narrative; `docs/reference/` took the §-numbered reference split
+losslessly at its own boundaries (6,037 section lines in, 6,037 out;
+every § citation still resolves through the lookup table; the strays
+the monolith accumulated — §6.2 inside §7, §9.13–9.19 inside §10 —
+rehomed); `.claude/rules/` took six short lazy-loading per-area
+convention files; §11 documents the layer itself. The restructure was
+deliberately evidence-calibrated to named pains: `realtime/src/widget/`
+→ `widgetAuth/` (killing the collision with the widget package),
+`routes/internal.ts` (955 lines) → a six-file directory by resource,
+`routes/widget.ts` (672) → a seven-file directory by route group —
+handler bodies moved VERBATIM, 148 unused imports trimmed from the
+compiler's own error lists, registration order preserved, and the
+cohesive big files (socket, worker, pipeline) left intact under their
+budgets, because the literature supports complexity limits and not
+length limits. Three lessons were earned and recorded: knip's fixer
+stripped exports from the handoff protocol — a CONTRACT file — and
+broke four typechecks, so contract files are knip-exempt with the
+reasoning in §11.5; the Bash tool's Windows layer collapses double
+backslashes in heredocs (two silent no-op fix loops before the
+backslash-free rewrite); and piping typecheck output through `tail`
+swallowed a red exit code once, which is exactly why the ladder ends at
+CI rather than at a local incantation. Proof the reorganization changed
+shape and nothing else: 457+139+60 tests green throughout, the prod
+image rebuilt and probed — injection containment green, **security
+57/57** — and the LIVE deployment redeployed from both branches serving
+a real grounded answer through the split routes (mint 506 ms, TTFT
+2.8 s). Two grandfathered complexity warnings dissolved as a side
+effect of the splits (8 → 6).
+
 **Current milestone: M9 — ship, bank, stop — underway, and the product is
 LIVE.** Every milestone the plan SCHEDULED (M0–M6) is complete, M7 — what
 the plan states but never scheduled — is complete through M7.12, and M8

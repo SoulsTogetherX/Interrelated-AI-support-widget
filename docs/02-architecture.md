@@ -324,6 +324,13 @@ Four rings, all in CI, **zero API keys anywhere in CI** (§3.8, §5.1, §6):
    injection probe (nine poisoned documents; asserts no uncited text, no
    attacker-controlled citation, no system-prompt leak).
 
+Since the 2026-08 org overhaul a **fifth ring runs before any of these**:
+the enforcement layer (`docs/reference/11-enforcement.md`) — Prettier,
+type-aware ESLint with complexity errors and size budgets,
+dependency-cruiser rules that turn the layering into CI failures, and knip
+for dead exports — so convention violations fail a merge exactly like a
+failed test.
+
 Plus key-gated live suites that light up only when a real provider key is
 in the environment, and non-CI measurement harnesses (loadtest,
 tenant-scan, ingest-bench, provider comparison, TTFT) whose numbers fill
