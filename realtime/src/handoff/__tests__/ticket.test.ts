@@ -9,7 +9,7 @@ import {
   mintHandoffTicket,
   verifyHandoffTicket,
 } from "@/handoff/ticket"
-import { mintSessionToken, verifySessionToken } from "@/widget/sessionToken"
+import { mintSessionToken, verifySessionToken } from "@/widgetAuth/sessionToken"
 //#endregion
 
 //#region Test Setup

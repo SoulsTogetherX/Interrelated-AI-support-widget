@@ -598,10 +598,10 @@ deadline (M8.4)         the answer as a whole outlived ANSWER_DEADLINE_MS
 
 ```
 widget (M2.6) or curl-with-headers
-  → POST /v1/widget/session            realtime/src/routes/widget.ts
+  → POST /v1/widget/session            realtime/src/routes/widget/
       Origin header required           absent → 403 (a script; no free
                                        sessions — layer 3 bounds scripts)
-      per-IP token bucket              realtime/src/widget/rateLimit.ts
+      per-IP token bucket              realtime/src/widgetAuth/rateLimit.ts
       api_keys lookup                  kind=public, LIVE = revoked_at IS
                                        NULL OR revoked_at > NOW() (a key
                                        inside its rotation grace window
@@ -629,7 +629,7 @@ widget (M2.6) or curl-with-headers
                                        awaited (the dashboard never lags
                                        the widget), wrapped (it can never
                                        fail the mint)
-      → mintSessionToken               realtime/src/widget/sessionToken.ts
+      → mintSessionToken               realtime/src/widgetAuth/sessionToken.ts
         {org, origin, visitor, exp}    HMAC-signed, 30 min TTL
       → 200 {token, expiresAt, visitorId} + CORS echo of the origin
 
@@ -731,7 +731,7 @@ the customer's page (no data-key)
 
 the customer's server (their code — the Install page's recipe, §7.14)
   requireSignedInUser(req)                  THEIR login decides who this is
-  → POST {api}/v1/sessions                  realtime/src/routes/widget.ts
+  → POST {api}/v1/sessions                  realtime/src/routes/widget/
       Authorization: Bearer sk_live_…       from the server's environment
       {origin: "https://app.example.com",   the origin the page runs on
        visitorId: user.id}                  their stable user id
@@ -980,7 +980,7 @@ ProviderForm submit (Test or Test & save — intent from the pressed button)
         POST {REALTIME_INTERNAL_URL}/internal/orgs/<id>/credentials
           x-internal-secret: INTERNAL_API_SECRET   (constant-time checked)
           body: { role, provider, apiKey?, baseUrl?, model?, save }
-      → requireSecret → requireOrg       realtime/src/routes/internal.ts
+      → requireSecret → requireOrg       realtime/src/routes/internal/
       → checkCredentialInput             realtime/src/credentials/validate.ts
           shape per provider AND per role (groq has no embeddings — refused
           by name) + SSRF vet: assertPublicUrl(base_url)
@@ -1030,7 +1030,7 @@ AddSourceForm submit
     → currentUser → getOrgForMember → OWNER
     → createSource                     web/src/lib/realtime/index.ts
         POST {REALTIME_INTERNAL_URL}/internal/orgs/<id>/sources
-      → requireSecret → requireOrg     realtime/src/routes/internal.ts
+      → requireSecret → requireOrg     realtime/src/routes/internal/
       → shape checks + SSRF vet        assertPublicUrl on the location —
                                        the same seam as credential base
                                        URLs; safeFetch re-vets every hop
@@ -1066,7 +1066,7 @@ job queued or running:
       → isId("src") → currentUser → getOrgForMember → OWNER
       → recrawlSource                    web/src/lib/realtime/index.ts
           POST …/internal/orgs/<org>/sources/<src>/recrawl
-        → requireSecret → requireOrg     realtime/src/routes/internal.ts
+        → requireSecret → requireOrg     realtime/src/routes/internal/
         → source is this org's (else 404). Uploads included since
           M7.6b — 009 keeps their text, so there is something to
           re-ingest FROM; the button reads "Re-index" for a file
@@ -1106,7 +1106,7 @@ UploadSourceForm submit  (file input; >10 MB refused in the browser
         x-upload-filename: <percent-encoded>     ← header values are
           latin-1; filenames are not
         x-upload-content-type: <the browser's claim>
-      → requireSecret → requireOrg     realtime/src/routes/internal.ts
+      → requireSecret → requireOrg     realtime/src/routes/internal/
       → express.raw({limit: 10 MB})    invoked by hand so its refusal is
           over the cap → 413 JSON       JSON like every other one here.
           Nothing is parsed: a PDF parser decompresses, so refusing a big
@@ -1153,7 +1153,7 @@ be refused, and a button that always refuses is worse than none)
 → isId("src") → currentUser → getOrgForMember → OWNER
 → deleteSource web/src/lib/realtime/index.ts
 DELETE …/internal/orgs/<org>/sources/<src>
-→ requireSecret → requireOrg realtime/src/routes/internal.ts
+→ requireSecret → requireOrg realtime/src/routes/internal/
 → ONE transaction:
 SELECT sources … FOR UPDATE (this org's, else 404 — foreign,
 fabricated, and malformed collapse)
@@ -1460,7 +1460,7 @@ dashboard inbox that answers.
 
 ```
 widget "talk to a person"           (the widget UI renders the button)
-  → POST /v1/widget/escalate        realtime/src/routes/widget.ts
+  → POST /v1/widget/escalate        realtime/src/routes/widget/
       Origin + Bearer token         the SAME authenticate() ladder chat
                                     uses: uniform 401 on a bad token, 403
                                     on a token replayed from another site
@@ -1515,12 +1515,12 @@ set no headers there), so both spend it on an ordinary POST first:
 VISITOR                                 AGENT
 POST /v1/widget/handoff-ticket          POST /internal/orgs/<id>/handoff-tickets
   Bearer <session token>                  x-internal-secret  (from a Next
-  realtime/src/routes/widget.ts            Server Action that already
+  realtime/src/routes/widget/            Server Action that already
                                            established the user's session)
   → conversation must be THEIRS and      → user must be a MEMBER, and the
     have an open handoff, else 404         handoff open, else 404
   → mintHandoffTicket(role:"visitor")    → mintHandoffTicket(role:"agent")
-                                         realtime/src/routes/internal.ts
+                                         realtime/src/routes/internal/
         both: realtime/src/handoff/ticket.ts — 60s, single use, signed with
         a key DERIVED from WIDGET_TOKEN_SECRET so a session token can never
         be spent as a ticket
@@ -1986,7 +1986,7 @@ exists for.
 ### §10.2 Reading it, before the model call
 
 ```
-POST /v1/widget/chat                    realtime/src/routes/widget.ts
+POST /v1/widget/chat                    realtime/src/routes/widget/
   … token verify, origin re-check, token buckets …
   → getDailyQuota(db, org, {overrideLimit})     realtime/src/usage/daily.ts
       SELECT organizations.plan, usage_daily.answers
@@ -2173,7 +2173,7 @@ runs where the database already is, and the probes need nothing installed.
   raw upgrade, no/forged ticket → 401   ×30 concurrently, health still 200
   GET /internal/… → 404|401             the admin surface is closed either way
 
-[B] origin allowlist + key state        realtime/src/routes/widget.ts (session)
+[B] origin allowlist + key state        realtime/src/routes/widget/ (session)
   Origin thief.example / null / Probe-A.example → 403, NO access-control-allow-origin
   no Origin → 403 (spends no mint token)
   unknown pk / REVOKED pk / sk_… → one 401, byte-identical bodies

@@ -2279,9 +2279,9 @@ Everything it creates is deleted at the end, Ctrl-C included. Not a CI
 gate, for loadtest's reason (§10.4): throughput on a shared runner
 measures the runner.
 
-### §3.17 `src/widget/` — session tokens and rate limits (M2.5)
+### §3.17 `src/widgetAuth/` — session tokens and rate limits (M2.5)
 
-#### §3.17.1 `src/widget/sessionToken.ts`
+#### §3.17.1 `src/widgetAuth/sessionToken.ts`
 
 Trust-model layer 2. The publishable key is spent ONCE at bubble-open;
 chat authenticates with a short-lived (30 min) HMAC token BINDING org +
@@ -2298,7 +2298,7 @@ one when unset/empty — correct in dev (the widget re-mints after
 restart), wrong in prod (render.yaml prompts for it, sync:false); a
 nonempty-but-short secret refuses to boot rather than limp.
 
-#### §3.17.2 `src/widget/rateLimit.ts`
+#### §3.17.2 `src/widgetAuth/rateLimit.ts`
 
 Trust-model layer 3 — the layer that actually bounds SCRIPTED abuse
 (Origin defeats browsers; curl forges it, and the plan says so).
@@ -2312,7 +2312,7 @@ an IEEE-754-aware boundary test), and an opportunistic sweep of
 fully-refilled buckets past 10k keys instead of a timer (no interval
 handle to leak; a map only grows when traffic touches it).
 
-### §3.18 `src/routes/widget.ts`
+### §3.18 `src/routes/widget/`
 
 The only routes an untrusted browser ever calls, implementing the trust
 model in layer order. `POST /v1/widget/session`: Origin header required
@@ -2542,7 +2542,7 @@ immutable in prod, and a cache would go stale under the dev bind mount.
   the stored `dim` straight through, which is what turns each response
   into an assertion instead of a discovery.
 
-### §3.22 `src/routes/internal.ts` — the dashboard's server-to-server API
+### §3.22 `src/routes/internal/` — the dashboard's server-to-server API
 
 The only surface that ever sees a tenant key in plaintext, and only in
 transit. Auth is ONE shared secret (INTERNAL_API_SECRET, identical on
