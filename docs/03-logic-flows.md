@@ -82,7 +82,7 @@ All in `realtime/src/ingest/`, driven by the worker (`worker.ts`):
 1. Visitor clicks the bubble. The widget (`widget/src/api.ts`) POSTs
    `/v1/widget/session` with the publishable key; the browser attaches the
    page's `Origin` header, which page JavaScript cannot forge.
-2. The route (`realtime/src/routes/widget.ts`): per-IP token bucket → key
+2. The route (`realtime/src/routes/widget/`): per-IP token bucket → key
    lookup (unknown and revoked keys collapse into one identical 401 — key
    state is not probeable) → **exact-match allowlist check** (failures get
    no CORS headers, so an unlisted site's page can't even read the error;
