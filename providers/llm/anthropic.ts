@@ -271,6 +271,6 @@ class AnthropicProvider implements LLMProvider {
 //#endregion
 
 //#region Exports
-export { AnthropicProvider, ANTHROPIC_DEFAULT_MODEL, ANSWER_TOOL_NAME }
-export type { AnthropicOptions }
+export { AnthropicProvider }
+
 //#endregion

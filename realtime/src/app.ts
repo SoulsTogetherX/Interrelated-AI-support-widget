@@ -56,5 +56,5 @@ function createApp(options: CreateAppOptions = {}): Express {
 
 //#region Exports
 export { createApp }
-export type { CreateAppOptions }
+
 //#endregion

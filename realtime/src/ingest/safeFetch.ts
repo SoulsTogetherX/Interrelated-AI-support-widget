@@ -330,5 +330,5 @@ function translateFetchError(err: unknown, url: string): SafeFetchError {
 }
 
 export { safeFetch, assertPublicUrl, SafeFetchError, USER_AGENT_PRODUCT }
-export type { SafeFetchOptions, FetchedResource, HostGuard, Resolver, SafeFetchReason }
+export type { SafeFetchOptions }
 //#endregion

@@ -24,7 +24,7 @@ import { recordEscalation } from "@/usage/daily"
 //#endregion
 
 //#region Types
-export type HandoffReason = "visitor_request" | "low_confidence"
+type HandoffReason = "visitor_request" | "low_confidence"
 
 export interface HandoffRequest {
   orgId: string

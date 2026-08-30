@@ -67,6 +67,7 @@ jobs:
       - run: npx prettier . --check
       - run: npx eslint .
       - run: npm run depcruise
+      - run: npm run knip
 
   verify:
     runs-on: ubuntu-latest

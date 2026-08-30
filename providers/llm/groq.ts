@@ -36,5 +36,5 @@ class GroqProvider extends OpenAICompatibleProvider {
 //#endregion
 
 //#region Exports
-export { GroqProvider, GROQ_DEFAULT_MODEL }
+export { GroqProvider }
 //#endregion

@@ -427,6 +427,6 @@ async function* crawlSitemap(
 //#endregion
 
 //#region Exports
-export { crawl, CrawlError, normalizeUrl }
-export type { CrawlSource, CrawlEvent, CrawlerOptions, PageIssue }
+export { crawl, CrawlError }
+export type { CrawlSource, CrawlEvent }
 //#endregion

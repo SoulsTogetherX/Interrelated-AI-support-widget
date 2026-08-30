@@ -577,5 +577,4 @@ function mountWidget(host: HTMLElement, client: WidgetClient, options: MountOpti
 
 //#region Exports
 export { mountWidget }
-export type { MountOptions }
 //#endregion

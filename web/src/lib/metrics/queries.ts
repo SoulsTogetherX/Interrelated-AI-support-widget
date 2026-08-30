@@ -28,7 +28,7 @@ import { db } from "@/lib/db"
 //#endregion
 
 //#region Types
-export interface AnswerMetrics {
+interface AnswerMetrics {
   /** Assistant messages in the window — the denominator of most rates. */
   answers: number
   /** Answers the groundedness gate declined (§3.15.1). */
@@ -51,7 +51,7 @@ export interface AnswerMetrics {
   schemaFailures: number
 }
 
-export interface GroundingMetrics {
+interface GroundingMetrics {
   /** Every claim the model made, verified and stripped alike. */
   claims: number
   stripped: number
@@ -65,7 +65,7 @@ export interface GroundingMetrics {
   quoteNotFound: number
 }
 
-export interface DeflectionMetrics {
+interface DeflectionMetrics {
   /** Conversations with at least one answer — a visitor who opened the
    *  bubble and said nothing is not a deflection either way. */
   conversations: number
@@ -89,7 +89,7 @@ export interface DeflectionMetrics {
  * pipeline never does — the fixture now matches production, and the column
  * is gone. Refusals are counted once, at org level, where they are real.
  */
-export interface ModelMetrics {
+interface ModelMetrics {
   model: string
   answers: number
   /** Answers whose provider actually reported usage — the denominator of
@@ -120,7 +120,7 @@ export interface ModelMetrics {
  * refuses more look cheaper per answer rather than more cautious. The
  * refusal count sits next to it on the page for exactly that comparison.
  */
-export interface CostMetrics {
+interface CostMetrics {
   /** Total list-price cost of every answer this layer could price. */
   costUsd: number | null
   /** Answers behind that figure: a priced model AND reported usage. */

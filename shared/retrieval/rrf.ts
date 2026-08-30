@@ -75,5 +75,5 @@ function rrfFuse(
 
 //#region Exports
 export { rrfFuse, DEFAULT_RRF_K }
-export type { FusedResult }
+
 //#endregion

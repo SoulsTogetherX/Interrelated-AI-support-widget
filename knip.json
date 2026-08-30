@@ -8,27 +8,15 @@
   },
   "workspaces": {
     "realtime": {
-      "entry": [
-        "src/server.ts",
-        "src/db/migrations/*.ts",
-        "scripts/*.ts",
-        "src/**/__tests__/*.ts",
-        "vitest.config.ts"
-      ],
+      "entry": ["src/db/migrations/*.ts", "scripts/*.ts", "src/**/__tests__/*.ts"],
       "project": ["src/**/*.ts", "scripts/**/*.ts"]
     },
     "web": {
-      "entry": [
-        "src/instrumentation.ts",
-        "next.config.ts",
-        "scripts/*.ts",
-        "src/**/__tests__/*.ts",
-        "vitest.config.ts"
-      ],
+      "entry": ["scripts/*.ts", "src/**/__tests__/*.ts"],
       "project": ["src/**/*.{ts,tsx}", "scripts/**/*.ts"]
     },
     "widget": {
-      "entry": ["src/index.ts", "scripts/*.mjs", "src/__tests__/*.ts", "vitest.config.ts"],
+      "entry": ["scripts/*.mjs", "src/__tests__/*.ts"],
       "project": ["src/**/*.ts"]
     },
     ".": {
@@ -38,8 +26,7 @@
         "eval/**/*.ts",
         "loadtest/**/*.ts",
         "shared/**/__tests__/*.ts",
-        "providers/**/__tests__/*.ts",
-        "vitest.config.ts"
+        "providers/**/__tests__/*.ts"
       ],
       "project": [
         "shared/**/*.ts",
@@ -50,5 +37,5 @@
       ]
     }
   },
-  "ignoreDependencies": ["unpdf", "fastembed"]
+  "ignore": ["shared/handoff/protocol.ts", "providers/llm/http.ts"]
 }

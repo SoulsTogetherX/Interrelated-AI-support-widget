@@ -623,5 +623,5 @@ class IngestWorker {
 
 //#region Exports
 export { IngestWorker }
-export type { IngestWorkerOptions }
+
 //#endregion

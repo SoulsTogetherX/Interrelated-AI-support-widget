@@ -140,5 +140,5 @@ function costUsd(
 }
 
 export { MODEL_PRICES, PRICES_AS_OF, priceFor, costUsd }
-export type { ModelPrice }
+
 //#endregion

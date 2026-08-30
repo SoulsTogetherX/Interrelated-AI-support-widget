@@ -215,5 +215,4 @@ export async function createPortalSession(args: {
   return { ok: true, value: { url } }
 }
 
-export { NOT_CONFIGURED, LIVE_KEY_REFUSED }
 //#endregion

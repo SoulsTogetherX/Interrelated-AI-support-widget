@@ -103,5 +103,5 @@ function displayableClaims(verified: readonly VerifiedClaim[]): Claim[] {
 
 //#region Exports
 export { findQuote, verifyClaims, displayableClaims }
-export type { VerifiableChunk, CitationVerdict, VerifiedClaim }
+export type { VerifiableChunk, VerifiedClaim }
 //#endregion

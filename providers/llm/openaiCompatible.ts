@@ -129,5 +129,5 @@ class OpenAICompatibleProvider implements LLMProvider {
 
 //#region Exports
 export { OpenAICompatibleProvider }
-export type { OpenAICompatibleOptions }
+
 //#endregion

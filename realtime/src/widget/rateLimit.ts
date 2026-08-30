@@ -85,5 +85,5 @@ class RateLimiter {
 
 //#region Exports
 export { RateLimiter }
-export type { RateLimiterOptions }
+
 //#endregion

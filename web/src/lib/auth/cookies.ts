@@ -19,7 +19,7 @@ import { cookies } from "next/headers"
 //#region Constants
 const IS_PROD = process.env.NODE_ENV === "production"
 
-export const SESSION_COOKIE = IS_PROD ? "__Host-sid" : "sid"
+const SESSION_COOKIE = IS_PROD ? "__Host-sid" : "sid"
 //#endregion
 
 //#region Cookie jar helpers

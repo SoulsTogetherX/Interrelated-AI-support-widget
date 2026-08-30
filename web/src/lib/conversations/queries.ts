@@ -34,7 +34,7 @@ export interface CitationView {
   headingPath: string | null
 }
 
-export interface MessageView {
+interface MessageView {
   id: string
   role: "visitor" | "assistant" | "agent"
   content: string

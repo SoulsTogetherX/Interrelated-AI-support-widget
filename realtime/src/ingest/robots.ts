@@ -375,5 +375,5 @@ export {
   fetchRobotsPolicy,
   ROBOTS_MAX_BYTES,
 }
-export type { RobotsFile, RobotsGroup, RobotsRule, RobotsPolicy, RobotsVerdict }
+
 //#endregion

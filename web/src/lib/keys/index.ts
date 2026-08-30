@@ -82,7 +82,7 @@ export const ROTATION_GRACE_HOURS = 24
  *  - current:  revoked_at IS NULL — the key the snippet should carry
  *  - retiring: revoked_at is in the future — still accepted, on its way out
  *  - revoked:  revoked_at has passed — refused exactly like an unknown key */
-export type PublishableKeyStatus = "current" | "retiring" | "revoked"
+type PublishableKeyStatus = "current" | "retiring" | "revoked"
 
 export interface PublishableKey {
   id: string
@@ -100,7 +100,7 @@ export type RotationResult =
   { rotated: true; publishableKey: string; graceEndsAt: Date } | { rotated: false }
 
 /** The same standing rule, applied to a secret key. */
-export type SecretKeyStatus = PublishableKeyStatus
+type SecretKeyStatus = PublishableKeyStatus
 
 /** What the dashboard may know about a secret key: never the value. */
 export interface SecretKey {
