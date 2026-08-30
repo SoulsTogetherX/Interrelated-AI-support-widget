@@ -14,7 +14,6 @@ lives. It is deliberately small (2026-08 org overhaul — research target:
 | `docs/`                                      | The guided reading path: purpose, architecture, flows, usage, glossary                  |
 | `docs/reference/`                            | The §-numbered file-by-file architecture reference (lookup table below)                 |
 | `docs/history.md`                            | The milestone narrative. **Append-only**: new milestones are recorded there, never here |
-| `docs/incidents/`                            | Production-only failures: timeline, root cause, why local tests missed it, remediation  |
 | `DATAFLOW.md`                                | Function-level traces of every request path                                             |
 | `README.md`                                  | The public face — claims no number a committed script does not produce                  |
 | `PLAYGROUND.md`                              | Hands-on local tour, no API keys                                                        |
