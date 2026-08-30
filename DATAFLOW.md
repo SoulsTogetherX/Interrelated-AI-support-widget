@@ -1,7 +1,8 @@
 # Interrelated — dataflow traces
 
 End-to-end walks of every path through the system, naming the actual file and
-function at each hop. `CLAUDE.md` describes what each file _is_; this
+function at each hop. The §-numbered reference (`docs/reference/`, lookup
+table in `CLAUDE.md`) describes what each file _is_; this
 document describes what _happens_, in order, when something occurs. Updated
 as part of every step's definition of done.
 
