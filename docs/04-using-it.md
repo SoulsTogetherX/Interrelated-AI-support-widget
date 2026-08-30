@@ -69,6 +69,18 @@ Things to know:
 
 ## Every tool in the repo
 
+### Conventions and checks (repo root — the enforcement layer, §11)
+
+| Command             | What it does                                                       |
+| ------------------- | ------------------------------------------------------------------ |
+| `npm run format`    | Prettier over the repo (`format:check` is the CI form)             |
+| `npm run lint`      | ESLint 10: type-aware correctness + complexity caps + size budgets |
+| `npm run depcruise` | The architecture rules (layering, cycles) as failures              |
+| `npm run knip`      | Dead exports / unused dependencies                                 |
+
+All four run keyless in CI's `quality` job; lefthook runs the first two
+on pre-push. Applied migrations are hook-frozen (`.claude/hooks/`).
+
 ### Product CLIs (in `realtime/`, all keyless by default)
 
 | Command                                                         | What it does                                                                                                 |
