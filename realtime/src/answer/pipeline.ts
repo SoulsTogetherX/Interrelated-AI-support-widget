@@ -632,12 +632,6 @@ async function persistAssistantMessage(
 //#endregion
 
 //#region Exports
-export {
-  answerQuestion,
-  AnswerSchemaError,
-  REFUSAL_TEXT,
-  NOTHING_VERIFIED_TEXT,
-  DEFAULT_ANSWER_DEADLINE_MS,
-}
-export type { AnswerPipelineOptions, AnswerResult }
+export { answerQuestion, AnswerSchemaError, REFUSAL_TEXT, NOTHING_VERIFIED_TEXT }
+
 //#endregion

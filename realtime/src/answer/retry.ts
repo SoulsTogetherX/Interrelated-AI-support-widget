@@ -187,5 +187,5 @@ async function withRetry<T>(
 
 //#region Exports
 export { withRetry, isRetryable, delayFor, DEFAULT_POLICY }
-export type { RetryPolicy, RetryHooks }
+export type { RetryHooks }
 //#endregion

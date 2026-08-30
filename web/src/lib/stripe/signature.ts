@@ -180,5 +180,4 @@ export function signStripePayload(
   return `t=${timestampSeconds},v1=${signature}`
 }
 
-export { DEFAULT_TOLERANCE_SECONDS }
 //#endregion

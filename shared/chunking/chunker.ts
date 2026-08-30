@@ -194,5 +194,5 @@ function chunkBlocks(blocks: readonly Block[], options: ChunkOptions = {}): Chun
 }
 
 export { chunkBlocks, approxTokens }
-export type { Block, Chunk, ChunkOptions }
+export type { Block }
 //#endregion

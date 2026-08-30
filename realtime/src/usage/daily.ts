@@ -209,5 +209,5 @@ async function getDailyQuota(
 
 //#region Exports
 export { utcDay, recordAnswer, recordEscalation, recordSchemaFailure, getDailyQuota }
-export type { DailyQuota }
+
 //#endregion

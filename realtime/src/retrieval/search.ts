@@ -307,13 +307,6 @@ async function hybridSearch(
 //#endregion
 
 //#region Exports
-export { denseSearch, lexicalSearch, hybridSearch, DEFAULT_EF_SEARCH }
-export type {
-  DenseSearchOptions,
-  DenseHit,
-  LexicalSearchOptions,
-  LexicalHit,
-  HybridSearchOptions,
-  RetrievedChunk,
-}
+export { denseSearch, lexicalSearch, hybridSearch }
+export type { RetrievedChunk }
 //#endregion

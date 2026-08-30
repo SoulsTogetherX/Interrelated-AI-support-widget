@@ -82,6 +82,6 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
 //#endregion
 
 //#region Exports
-export { OllamaEmbeddingProvider, OLLAMA_DEFAULT_BASE_URL }
-export type { OllamaEmbeddingOptions }
+export { OllamaEmbeddingProvider }
+
 //#endregion

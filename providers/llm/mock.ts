@@ -102,5 +102,5 @@ class MockLLMProvider implements LLMProvider {
 
 //#region Exports
 export { MockLLMProvider }
-export type { MockLLMResponse, MockLLMScript }
+export type { MockLLMResponse }
 //#endregion

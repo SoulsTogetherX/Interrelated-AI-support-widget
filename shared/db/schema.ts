@@ -544,31 +544,6 @@ interface Database {
 //#endregion
 
 //#region Exports
-export type {
-  Database,
-  OrganizationsTable,
-  UsersTable,
-  OrgMembersTable,
-  SessionsTable,
-  ApiKeysTable,
-  OrgProviderCredentialsTable,
-  AllowedOriginsTable,
-  SourcesTable,
-  SourceUploadsTable,
-  UploadBlockSpan,
-  DocumentsTable,
-  ChunksTable,
-  ChunkEmbeddingsTable,
-  IngestJobsTable,
-  SkippedPage,
-  ConversationsTable,
-  MessagesTable,
-  MessageCitationsTable,
-  HandoffSessionsTable,
-  UsageDailyTable,
-  OriginDailyTable,
-  SubscriptionsTable,
-  StripeEventsTable,
-}
+export type { Database, SkippedPage }
 export { MAX_RECORDED_SKIPPED_PAGES }
 //#endregion

@@ -87,5 +87,5 @@ function evaluateGroundedness(
 
 //#region Exports
 export { evaluateGroundedness, DEFAULT_MAX_DISTANCE }
-export type { GateDecision }
+
 //#endregion

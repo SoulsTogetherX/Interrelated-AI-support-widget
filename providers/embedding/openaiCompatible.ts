@@ -100,5 +100,5 @@ class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
 
 //#region Exports
 export { OpenAICompatibleEmbeddingProvider }
-export type { OpenAICompatibleEmbeddingOptions }
+
 //#endregion

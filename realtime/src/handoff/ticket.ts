@@ -176,5 +176,5 @@ class TicketRegistry {
 
 //#region Exports
 export { mintHandoffTicket, verifyHandoffTicket, TicketRegistry, HANDOFF_TICKET_TTL_MS }
-export type { HandoffTicketPayload }
+
 //#endregion

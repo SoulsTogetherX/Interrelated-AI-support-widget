@@ -424,5 +424,5 @@ class ApiClient implements WidgetClient {
 
 //#region Exports
 export { ApiClient, QuotaError, RateLimitError, HANDOFF_BOOKMARK_TTL_MS }
-export type { WidgetClient, ApiClientOptions, StoredHandoff }
+export type { WidgetClient, StoredHandoff }
 //#endregion

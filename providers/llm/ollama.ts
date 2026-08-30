@@ -98,6 +98,6 @@ class OllamaProvider implements LLMProvider {
 //#endregion
 
 //#region Exports
-export { OllamaProvider, OLLAMA_DEFAULT_BASE_URL }
-export type { OllamaOptions }
+export { OllamaProvider }
+
 //#endregion

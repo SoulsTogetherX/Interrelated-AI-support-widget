@@ -176,5 +176,5 @@ function parseAnswerText(text: string): ParseResult {
 
 //#region Exports
 export { MAX_CLAIMS, ANSWER_JSON_SCHEMA, parseAnswerPayload, parseAnswerText }
-export type { Claim, AnswerPayload, ParseResult }
+export type { Claim }
 //#endregion

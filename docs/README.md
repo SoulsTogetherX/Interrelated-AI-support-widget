@@ -20,7 +20,11 @@ know how to program but not what any of this jargon means.
 - **[README.md](../README.md)** (repo root) — the public face: the pitch, the
   measured numbers, the trust model, known limitations. Read it first if you
   have five minutes; read this folder if you have two hours.
-- **[CLAUDE.md](../CLAUDE.md)** — the file-by-file architecture reference.
+- **[CLAUDE.md](../CLAUDE.md)** — the always-loaded constitution: rules,
+  enforcement contract, repo map, and the § lookup table. The file-by-file
+  depth it used to hold now lives in **[reference/](reference/)** (same §
+  numbers), and the milestone narrative in **[history.md](history.md)**.
+  Historic phrasing below the line: the reference.
   Every file in the repo is described there, with the reasoning and the
   rejected alternatives, in numbered sections (`§3.15.1`) that code comments
   cite. It is the _depth_ document: when a doc here says "see §3.15.1", that

@@ -627,6 +627,6 @@ function createHandoffServer(options: HandoffServerOptions): {
 //#endregion
 
 //#region Exports
-export { createHandoffServer, DEFAULT_PATH as HANDOFF_PATH }
-export type { HandoffServerOptions }
+export { createHandoffServer }
+
 //#endregion

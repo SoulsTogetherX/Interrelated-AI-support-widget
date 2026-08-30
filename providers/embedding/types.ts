@@ -68,5 +68,5 @@ const DIM_UNKNOWN = 0
 
 //#region Exports
 export { DIM_UNKNOWN }
-export type { EmbeddingProvider, EmbedOptions, EmbedTask }
+export type { EmbeddingProvider, EmbedOptions }
 //#endregion

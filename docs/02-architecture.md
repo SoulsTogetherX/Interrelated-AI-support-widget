@@ -1,7 +1,8 @@
 # 02 — Architecture: the pieces, and how each one works
 
 This is the system explained part by part. Each section ends with pointers
-into [CLAUDE.md](../CLAUDE.md) (`§`) where the full reasoning lives.
+into the §-numbered reference ([docs/reference/](reference/), mapped by
+the lookup table in [CLAUDE.md](../CLAUDE.md)) where the full reasoning lives.
 
 ## The bird's-eye view
 

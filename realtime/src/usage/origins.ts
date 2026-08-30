@@ -167,5 +167,5 @@ export {
   OTHER_ORIGIN,
   MALFORMED_ORIGIN,
 }
-export type { MintOutcome, OriginMintEntry }
+export type { MintOutcome }
 //#endregion

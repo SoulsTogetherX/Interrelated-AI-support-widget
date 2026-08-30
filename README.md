@@ -99,8 +99,10 @@ onboarding, provider keys, sources, transcripts, metrics, billing), and an
 **Express + `ws` + Kysely** service on Render for everything long-lived
 (SSE chat, retrieval, the ingest worker, the handoff WebSocket). Postgres 18
 with pgvector on Neon. The full file-by-file reference is
-[CLAUDE.md](CLAUDE.md); the request-by-request traces are
-[DATAFLOW.md](DATAFLOW.md). Section numbers below refer to CLAUDE.md.
+the §-numbered reference in [docs/reference/](docs/reference/) (the lookup
+table in [CLAUDE.md](CLAUDE.md) maps § → file); the request-by-request
+traces are [DATAFLOW.md](DATAFLOW.md). Section numbers below resolve
+through that lookup.
 
 **Ingest** (§3.10) — a source is a URL to crawl or a file the tenant
 uploads. A URL goes through an SSRF-guarded fetcher
@@ -371,7 +373,7 @@ three, nothing to keep in sync.
 The production stack CI probes is `docker-compose.prod.yaml`. The deployed
 system is live: the data plane on Render from `render.yaml`
 ([demo](https://interrelated-realtime-rtue.onrender.com/demo)), the dashboard
-on Vercel per the runbook in CLAUDE.md §9.1, and Postgres on Neon — three
+on Vercel per the runbook in §9.1 (docs/reference/09-web.md), and Postgres on Neon — three
 free tiers, one Gemini key, no paid service anywhere.
 `node scripts/smoke-test.mjs <url>` probes any of it from outside with no
 install.

@@ -182,6 +182,6 @@ class GeminiProvider implements LLMProvider {
 //#endregion
 
 //#region Exports
-export { GeminiProvider, GEMINI_DEFAULT_MODEL, GEMINI_THINKING_BUDGET }
-export type { GeminiOptions }
+export { GeminiProvider }
+
 //#endregion

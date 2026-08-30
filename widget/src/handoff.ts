@@ -322,11 +322,5 @@ class HandoffSocket implements HandoffConnection {
 
 //#region Exports
 export { HandoffSocket }
-export type {
-  HandoffConnection,
-  HandoffHandlers,
-  HandoffSocketOptions,
-  HandoffStatus,
-  SocketFactory,
-}
+export type { HandoffConnection, HandoffHandlers, HandoffStatus, SocketFactory }
 //#endregion

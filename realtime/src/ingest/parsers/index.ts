@@ -90,5 +90,5 @@ async function parseResource(resource: RawResource): Promise<ParsedDocument> {
 }
 
 export { parseResource, detectFormat }
-export type { RawResource, DocumentFormat }
+
 //#endregion

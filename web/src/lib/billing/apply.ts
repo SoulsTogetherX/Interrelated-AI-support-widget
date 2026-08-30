@@ -256,5 +256,4 @@ export async function applyStripeEvent(event: StripeEvent): Promise<ApplyOutcome
   })
 }
 
-export { entitlementFor }
 //#endregion
